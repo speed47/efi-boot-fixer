@@ -482,6 +482,46 @@ corruption followed a Windows 24H2 → 25H2 upgrade, which is reportedly
 well-known behaviour; that is consistent with the arithmetic but does not
 prove the mechanism.)
 
+## Reproducing the corruption on purpose
+
+`tools/deck-corrupt.py` inflicts exactly the damage that was found in the
+wild — `PartitionEntryLBA` moved from 2 to `FirstUsableLBA - array_blocks`,
+header CRC recomputed so the header still verifies, six bytes, nothing else
+— so the repair path can be tested against the real failure rather than a
+synthetic one.
+
+```sh
+sudo ./tools/deck-corrupt.py inspect /dev/nvme0n1                       # never writes
+sudo ./tools/deck-corrupt.py break   /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
+sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/EFIGPTFIX/gpt-before.bin
+```
+
+`break` refuses unless it has first written a snapshot and read it back
+through its own parser, and unless both tables *and* the protective MBR
+verify going in. The important one is the backup GPT: corrupting the primary
+when the backup could not repair it is the one outcome the script must never
+produce, and there is a test for that refusal.
+
+The snapshot is written in efigptfix's own archive format, so it can be put
+back three ways: `restore` here, the EFI application's "Restore GPTs from a
+saved backup", or by hand from the sector dump inside it. Regular files are
+accepted as well as block devices, so the whole thing can be rehearsed
+against a disk image first.
+
+`tests/corrupt_script.rs` runs the script against the real Deck fixture and
+asserts that the changed bytes are exactly `512+16..19` and `512+72..73`,
+that gptcore's verdict is `PrimaryRepairable` with a `PrimaryEntryLbaNotTwo`
+defect and *no* header CRC defect, that the snapshot decodes with
+`backup::decode`, and that both recovery routes restore the first 34 sectors
+byte for byte.
+
+A snapshot written by the script has been read off an ESP and restored by
+the EFI application under OVMF. Note what that run does and does not show:
+it proves the archive is portable between the two, but not that the restore
+repaired the corruption, because OVMF had already rebuilt the primary from
+the backup before the application was loaded. The byte-exact recovery is
+proven by the host tests, where no firmware sits in the way.
+
 ## Testing against real hardware
 
 `crates/gptcore/tests/data/deck/` holds real sectors from a dual-booting
