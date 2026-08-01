@@ -11,6 +11,7 @@ use crate::entry::{parse_array, PartitionEntry};
 use crate::header::{Defect, GptHeader};
 use crate::layout::{self, Confidence, Recognition, StructuralIssue};
 use crate::mbr::{self, MbrStatus};
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -115,7 +116,8 @@ impl Verdict {
 pub enum Implausible {
     Structure(Vec<StructuralIssue>),
     /// No ESP or no rootfs: this is not a bootable SteamOS table.
-    Unrecognized(Recognition),
+    /// Boxed to keep the `Err` variant of `assess` small.
+    Unrecognized(Box<Recognition>),
     /// The entry array would not fit between LBA 2 and the first usable
     /// block, so writing it would overwrite the start of a partition.
     EntryArrayCollides {
@@ -188,7 +190,7 @@ pub fn analyze<D: BlockDevice + ?Sized>(
             }
             Err(why) => {
                 if let Implausible::Unrecognized(rec) = &why {
-                    recognition = Some(rec.clone());
+                    recognition = Some(rec.as_ref().clone());
                 }
                 rejection = Some(why);
                 Verdict::RefusedImplausibleBackup
@@ -234,7 +236,7 @@ fn assess(src: &TableView, block_size: u32) -> Result<Recognition, Implausible> 
 
     let rec = layout::recognize(&src.entries);
     if rec.confidence == Confidence::Unrecognized {
-        return Err(Implausible::Unrecognized(rec));
+        return Err(Implausible::Unrecognized(Box::new(rec)));
     }
     Ok(rec)
 }

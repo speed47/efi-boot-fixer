@@ -97,6 +97,9 @@ pub fn print_analysis(analysis: &Analysis) {
         if !rec.missing.is_empty() {
             println!("      missing: {}", rec.missing.join(", "));
         }
+        for (name, expected, found) in &rec.type_mismatches {
+            println!("      {name} has type {found}, expected {expected}");
+        }
         for (i, guid, name) in &rec.unknown_types {
             println!("      partition {} has unknown type {guid} ({name})", i + 1);
         }

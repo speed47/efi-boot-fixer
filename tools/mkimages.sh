@@ -41,14 +41,14 @@ rm -f "$TEST"
 truncate -s 64G "$TEST"          # sparse
 sgdisk -o "$TEST" >/dev/null
 sgdisk -n 1:2048:+256M -t 1:ef00 -c 1:esp \
-       -n 2:0:+64M    -t 2:8300 -c 2:efi-A \
-       -n 3:0:+64M    -t 3:8300 -c 3:efi-B \
-       -n 4:0:+5G     -t 4:8300 -c 4:rootfs-A \
-       -n 5:0:+5G     -t 5:8300 -c 5:rootfs-B \
-       -n 6:0:+256M   -t 6:8300 -c 6:var-A \
-       -n 7:0:+256M   -t 7:8300 -c 7:var-B \
-       -n 8:0:+10G    -t 8:8300 -c 8:home \
-       -n 9:0:+16M    -t 9:0c01 \
+       -n 2:0:+64M    -t 2:0700 -c 2:efi-A \
+       -n 3:0:+64M    -t 3:0700 -c 3:efi-B \
+       -n 4:0:+5G     -t 4:8304 -c 4:rootfs-A \
+       -n 5:0:+5G     -t 5:8304 -c 5:rootfs-B \
+       -n 6:0:+256M   -t 6:8310 -c 6:var-A \
+       -n 7:0:+256M   -t 7:8310 -c 7:var-B \
+       -n 8:0:+10G    -t 8:8302 -c 8:home \
+       -n 9:0:+16M    -t 9:2700 \
        -n 10:0:+20G   -t 10:0700 -c 10:"Basic data partition" "$TEST" >/dev/null
 
 echo "--- test.img table before corruption ---"

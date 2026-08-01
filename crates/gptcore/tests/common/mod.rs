@@ -115,9 +115,39 @@ fn run_combined(cmd: &mut Command) -> String {
     format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout))
 }
 
+/// Drop sgdisk warnings that do not indicate damage.
+///
+/// The real Deck's table was written by util-linux fdisk, which leaves a
+/// gap between the end of the entry array (LBA 33) and the first usable
+/// block (2048). sgdisk warns about it on a perfectly healthy disk, so
+/// counting it as ill health would make every Deck fixture look corrupt.
+fn strip_benign_warnings(out: &str) -> String {
+    const BENIGN: &[&str] = &["There is a gap between the main partition table"];
+    let mut keep = Vec::new();
+    let mut skipping = false;
+    for line in out.lines() {
+        if BENIGN.iter().any(|m| line.contains(m)) {
+            skipping = true;
+            continue;
+        }
+        // The warning is a paragraph; it ends at the next blank line.
+        if skipping {
+            if line.trim().is_empty() {
+                skipping = false;
+            }
+            continue;
+        }
+        keep.push(line);
+    }
+    keep.join("\n")
+}
+
 /// A temporary image that deletes itself.
 pub struct Image {
     pub path: PathBuf,
+    /// Total 512-byte sectors. Carried per image because the Deck fixture
+    /// is a different size from the synthetic ones.
+    pub sectors: u64,
 }
 
 impl Drop for Image {
@@ -142,7 +172,7 @@ impl Image {
     /// transparently falling back to the backup. A genuinely healthy disk
     /// produces no Caution/Warning/ERROR text at all.
     pub fn is_clean(&self) -> bool {
-        let out = self.verify();
+        let out = strip_benign_warnings(&self.verify());
         out.contains("No problems found")
             && !["Caution", "Warning", "ERROR", "corrupt"].iter().any(|m| out.contains(m))
     }
@@ -184,7 +214,7 @@ impl Image {
     }
 
     pub fn last_block(&self) -> u64 {
-        IMAGE_BYTES / BLOCK_SIZE as u64 - 1
+        self.sectors - 1
     }
 }
 
@@ -198,7 +228,34 @@ fn blank(tag: &str) -> Image {
     let f = File::create(&path).expect("create image");
     f.set_len(IMAGE_BYTES).expect("sparse resize");
     drop(f);
-    Image { path }
+    Image { path, sectors: IMAGE_BYTES / BLOCK_SIZE as u64 }
+}
+
+/// Rebuild a full-size sparse image from the committed Steam Deck sector
+/// dumps in `tests/data/deck`.
+///
+/// These are real sectors from a dual-booting Deck, with the disk GUID and
+/// the per-partition unique GUIDs replaced by obvious placeholders and the
+/// CRCs resealed. Type GUIDs, names and extents are untouched, because
+/// those are what the layout checks actually key on.
+pub fn deck_image() -> Image {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/deck");
+    let head = std::fs::read(dir.join("head.bin")).expect("tests/data/deck/head.bin");
+    let tail = std::fs::read(dir.join("tail.bin")).expect("tests/data/deck/tail.bin");
+    let sectors: u64 = std::fs::read_to_string(dir.join("sectors.txt"))
+        .expect("tests/data/deck/sectors.txt")
+        .trim()
+        .parse()
+        .expect("sector count");
+
+    let path = unique_path("deck");
+    let f = File::create(&path).expect("create image");
+    f.set_len(sectors * BLOCK_SIZE as u64).expect("sparse resize");
+    f.write_all_at(&head, 0).expect("write head");
+    let tail_lba = sectors - (tail.len() as u64 / BLOCK_SIZE as u64);
+    f.write_all_at(&tail, tail_lba * BLOCK_SIZE as u64).expect("write tail");
+    drop(f);
+    Image { path, sectors }
 }
 
 /// The stock SteamOS 3.x A/B layout plus the Windows partitions a
@@ -208,14 +265,14 @@ pub fn steamos_image() -> Image {
     run(sgdisk().arg("-o").arg(&img.path));
     run(sgdisk()
         .args(["-n", "1:2048:+256M", "-t", "1:ef00", "-c", "1:esp"])
-        .args(["-n", "2:0:+64M", "-t", "2:8300", "-c", "2:efi-A"])
-        .args(["-n", "3:0:+64M", "-t", "3:8300", "-c", "3:efi-B"])
-        .args(["-n", "4:0:+5G", "-t", "4:8300", "-c", "4:rootfs-A"])
-        .args(["-n", "5:0:+5G", "-t", "5:8300", "-c", "5:rootfs-B"])
-        .args(["-n", "6:0:+256M", "-t", "6:8300", "-c", "6:var-A"])
-        .args(["-n", "7:0:+256M", "-t", "7:8300", "-c", "7:var-B"])
-        .args(["-n", "8:0:+10G", "-t", "8:8300", "-c", "8:home"])
-        .args(["-n", "9:0:+16M", "-t", "9:0c01"])
+        .args(["-n", "2:0:+64M", "-t", "2:0700", "-c", "2:efi-A"])
+        .args(["-n", "3:0:+64M", "-t", "3:0700", "-c", "3:efi-B"])
+        .args(["-n", "4:0:+5G", "-t", "4:8304", "-c", "4:rootfs-A"])
+        .args(["-n", "5:0:+5G", "-t", "5:8304", "-c", "5:rootfs-B"])
+        .args(["-n", "6:0:+256M", "-t", "6:8310", "-c", "6:var-A"])
+        .args(["-n", "7:0:+256M", "-t", "7:8310", "-c", "7:var-B"])
+        .args(["-n", "8:0:+10G", "-t", "8:8302", "-c", "8:home"])
+        .args(["-n", "9:0:+16M", "-t", "9:2700"])
         .args(["-n", "10:0:+20G", "-t", "10:0700", "-c", "10:Basic data partition"])
         .arg(&img.path));
     img

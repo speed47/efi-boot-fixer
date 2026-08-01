@@ -167,10 +167,15 @@ impl GptHeader {
     }
 
     /// How many blocks the entry array occupies, rounded up.
+    ///
+    /// `None` for a zero block size: `div_ceil` would panic, and a panic in
+    /// firmware is an unrecoverable hang.
     pub fn entry_array_blocks(&self, block_size: u32) -> Option<u64> {
+        if block_size == 0 {
+            return None;
+        }
         let len = self.entry_array_len()? as u64;
-        let bs = block_size as u64;
-        Some(len.div_ceil(bs))
+        Some(len.div_ceil(block_size as u64))
     }
 
     /// Structural checks that do not need the header bytes or the entry
@@ -291,7 +296,14 @@ impl GptHeader {
     /// a caller cannot write a header whose CRC does not match its body.
     pub fn to_block(&self, block_size: u32, crc: &impl Crc32) -> Vec<u8> {
         let mut block = alloc::vec![0u8; block_size as usize];
-        let size = self.header_size.clamp(HEADER_MIN_SIZE, block_size) as usize;
+        // Not `clamp`: it panics when min > max, which a device reporting a
+        // block size below the 92-byte minimum would trigger. In firmware a
+        // panic is an unrecoverable hang, so saturate instead.
+        let size =
+            self.header_size.max(HEADER_MIN_SIZE).min(block_size.max(HEADER_MIN_SIZE)) as usize;
+        if block.len() < size {
+            block.resize(size, 0);
+        }
 
         wr_u64(&mut block, OFF_SIGNATURE, self.signature);
         wr_u32(&mut block, OFF_REVISION, self.revision);
@@ -330,4 +342,83 @@ fn wr_u32(buf: &mut [u8], off: usize, value: u32) {
 
 fn wr_u64(buf: &mut [u8], off: usize, value: u64) {
     buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crc::SoftCrc32;
+    extern crate std;
+
+    fn sample_header() -> GptHeader {
+        GptHeader {
+            signature: GPT_SIGNATURE,
+            revision: GPT_REVISION_1_0,
+            header_size: HEADER_MIN_SIZE,
+            header_crc32: 0,
+            reserved: 0,
+            my_lba: 1,
+            alternate_lba: 1000,
+            first_usable_lba: 34,
+            last_usable_lba: 966,
+            disk_guid: Guid::from_fields(1, 2, 3, [4; 8]),
+            partition_entry_lba: 2,
+            number_of_partition_entries: 128,
+            size_of_partition_entry: 128,
+            partition_entry_array_crc32: 0,
+        }
+    }
+
+    /// A device reporting a block size below the 92-byte header minimum
+    /// used to reach `u32::clamp(92, block_size)`, which panics when
+    /// min > max. In firmware a panic is an unrecoverable hang, so this
+    /// path has to saturate instead.
+    #[test]
+    fn to_block_survives_an_absurdly_small_block_size() {
+        for block_size in [0u32, 1, 64, 91] {
+            let block = sample_header().to_block(block_size, &SoftCrc32);
+            assert!(
+                block.len() >= HEADER_MIN_SIZE as usize,
+                "block_size {block_size} produced {} bytes",
+                block.len()
+            );
+        }
+    }
+
+    #[test]
+    fn round_trips_through_a_block() {
+        let original = sample_header();
+        let block = original.to_block(512, &SoftCrc32);
+        let parsed = GptHeader::parse(&block).unwrap();
+        assert_eq!(parsed.my_lba, 1);
+        assert_eq!(parsed.alternate_lba, 1000);
+        assert_eq!(parsed.partition_entry_lba, 2);
+        assert_eq!(parsed.disk_guid, original.disk_guid);
+        // to_block recomputes the CRC, so the parsed header validates.
+        let computed = parsed.compute_header_crc(&block, &SoftCrc32).unwrap();
+        assert_eq!(computed, parsed.header_crc32);
+    }
+
+    #[test]
+    fn a_short_buffer_is_rejected_rather_than_indexed() {
+        assert!(GptHeader::parse(&[0u8; 91]).is_none());
+        assert!(GptHeader::parse(&[]).is_none());
+        assert!(GptHeader::parse(&[0u8; 92]).is_some());
+    }
+
+    #[test]
+    fn absurd_entry_geometry_does_not_overflow() {
+        let mut h = sample_header();
+        h.number_of_partition_entries = u32::MAX;
+        h.size_of_partition_entry = u32::MAX;
+        assert_eq!(h.entry_array_len(), None);
+        assert_eq!(h.entry_array_blocks(512), None);
+    }
+
+    /// `div_ceil` panics on a zero divisor, so a device reporting a zero
+    /// block size must not reach it.
+    #[test]
+    fn zero_block_size_does_not_divide_by_zero() {
+        assert_eq!(sample_header().entry_array_blocks(0), None);
+    }
 }

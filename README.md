@@ -151,9 +151,44 @@ implementation is the fallback, and the app says which one it used.
 Windows partitions alongside SteamOS are expected and are not treated as
 suspicious.
 
-## Adjusting the expected layout
+## The expected layout, and why matching is by name
 
-`crates/gptcore/src/layout.rs` holds the stock SteamOS 3.x A/B partition set.
-It is descriptive, not normative: it only feeds the confidence estimate and
-the stale-backup guard. Check it against your own install before relying on
-it.
+`crates/gptcore/src/layout.rs` holds the SteamOS A/B partition set, taken
+from a real dual-booting Deck rather than from documentation.
+
+That distinction was expensive. The first version guessed the generic "Linux
+filesystem" type GUID (`0FC63DAF-…`) for every partition. SteamOS actually
+uses the systemd discoverable-partition GUIDs — `4F68BCE3` for `rootfs-A/B`,
+`4D21B016` for `var-A/B`, `933AC7E1` for `home` — and `efi-A/B` are
+Microsoft basic data. Seven of eight were wrong. Because `recognize()` then
+required both name *and* type to match, `rootfs-A` counted as missing, which
+is a critical partition, so the verdict came out `RefusedImplausibleBackup`:
+**the tool refused to repair the exact disk it was written for**, and it took
+real sectors to find out.
+
+So matching is now by partition **name**, with the type GUID compared and
+reported but never fatal. A hardcoded type table is precisely the kind of
+thing that goes stale across an OS release, and being strict about it turns a
+recovery tool into a brick. A stale or foreign backup is still caught,
+because its names will not line up either.
+
+## Testing against real hardware
+
+`crates/gptcore/tests/data/deck/` holds real sectors from a dual-booting
+Deck: `head.bin` (LBA 0-33), `tail.bin` (last 33 LBAs) and the sector count.
+The disk GUID and every unique partition GUID are replaced with obvious
+placeholders and the CRCs resealed, so nothing identifies the physical drive;
+type GUIDs, names and extents are untouched.
+
+`tests/deck_fixture.rs` rebuilds a full-size sparse image from those dumps at
+runtime — a 931.5 GiB image that costs 512 bytes on disk — and runs the real
+analysis and repair against it. `tools/reconstruct.py` does the same thing
+from the command line, with `--scrub` to produce a shareable fixture:
+
+```sh
+tools/reconstruct.py /path/to/dump /tmp/deck.img          # faithful
+tools/reconstruct.py /path/to/dump /tmp/deck.img --scrub  # de-identified
+```
+
+To capture a dump from your own machine, see the dd recipe in
+`tools/reconstruct.py`'s docstring.

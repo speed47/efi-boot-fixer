@@ -56,11 +56,49 @@ pub const WINDOWS_RECOVERY: Guid = Guid::from_fields(
     [0xA1, 0x6A, 0xBF, 0xD5, 0x01, 0x79, 0xD6, 0xAC],
 );
 
+// SteamOS uses the systemd discoverable-partition GUIDs, not the generic
+// "Linux filesystem" type. Confirmed against a real Deck.
+pub const LINUX_ROOT_X86_64: Guid = Guid::from_fields(
+    0x4F68_BCE3,
+    0xE8CD,
+    0x4DB1,
+    [0x96, 0xE7, 0xFB, 0xCA, 0xF9, 0x84, 0xB7, 0x09],
+);
+pub const LINUX_VAR: Guid = Guid::from_fields(
+    0x4D21_B016,
+    0xB534,
+    0x45C2,
+    [0xA9, 0xFB, 0x5C, 0x16, 0xE0, 0x91, 0xFD, 0x2D],
+);
+pub const LINUX_HOME: Guid = Guid::from_fields(
+    0x933A_C7E1,
+    0x2EB4,
+    0x4F13,
+    [0xB8, 0x44, 0x0E, 0x14, 0xE2, 0xAE, 0xF9, 0x15],
+);
+pub const LINUX_USR_X86_64: Guid = Guid::from_fields(
+    0x8484_680C,
+    0x9521,
+    0x48C6,
+    [0x9C, 0x11, 0xB0, 0x72, 0x06, 0x56, 0xF6, 0x9E],
+);
+pub const LINUX_LUKS: Guid = Guid::from_fields(
+    0xCA7D_7CCB,
+    0x63ED,
+    0x4C53,
+    [0x86, 0x1C, 0x17, 0x42, 0x53, 0x60, 0x59, 0xCC],
+);
+
 /// Partition type GUIDs that are unremarkable on a dual-booting Deck.
 pub const KNOWN_TYPES: &[(Guid, &str)] = &[
     (EFI_SYSTEM_PARTITION, "EFI system partition"),
     (LINUX_FILESYSTEM, "Linux filesystem"),
+    (LINUX_ROOT_X86_64, "Linux x86-64 root"),
+    (LINUX_USR_X86_64, "Linux x86-64 /usr"),
+    (LINUX_VAR, "Linux /var"),
+    (LINUX_HOME, "Linux /home"),
     (LINUX_SWAP, "Linux swap"),
+    (LINUX_LUKS, "Linux LUKS"),
     (MS_BASIC_DATA, "Microsoft basic data"),
     (MS_RESERVED, "Microsoft reserved"),
     (WINDOWS_RECOVERY, "Windows recovery"),
@@ -70,19 +108,23 @@ pub fn describe_type(guid: &Guid) -> &'static str {
     KNOWN_TYPES.iter().find(|(g, _)| g == guid).map(|(_, name)| *name).unwrap_or("unknown")
 }
 
-/// The stock SteamOS 3.x A/B layout, by partition name and type.
+/// The SteamOS A/B layout, by partition name and expected type.
 ///
-/// Adjust this if your Deck's install differs; it is descriptive, not
-/// normative, and only feeds the confidence estimate.
+/// Taken from a real dual-booting Deck, not from documentation. The types
+/// are the systemd discoverable-partition GUIDs; an earlier version of this
+/// table guessed "Linux filesystem" for everything and was wrong for seven
+/// of the eight entries, which made the tool refuse the very disk it was
+/// written for. Hence [`recognize`] keying on names, with the type treated
+/// as corroborating detail rather than a requirement.
 pub const STEAMOS_PARTITIONS: &[(&str, Guid)] = &[
     ("esp", EFI_SYSTEM_PARTITION),
-    ("efi-A", LINUX_FILESYSTEM),
-    ("efi-B", LINUX_FILESYSTEM),
-    ("rootfs-A", LINUX_FILESYSTEM),
-    ("rootfs-B", LINUX_FILESYSTEM),
-    ("var-A", LINUX_FILESYSTEM),
-    ("var-B", LINUX_FILESYSTEM),
-    ("home", LINUX_FILESYSTEM),
+    ("efi-A", MS_BASIC_DATA),
+    ("efi-B", MS_BASIC_DATA),
+    ("rootfs-A", LINUX_ROOT_X86_64),
+    ("rootfs-B", LINUX_ROOT_X86_64),
+    ("var-A", LINUX_VAR),
+    ("var-B", LINUX_VAR),
+    ("home", LINUX_HOME),
 ];
 
 /// Names whose absence means this is almost certainly not a bootable
@@ -188,26 +230,42 @@ pub enum Confidence {
 #[derive(Clone, Debug)]
 pub struct Recognition {
     pub confidence: Confidence,
+    /// Expected partitions found by name.
     pub matched: Vec<&'static str>,
     pub missing: Vec<&'static str>,
+    /// Found by name but carrying a different type GUID than expected:
+    /// `(name, expected, found)`. Reported to the operator, never fatal.
+    pub type_mismatches: Vec<(&'static str, Guid, Guid)>,
     /// Used partitions whose type GUID is not in [`KNOWN_TYPES`].
     pub unknown_types: Vec<(usize, Guid, String)>,
     /// Critical SteamOS partitions that are absent.
     pub missing_critical: Vec<&'static str>,
 }
 
+/// Identify a table as a SteamOS install.
+///
+/// Matching is by partition **name**. Type GUIDs are compared and any
+/// disagreement is reported, but does not count as a miss: a hardcoded type
+/// table is exactly the kind of thing that goes stale across an OS release,
+/// and being strict about it turns this tool into a brick on the disk it
+/// was meant to save. A stale or foreign backup is still caught, because
+/// its names will not line up either.
 pub fn recognize(entries: &[PartitionEntry]) -> Recognition {
     let used: Vec<(usize, &PartitionEntry)> =
         entries.iter().enumerate().filter(|(_, e)| e.is_used()).collect();
 
     let mut matched = Vec::new();
     let mut missing = Vec::new();
-    for (name, type_guid) in STEAMOS_PARTITIONS {
-        let found = used.iter().any(|(_, e)| e.name_string() == *name && e.type_guid == *type_guid);
-        if found {
-            matched.push(*name);
-        } else {
-            missing.push(*name);
+    let mut type_mismatches = Vec::new();
+    for (name, expected_type) in STEAMOS_PARTITIONS {
+        match used.iter().find(|(_, e)| e.name_string() == *name) {
+            Some((_, e)) => {
+                matched.push(*name);
+                if e.type_guid != *expected_type {
+                    type_mismatches.push((*name, *expected_type, e.type_guid));
+                }
+            }
+            None => missing.push(*name),
         }
     }
 
@@ -230,7 +288,7 @@ pub fn recognize(entries: &[PartitionEntry]) -> Recognition {
         Confidence::Partial
     };
 
-    Recognition { confidence, matched, missing, unknown_types, missing_critical }
+    Recognition { confidence, matched, missing, type_mismatches, unknown_types, missing_critical }
 }
 
 #[cfg(test)]
