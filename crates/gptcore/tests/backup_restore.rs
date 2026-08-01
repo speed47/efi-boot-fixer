@@ -18,11 +18,18 @@ fn now() -> Timestamp {
     Timestamp { year: 2026, month: 8, day: 1, hour: 12, minute: 13, second: 14 }
 }
 
+fn meta() -> Vec<(String, String)> {
+    vec![
+        ("tool".to_string(), "efigptfix test".to_string()),
+        ("firmware".to_string(), "Valve rev 0x10033".to_string()),
+    ]
+}
+
 /// Capture, serialise and read back, exactly as the application does.
 fn snapshot(img: &common::Image) -> backup::Archive {
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
-    let archive = backup::capture(&mut disk, &analysis, now()).expect("capture");
+    let archive = backup::capture(&mut disk, &analysis, now(), meta()).expect("capture");
     let bytes = encode(&archive, &CRC);
     decode(&bytes, &CRC).expect("decode what we just encoded")
 }
@@ -162,7 +169,7 @@ fn a_damaged_backup_file_is_never_acted_on() {
     let img = deck_image();
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
-    let archive = backup::capture(&mut disk, &analysis, now()).expect("capture");
+    let archive = backup::capture(&mut disk, &analysis, now(), meta()).expect("capture");
     let mut bytes = encode(&archive, &CRC);
 
     // One bit inside a partition entry: the sort of damage that would
@@ -184,4 +191,129 @@ fn a_restore_names_every_write_before_it_happens() {
     assert_eq!(described.len(), 5, "{described:?}");
     assert!(described.iter().any(|d| d.contains("protective MBR")));
     assert!(described.iter().any(|d| d.starts_with("1 primary GPT header")));
+}
+
+/// A genuine version-1 file: encode with no metadata, then strip the
+/// (empty) metadata section and stamp the old version number.
+fn downgrade_to_v1(archive: &backup::Archive) -> Vec<u8> {
+    let mut bare = archive.clone();
+    bare.meta.clear();
+    let v2 = encode(&bare, &CRC);
+    let body = &v2[..v2.len() - 4];
+    let mut v1 = body[..body.len() - 4].to_vec();
+    v1[8..12].copy_from_slice(&1u32.to_le_bytes());
+    let sum = gptcore::Crc32::crc32(&CRC, &v1);
+    v1.extend_from_slice(&sum.to_le_bytes());
+    v1
+}
+
+#[test]
+fn provenance_survives_the_round_trip() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+    assert_eq!(archive.version, backup::VERSION);
+    assert_eq!(archive.meta_get("tool"), Some("efigptfix test"));
+    assert_eq!(archive.meta_get("firmware"), Some("Valve rev 0x10033"));
+    assert_eq!(archive.meta_get("nonexistent"), None);
+}
+
+#[test]
+fn version_1_snapshots_are_still_readable() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+    let v1 = downgrade_to_v1(&archive);
+
+    let old = decode(&v1, &CRC).expect("a v1 file must still decode");
+    assert_eq!(old.version, 1);
+    assert!(old.meta.is_empty());
+    // Everything that matters for putting the disk back is still there.
+    assert_eq!(old.last_block, archive.last_block);
+    assert_eq!(old.disk_guid, archive.disk_guid);
+    assert_eq!(old.chunks.len(), archive.chunks.len());
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    restore_plan(&old, &analysis).expect("a v1 snapshot must still be restorable");
+}
+
+#[test]
+fn a_snapshot_recognises_the_disk_it_came_from() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+
+    let c = backup::compare(&archive, &analysis);
+    assert_eq!(c.verdict(), backup::Match::SameDisk);
+    assert!(c.geometry);
+    assert!(c.disk_guid);
+    assert_eq!(c.shared_partitions, c.archive_partitions);
+    assert!(c.archive_partitions >= 8, "{c:?}");
+}
+
+#[test]
+fn partition_guids_identify_the_disk_even_after_the_disk_guid_changes() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+    // What a partitioner rewriting only the disk GUID would leave behind.
+    archive.disk_guid = gptcore::Guid::from_fields(0xDEAD, 0xBEEF, 1, [9; 8]);
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let c = backup::compare(&archive, &analysis);
+    assert!(!c.disk_guid);
+    assert_eq!(c.verdict(), backup::Match::SameDisk, "{c:?}");
+}
+
+#[test]
+fn a_snapshot_from_a_different_disk_is_not_claimed() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+
+    let other = common::steamos_image();
+    let mut disk = other.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let c = backup::compare(&archive, &analysis);
+    assert_eq!(c.verdict(), backup::Match::DifferentDisk);
+    assert_eq!(c.shared_partitions, 0);
+}
+
+#[test]
+fn inspecting_a_snapshot_shows_what_identifies_it() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let c = backup::compare(&archive, &analysis);
+
+    let text = gptcore::style::plain(&backup::inspect(&archive, Some(("Disk 1", &c))));
+    assert!(text.contains("Belongs to:"), "{text}");
+    assert!(text.contains("efigptfix test"), "{text}");
+    assert!(text.contains("Unique GUID"), "{text}");
+    assert!(text.contains("rootfs-A"), "{text}");
+    // The per-partition GUID is the evidence; it must actually be printed.
+    let guid =
+        archive.entries().iter().find(|e| e.name_string() == "rootfs-A").unwrap().unique_guid;
+    assert!(text.contains(&guid.to_string()), "{text}");
+}
+
+#[test]
+fn snapshot_names_count_up_and_never_reuse_a_number() {
+    assert_eq!(backup::next_name(&[]).as_deref(), Some("gpt.001"));
+    let taken = vec!["gpt.001".to_string(), "GPT.002".to_string(), "notes.txt".to_string()];
+    assert_eq!(backup::next_name(&taken).as_deref(), Some("gpt.003"));
+
+    // Deleting gpt.002 must not make the next one gpt.002 again: the
+    // numbering is what tells you which snapshot is newest.
+    let gapped = vec!["gpt.001".to_string(), "gpt.007".to_string()];
+    assert_eq!(backup::next_name(&gapped).as_deref(), Some("gpt.008"));
+
+    assert_eq!(backup::sequence_of("gpt.042"), Some(42));
+    assert_eq!(backup::sequence_of("GPT.999"), Some(999));
+    assert_eq!(backup::sequence_of("gpt.1"), None);
+    assert_eq!(backup::sequence_of("gpt.abc"), None);
+    assert_eq!(backup::sequence_of("snapshot.001"), None);
+
+    let full = vec!["gpt.999".to_string()];
+    assert_eq!(backup::next_name(&full), None);
 }

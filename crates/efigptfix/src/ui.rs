@@ -267,16 +267,54 @@ pub fn message(title: &str, lines: &[Line]) {
     }
 }
 
+/// What came back from a menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Choice {
+    Item(usize),
+    /// View was pressed on this item: show it in full, then come back.
+    Inspect(usize),
+    Cancelled,
+}
+
 /// A D-pad menu with a highlight bar. Returns the chosen index, or `None`
 /// if the operator backed out.
 ///
 /// `hint` names what B does here, which differs between the top level
 /// ("exit") and a submenu ("back").
 pub fn menu(title: &str, intro: &[Line], items: &[Item], hint: &str) -> Option<usize> {
-    if items.is_empty() {
-        return None;
+    match run_menu(title, intro, items, hint, None, 0) {
+        Choice::Item(i) => Some(i),
+        _ => None,
     }
-    let mut selected = 0usize;
+}
+
+/// A menu whose entries can also be opened for a closer look.
+///
+/// `start` is the initially selected row, so returning from an inspection
+/// puts the operator back where they were rather than at the top.
+pub fn menu_inspectable(
+    title: &str,
+    intro: &[Line],
+    items: &[Item],
+    hint: &str,
+    inspect_hint: &str,
+    start: usize,
+) -> Choice {
+    run_menu(title, intro, items, hint, Some(inspect_hint), start)
+}
+
+fn run_menu(
+    title: &str,
+    intro: &[Line],
+    items: &[Item],
+    hint: &str,
+    inspect_hint: Option<&str>,
+    start: usize,
+) -> Choice {
+    if items.is_empty() {
+        return Choice::Cancelled;
+    }
+    let mut selected = start.min(items.len() - 1);
     let mut top = 0usize;
     drain();
 
@@ -324,15 +362,20 @@ pub fn menu(title: &str, intro: &[Line], items: &[Item], hint: &str) -> Option<u
             styled(line, cols);
         }
 
-        footer(rows, &alloc::format!("  D-pad = move    A = choose    {hint}"));
+        let keys = match inspect_hint {
+            Some(extra) => alloc::format!("  D-pad = move    A = choose    {extra}    {hint}"),
+            None => alloc::format!("  D-pad = move    A = choose    {hint}"),
+        };
+        footer(rows, &keys);
 
         match wait() {
             Input::Up => {
                 selected = if selected == 0 { items.len() - 1 } else { selected - 1 };
             }
             Input::Down => selected = (selected + 1) % items.len(),
-            Input::Select => return Some(selected),
-            Input::Cancel => return None,
+            Input::Select => return Choice::Item(selected),
+            Input::Cancel => return Choice::Cancelled,
+            Input::Tab if inspect_hint.is_some() => return Choice::Inspect(selected),
             _ => {}
         }
     }

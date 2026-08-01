@@ -32,7 +32,7 @@ VARS="$DIR/vars.fd"
 cp -f "$VARS_SRC" "$VARS"
 
 UP=$'\033[A'; DOWN=$'\033[B'; RIGHT=$'\033[C'; LEFT=$'\033[D'
-A=$'\r'; B=$'\033'
+A=$'\r'; B=$'\033'; TAB=$'\t'
 
 keys() {
     local k
@@ -68,6 +68,16 @@ drive() {
             keys "$DOWN" "$DOWN" "$DOWN" "$A" "$A" "$DOWN" "$A" "$A"
             confirm
             keys "$A" "$B" ;;
+        inspect)                                    # browse snapshots, View
+            keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Restore GPT
+            keys "$DOWN"                            # second snapshot
+            keys "$TAB" "$A"                        # details, then back
+            keys "$DOWN" "$TAB" "$A"                # and the next one
+            keys "$B" "$B" ;;
+        backup-twice)                               # two snapshots in a row
+            keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
+            keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
+            keys "$B" ;;
         prevent)                                    # item 5
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
             confirm

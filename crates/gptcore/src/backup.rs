@@ -19,17 +19,21 @@
 
 use crate::crc::Crc32;
 use crate::disk::{read_lbas, BlockDevice, IoError};
-use crate::entry::parse_array;
+use crate::entry::{parse_array, PartitionEntry};
 use crate::guid::Guid;
 use crate::header::GptHeader;
 use crate::repair::{Analysis, RepairPlan, Step, Verdict};
-use crate::style::{self, dim, key, title, Line, Style};
+use crate::style::{self, dim, key, line, title, Line, Style};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const MAGIC: [u8; 8] = *b"EFIGPTBK";
-pub const VERSION: u32 = 1;
+/// Bumped to 2 when the metadata section was added. Version 1 files stay
+/// readable: a snapshot is worthless if a later build refuses it.
+pub const VERSION: u32 = 2;
+/// The oldest layout [`decode`] understands.
+pub const MIN_VERSION: u32 = 1;
 
 /// Size of the fixed part, before the chunks: magic, version, block size,
 /// last block, disk GUID, timestamp, health, chunk count.
@@ -219,6 +223,8 @@ impl Health {
 
 #[derive(Clone, Debug)]
 pub struct Archive {
+    /// Layout the file was written in. New archives are [`VERSION`].
+    pub version: u32,
     pub block_size: u32,
     /// `Media->LastBlock` of the disk this came from.
     pub last_block: u64,
@@ -227,6 +233,14 @@ pub struct Archive {
     pub time: Timestamp,
     pub health: Health,
     pub chunks: Vec<Chunk>,
+    /// Free-form provenance: which build wrote this, on what firmware,
+    /// from which device. Empty for version 1 files.
+    ///
+    /// Deliberately key/value text rather than struct fields. This is read
+    /// by a person years later trying to work out whether a file belongs to
+    /// the machine in front of them, and an unknown key they can still read
+    /// beats a decoder that rejects the file.
+    pub meta: Vec<(String, String)>,
 }
 
 impl Archive {
@@ -241,6 +255,30 @@ impl Archive {
     /// The header the restore would install at LBA 1, if it can be parsed.
     pub fn primary_header(&self) -> Option<GptHeader> {
         GptHeader::parse(&self.chunk(Role::PrimaryHeader)?.data)
+    }
+
+    pub fn meta_get(&self, key: &str) -> Option<&str> {
+        self.meta.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    /// The partitions this snapshot would restore.
+    ///
+    /// Parsed from the primary entry array, falling back to the backup
+    /// copy: the two are identical on a healthy disk, and when they are not
+    /// the surviving one is still worth showing.
+    pub fn entries(&self) -> Vec<PartitionEntry> {
+        let Some(header) = self
+            .primary_header()
+            .or_else(|| GptHeader::parse(&self.chunk(Role::BackupHeader)?.data))
+        else {
+            return Vec::new();
+        };
+        let Some(array) =
+            self.chunk(Role::PrimaryEntries).or_else(|| self.chunk(Role::BackupEntries))
+        else {
+            return Vec::new();
+        };
+        parse_array(&array.data, header.number_of_partition_entries, header.size_of_partition_entry)
     }
 }
 
@@ -262,6 +300,7 @@ pub fn capture<D: BlockDevice + ?Sized>(
     dev: &mut D,
     analysis: &Analysis,
     time: Timestamp,
+    meta: Vec<(String, String)>,
 ) -> Result<Archive, IoError> {
     let block_size = analysis.block_size;
     let last_block = analysis.last_block;
@@ -324,9 +363,40 @@ pub fn capture<D: BlockDevice + ?Sized>(
         last_block,
         disk_guid,
         time,
+        version: VERSION,
         health: Health::from_verdict(analysis.verdict),
         chunks,
+        meta,
     })
+}
+
+fn encode_meta(meta: &[(String, String)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (k, v) in meta {
+        // Tab-separated, newline-terminated: trivially readable in a hex
+        // dump, which is the situation this data exists for.
+        if k.contains('\t') || k.contains('\n') || v.contains('\n') {
+            continue;
+        }
+        out.extend_from_slice(k.as_bytes());
+        out.push(b'\t');
+        out.extend_from_slice(v.as_bytes());
+        out.push(b'\n');
+    }
+    out
+}
+
+fn decode_meta(bytes: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(text) = core::str::from_utf8(bytes) else {
+        return out;
+    };
+    for l in text.lines() {
+        if let Some((k, v)) = l.split_once('\t') {
+            out.push((String::from(k), String::from(v)));
+        }
+    }
+    out
 }
 
 pub fn encode(archive: &Archive, crc: &impl Crc32) -> Vec<u8> {
@@ -353,6 +423,10 @@ pub fn encode(archive: &Archive, crc: &impl Crc32) -> Vec<u8> {
         out.extend_from_slice(&(chunk.data.len() as u64).to_le_bytes());
         out.extend_from_slice(&chunk.data);
     }
+
+    let meta = encode_meta(&archive.meta);
+    out.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+    out.extend_from_slice(&meta);
 
     let sum = crc.crc32(&out);
     out.extend_from_slice(&sum.to_le_bytes());
@@ -417,7 +491,7 @@ pub fn decode(bytes: &[u8], crc: &impl Crc32) -> Result<Archive, DecodeError> {
         return Err(DecodeError::BadMagic);
     }
     let version = le_u32(bytes, 8);
-    if version != VERSION {
+    if !(MIN_VERSION..=VERSION).contains(&version) {
         return Err(DecodeError::UnsupportedVersion { found: version });
     }
 
@@ -468,7 +542,21 @@ pub fn decode(bytes: &[u8], crc: &impl Crc32) -> Result<Archive, DecodeError> {
         off = end;
     }
 
-    Ok(Archive { block_size, last_block, disk_guid, time, health, chunks })
+    let mut meta = Vec::new();
+    if version >= 2 {
+        if off + 4 > body.len() {
+            return Err(DecodeError::Truncated);
+        }
+        let len = le_u32(body, off) as usize;
+        off += 4;
+        let end = off.checked_add(len).ok_or(DecodeError::Truncated)?;
+        if end > body.len() {
+            return Err(DecodeError::Truncated);
+        }
+        meta = decode_meta(&body[off..end]);
+    }
+
+    Ok(Archive { version, block_size, last_block, disk_guid, time, health, chunks, meta })
 }
 
 /// Why an archive cannot be written to a particular disk.
@@ -593,13 +681,54 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     Ok(RepairPlan { steps, header, entries })
 }
 
+/// Snapshots are named `gpt.001`, `gpt.002`, ...
+///
+/// A sequence number rather than a timestamp for two reasons. It fits 8.3,
+/// so the name reads the same from firmware, Windows and Linux. And it does
+/// not depend on the clock: firmware that will not give a sensible time
+/// would otherwise produce a pile of identically-named files, exactly when
+/// ambiguity is least welcome. The date lives inside the file.
+pub const NAME_PREFIX: &str = "gpt.";
+pub const MAX_SEQUENCE: u32 = 999;
+
+/// The number in `gpt.NNN`, case-insensitively: FAT may hand back `GPT.001`.
+pub fn sequence_of(name: &str) -> Option<u32> {
+    let mut chars = name.chars();
+    for expected in NAME_PREFIX.chars() {
+        if !chars.next()?.eq_ignore_ascii_case(&expected) {
+            return None;
+        }
+    }
+    let digits: &str = &name[NAME_PREFIX.len()..];
+    if digits.len() != 3 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// The next name to write, given what is already there.
+///
+/// Counts from the highest rather than filling gaps: reusing the number of
+/// a snapshot someone deleted would make the ordering lie about which is
+/// newest. `None` once the space is exhausted — better to say so than to
+/// overwrite somebody's oldest backup.
+pub fn next_name(existing: &[String]) -> Option<String> {
+    let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
+    let next = highest + 1;
+    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}"))
+}
+
 /// One-line summary for a list of saved backups.
+///
+/// Ordered date first, because that is what people scan a list of backups
+/// by, and the rest has to survive being clipped on a narrow console.
 pub fn summary(archive: &Archive) -> String {
+    let used = archive.entries().iter().filter(|e| e.is_used()).count();
     format!(
-        "{}  {} blocks x {} B  {}",
+        "{}  {:>2} parts  {:>9}  {}",
         archive.time,
-        archive.last_block + 1,
-        archive.block_size,
+        used,
+        crate::report::human_size(archive.capacity()),
         archive.health.describe()
     )
 }
@@ -657,6 +786,183 @@ pub fn describe(archive: &Archive) -> Vec<Line> {
     out
 }
 
+/// How strongly a snapshot belongs to a particular disk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Match {
+    /// Same disk GUID and geometry. This snapshot is this disk's own.
+    SameDisk,
+    /// Geometry fits, but the disk GUID differs — a reinstall, a restored
+    /// image, or a different drive of the same model.
+    SameGeometry,
+    /// Does not fit. Restore will refuse.
+    DifferentDisk,
+}
+
+/// What a snapshot and a disk have in common.
+///
+/// The point of this is the question someone asks years later: *is this
+/// file from this machine?* Geometry and disk GUID answer part of it, but
+/// the strongest evidence is the per-partition unique GUIDs. Those are
+/// generated once when a partition is created and survive OS upgrades, so
+/// a snapshot sharing eight of them with the disk in front of you is that
+/// disk's, whatever else has changed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Comparison {
+    pub geometry: bool,
+    pub disk_guid: bool,
+    pub shared_partitions: usize,
+    pub archive_partitions: usize,
+    pub disk_partitions: usize,
+}
+
+impl Comparison {
+    pub fn verdict(&self) -> Match {
+        if !self.geometry {
+            return Match::DifferentDisk;
+        }
+        // Partition identity outranks the disk GUID: the GUID is a single
+        // field that any partitioner may rewrite, whereas matching unique
+        // GUIDs across several partitions cannot happen by accident.
+        if self.disk_guid
+            || (self.archive_partitions > 0
+                && self.shared_partitions * 2 >= self.archive_partitions)
+        {
+            return Match::SameDisk;
+        }
+        Match::SameGeometry
+    }
+
+    pub fn style(&self) -> Style {
+        match self.verdict() {
+            Match::SameDisk => Style::Good,
+            Match::SameGeometry => Style::Warn,
+            Match::DifferentDisk => Style::Bad,
+        }
+    }
+
+    /// The evidence, phrased so a caller can put a disk name in front of it.
+    pub fn describe(&self) -> String {
+        match self.verdict() {
+            Match::SameDisk => format!(
+                "{} of {} partitions still carry the same unique GUID",
+                self.shared_partitions, self.archive_partitions
+            ),
+            Match::SameGeometry => {
+                String::from("geometry fits, but no partition is recognisably the same")
+            }
+            Match::DifferentDisk => String::from("geometry does not fit"),
+        }
+    }
+}
+
+pub fn compare(archive: &Archive, analysis: &Analysis) -> Comparison {
+    let entries = archive.entries();
+    let archive_used: Vec<Guid> =
+        entries.iter().filter(|e| e.is_used()).map(|e| e.unique_guid).collect();
+    let disk_used: Vec<Guid> = analysis
+        .best_view()
+        .map(|t| t.used_entries().map(|(_, e)| e.unique_guid).collect())
+        .unwrap_or_default();
+
+    Comparison {
+        geometry: archive.block_size == analysis.block_size
+            && archive.last_block == analysis.last_block,
+        disk_guid: !archive.disk_guid.is_zero()
+            && analysis.best_view().map(|t| t.header.disk_guid) == Some(archive.disk_guid),
+        shared_partitions: archive_used.iter().filter(|g| disk_used.contains(g)).count(),
+        archive_partitions: archive_used.len(),
+        disk_partitions: disk_used.len(),
+    }
+}
+
+/// Everything known about a snapshot, for someone deciding whether to
+/// trust it.
+///
+/// `against` is the comparison with a specific disk, when one has been
+/// chosen; at file-picking time there is none yet.
+pub fn inspect(archive: &Archive, against: Option<(&str, &Comparison)>) -> Vec<Line> {
+    let mut out = Vec::new();
+    out.push(key(format!("  Taken:        {}", archive.time)));
+    if archive.time.year < 2000 {
+        out.push(Line::new(
+            String::from("                (the clock was not set; treat the date as unknown)"),
+            Style::Warn,
+        ));
+    }
+    out.push(Line::new(
+        format!("  State then:   {}", archive.health.describe()),
+        archive.health.style(),
+    ));
+    if let Some((disk, c)) = against {
+        out.push(Line::new(format!("  Belongs to:   {} - {}", disk, c.describe()), c.style()));
+    }
+    out.push(Line::blank());
+
+    out.push(title("  Identity"));
+    out.push(line(format!("    Disk GUID     {}", archive.disk_guid)));
+    out.push(line(format!(
+        "    Geometry      {} blocks x {} B = {}",
+        archive.last_block + 1,
+        archive.block_size,
+        crate::report::human_size(archive.capacity())
+    )));
+    if let Some(h) = archive.primary_header() {
+        out.push(line(format!("    Usable range  {}..{}", h.first_usable_lba, h.last_usable_lba)));
+        out.push(line(format!(
+            "    Entry array   {} entries x {} B at LBA {}",
+            h.number_of_partition_entries, h.size_of_partition_entry, h.partition_entry_lba
+        )));
+    }
+    out.push(Line::blank());
+
+    out.push(title("  Recorded when it was written"));
+    if archive.meta.is_empty() {
+        out.push(dim(format!(
+            "    nothing: format version {} predates provenance",
+            archive.version
+        )));
+    } else {
+        for (k, v) in &archive.meta {
+            out.push(line(format!("    {k:<13} {v}")));
+        }
+    }
+    out.push(Line::blank());
+
+    let entries = archive.entries();
+    let used: Vec<&PartitionEntry> = entries.iter().filter(|e| e.is_used()).collect();
+    out.push(title(format!("  Partitions ({})", used.len())));
+    out.push(dim(format!(
+        "    {:>2}  {:>12} {:>10}  {:<20} {}",
+        "#", "Start LBA", "Size", "Name", "Unique GUID"
+    )));
+    for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_used()) {
+        let size = e
+            .block_count()
+            .map(|b| crate::report::human_size(b.saturating_mul(archive.block_size as u64)))
+            .unwrap_or_else(|| String::from("invalid"));
+        out.push(line(format!(
+            "    {:>2}  {:>12} {:>10}  {:<20} {}",
+            i + 1,
+            e.starting_lba,
+            size,
+            e.name_string(),
+            e.unique_guid
+        )));
+    }
+    out.push(Line::blank());
+
+    out.push(title("  Sectors stored"));
+    for chunk in &archive.chunks {
+        out.push(dim(format!(
+            "    LBA {:<12} {} ({} blocks)",
+            chunk.lba,
+            chunk.role.describe(),
+            chunk.blocks(archive.block_size)
+        )));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,11 +971,13 @@ mod tests {
 
     fn sample() -> Archive {
         Archive {
+            version: VERSION,
             block_size: 512,
             last_block: 1_953_525_167,
             disk_guid: Guid::from_fields(1, 2, 3, [4; 8]),
             time: Timestamp { year: 2026, month: 8, day: 1, hour: 12, minute: 13, second: 14 },
             health: Health::Healthy,
+            meta: alloc::vec![(String::from("tool"), String::from("test"))],
             chunks: alloc::vec![
                 Chunk { role: Role::Mbr, lba: 0, data: alloc::vec![0xAA; 512] },
                 Chunk { role: Role::PrimaryEntries, lba: 2, data: alloc::vec![0x11; 512 * 32] },

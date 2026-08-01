@@ -70,7 +70,7 @@ pub fn save(name: &str, data: &[u8]) -> Result<String, String> {
     Ok(format!("\\{DIR}\\{name}"))
 }
 
-/// Read every `*.bin` in `\EFIGPTFIX`, newest name last.
+/// Read every snapshot in `\EFIGPTFIX`, sorted by name.
 ///
 /// The files are a few tens of KiB each, so reading them all up front is
 /// cheaper than the alternative: the picker has to show what is *inside*
@@ -90,8 +90,13 @@ pub fn list() -> Result<Vec<Saved>, String> {
                 if info.attribute().contains(FileAttribute::DIRECTORY) {
                     continue;
                 }
+                // `gpt.NNN` is what this build writes; `*.bin` is what
+                // earlier builds and tools/deck-corrupt.py write, and a
+                // snapshot must not become invisible because the naming
+                // scheme moved on.
                 let name = info.file_name().to_string();
-                if name.to_ascii_lowercase().ends_with(".bin") {
+                let lower = name.to_ascii_lowercase();
+                if lower.starts_with("gpt.") || lower.ends_with(".bin") {
                     names.push(name);
                 }
             }

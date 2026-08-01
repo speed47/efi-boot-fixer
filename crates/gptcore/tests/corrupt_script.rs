@@ -104,6 +104,18 @@ fn the_snapshot_it_writes_is_readable_by_the_application() {
     assert_eq!(archive.chunk(Role::BackupHeader).unwrap().lba, img.last_block());
     assert_eq!(archive.chunk(Role::PrimaryHeader).unwrap().data, img.read_lba(1, 1));
 
+    // The script records its own provenance in the same key/value section
+    // the application reads, so a snapshot taken from Linux is as
+    // self-describing as one taken from firmware.
+    assert_eq!(archive.version, gptcore::backup::VERSION);
+    assert!(
+        archive.meta_get("tool").is_some_and(|t| t.starts_with("deck-corrupt.py")),
+        "{:?}",
+        archive.meta
+    );
+    assert!(archive.meta_get("device").is_some());
+    assert!(archive.meta_get("host").is_some());
+
     let _ = std::fs::remove_file(&snap);
 }
 

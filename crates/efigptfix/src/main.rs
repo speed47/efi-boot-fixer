@@ -404,7 +404,8 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
         Err(e) => return show_error("Back up GPT", e),
     };
 
-    let archive = match backup::capture(&mut dev, &analysis, now()) {
+    let archive = match backup::capture(&mut dev, &analysis, now(), provenance(&disk, boot_device))
+    {
         Ok(a) => a,
         Err(e) => return show_error("Back up GPT", format!("could not read the tables ({e})")),
     };
@@ -429,8 +430,13 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     }
 
     // Writing a file needs no confirmation sequence: it creates data, it
-    // does not overwrite a partition table.
-    match esp::save(&filename(&archive), &bytes) {
+    // does not overwrite a partition table, and it never replaces an
+    // existing snapshot.
+    let name = match next_name() {
+        Ok(n) => n,
+        Err(e) => return show_error("Back up GPT FAILED", e),
+    };
+    match esp::save(&name, &bytes) {
         Ok(path) => ui::message(
             "Back up GPT",
             &alloc::vec![
@@ -444,18 +450,48 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     }
 }
 
-/// A name that sorts chronologically and never silently replaces an
-/// existing snapshot.
-fn filename(archive: &backup::Archive) -> String {
-    let base = format!("gpt-{}", archive.time.stamp());
+/// The next free snapshot name on the ESP.
+fn next_name() -> Result<String, String> {
     let taken: Vec<String> = esp::list().unwrap_or_default().into_iter().map(|s| s.name).collect();
-    let mut name = format!("{base}.bin");
-    let mut n = 2;
-    while taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
-        name = format!("{base}-{n}.bin");
-        n += 1;
+    backup::next_name(&taken).ok_or_else(|| {
+        format!(
+            "\\{}\\ already holds gpt.{}; delete some snapshots first",
+            esp::DIR,
+            backup::MAX_SEQUENCE
+        )
+    })
+}
+
+/// What was true when a snapshot was taken, for whoever reads it later.
+///
+/// None of this is needed to restore the file. It is here for the question
+/// asked years afterwards: is this from this machine, and what was it?
+fn provenance(disk: &Disk, boot_device: &BootDevice) -> Vec<(String, String)> {
+    let mut meta =
+        alloc::vec![(String::from("tool"), format!("efigptfix {}", env!("CARGO_PKG_VERSION")))];
+
+    let vendor = uefi::system::firmware_vendor().to_string();
+    if !vendor.is_empty() {
+        meta.push((
+            String::from("firmware"),
+            format!("{} rev {:#x}", vendor, uefi::system::firmware_revision()),
+        ));
     }
-    name
+    let rev = uefi::system::uefi_revision();
+    meta.push((String::from("uefi"), format!("{}.{}", rev.major(), rev.minor())));
+
+    meta.push((String::from("device"), disk.path.clone()));
+    if let Some(model) = &disk.model {
+        meta.push((String::from("model"), model.clone()));
+    }
+    meta.push((
+        String::from("capacity"),
+        format!("{} blocks x {} B", disk.last_block + 1, disk.block_size),
+    ));
+    if boot_device.is_known() {
+        meta.push((String::from("launched-from"), path_text(boot_device.path())));
+    }
+    meta
 }
 
 fn warn_esp_may_be_gone() -> bool {
@@ -472,34 +508,100 @@ fn warn_esp_may_be_gone() -> bool {
     )
 }
 
+/// A snapshot found on the ESP, with whatever we can work out about where
+/// it came from.
+struct Saved {
+    name: String,
+    archive: backup::Archive,
+    /// The disk this most likely belongs to, and why we think so.
+    best: Option<(usize, backup::Comparison)>,
+}
+
+impl Saved {
+    fn label(&self) -> String {
+        format!("{:<8} {}", self.name, backup::summary(&self.archive))
+    }
+
+    fn belongs_to(&self, disks: &[Disk]) -> Line {
+        match &self.best {
+            Some((i, c)) => Line::new(
+                format!("  Belongs to: Disk {} - {}", disks[*i].number, c.describe()),
+                c.style(),
+            ),
+            None => bad(String::from("  Belongs to: no disk here that it fits")),
+        }
+    }
+}
+
+/// Work out which of the disks present each snapshot belongs to.
+///
+/// Geometry alone would be a weak answer on a machine with two identical
+/// drives, so this leans on the per-partition unique GUIDs; see
+/// `backup::Comparison`.
+fn attribute(archives: Vec<(String, backup::Archive)>, disks: &[Disk]) -> Vec<Saved> {
+    let analyses: Vec<Option<Analysis>> =
+        disks.iter().map(|d| read_disk(d.handle).ok().map(|(_, a)| a)).collect();
+
+    archives
+        .into_iter()
+        .map(|(name, archive)| {
+            let mut best: Option<(usize, backup::Comparison)> = None;
+            for (i, analysis) in analyses.iter().enumerate() {
+                let Some(analysis) = analysis else { continue };
+                let c = backup::compare(&archive, analysis);
+                if c.verdict() == backup::Match::DifferentDisk {
+                    continue;
+                }
+                let better = match &best {
+                    None => true,
+                    Some((_, prev)) => {
+                        (c.verdict() == backup::Match::SameDisk
+                            && prev.verdict() != backup::Match::SameDisk)
+                            || c.shared_partitions > prev.shared_partitions
+                    }
+                };
+                if better {
+                    best = Some((i, c));
+                }
+            }
+            Saved { name, archive, best }
+        })
+        .collect()
+}
+
+/// What was found in `\EFIGPTFIX`: the snapshots that decoded, and a
+/// readable complaint about each one that did not.
+struct Found {
+    usable: Vec<(String, backup::Archive)>,
+    rejected: Vec<Line>,
+}
+
+/// Read and decode every snapshot on the ESP, reporting the ones that
+/// cannot be used rather than quietly dropping them.
+fn load_saved() -> Result<Found, String> {
+    let mut found = Found { usable: Vec::new(), rejected: Vec::new() };
+    for file in esp::list()? {
+        match backup::decode(&file.data, &CRC) {
+            Ok(a) => found.usable.push((file.name, a)),
+            Err(e) => found.rejected.push(bad(format!("  {} - {e}", file.name))),
+        }
+    }
+    Ok(found)
+}
+
 /// Put a saved snapshot back.
 fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     if *esp_lost && !warn_esp_may_be_gone() {
         return;
     }
-    let saved = match esp::list() {
-        Ok(s) => s,
+    let Found { usable, rejected } = match load_saved() {
+        Ok(v) => v,
         Err(e) => return show_error("Restore GPT", e),
     };
-    if saved.is_empty() {
-        return show_note(
-            "Restore GPT",
-            format!("No backups found in \\{}\\ on the ESP.", esp::DIR),
-        );
-    }
 
-    // Decode first. A file that will not parse must never be offered as a
-    // choice: a damaged snapshot is exactly what must not reach a disk.
-    let mut usable: Vec<(String, backup::Archive)> = Vec::new();
-    let mut rejected: Vec<Line> = Vec::new();
-    for file in saved {
-        match backup::decode(&file.data, &CRC) {
-            Ok(a) => usable.push((file.name, a)),
-            Err(e) => rejected.push(bad(format!("  {} - {e}", file.name))),
-        }
-    }
     if usable.is_empty() {
-        let mut lines = alloc::vec![bad("  No usable backup files on the ESP.")];
+        let mut lines =
+            alloc::vec![warn(format!("  No usable snapshots in \\{}\\ on the ESP.", esp::DIR))];
         if !rejected.is_empty() {
             lines.push(Line::blank());
             lines.push(warn("  Rejected:"));
@@ -508,34 +610,66 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         return ui::message("Restore GPT", &lines);
     }
     if !rejected.is_empty() {
-        let mut lines = alloc::vec![warn("  Some files could not be read and are not")];
-        lines.push(warn("  offered below:"));
-        lines.push(Line::blank());
+        let mut lines = alloc::vec![
+            warn("  Some files could not be read and are not offered"),
+            warn("  below:"),
+            Line::blank(),
+        ];
         lines.extend(rejected);
         ui::message("Restore GPT", &lines);
     }
 
-    let items: Vec<ui::Item> = usable
+    let disks = scan(boot_device);
+    let saved = attribute(usable, &disks);
+
+    let intro = alloc::vec![
+        dim(format!("  {} snapshot(s) in \\{}\\ on the ESP.", saved.len(), esp::DIR)),
+        dim("  A snapshot only fits the disk it was taken from."),
+    ];
+    let items: Vec<ui::Item> = saved
         .iter()
-        .map(|(name, a)| {
+        .map(|sv| {
             ui::Item::with_detail(
-                format!("{name}   {}", backup::summary(a)),
+                sv.label(),
                 alloc::vec![
-                    dim(format!("  disk GUID {}", a.disk_guid)),
-                    dim(format!("  taken {}", a.time)),
-                    Line::new(format!("  state then: {}", a.health.describe()), a.health.style(),),
+                    sv.belongs_to(&disks),
+                    dim(format!("  disk GUID {}", sv.archive.disk_guid)),
+                    dim(match sv.archive.meta_get("tool") {
+                        Some(t) => format!("  written by {t}"),
+                        None => String::from("  written by an older build"),
+                    }),
                 ],
             )
         })
         .collect();
-    let intro = alloc::vec![
-        dim(format!("  Backups found in \\{}\\ on the ESP.", esp::DIR)),
-        dim("  A backup only fits the disk it was taken from."),
-    ];
-    let Some(choice) = ui::menu("Restore GPT", &intro, &items, "B = back") else {
-        return;
+
+    // Browse, inspect, choose. Inspecting returns to the same row.
+    let mut selected = 0usize;
+    let archive = loop {
+        match ui::menu_inspectable(
+            "Restore GPT",
+            &intro,
+            &items,
+            "B = back",
+            "View = details",
+            selected,
+        ) {
+            ui::Choice::Cancelled => return,
+            ui::Choice::Item(i) => break &saved[i].archive,
+            ui::Choice::Inspect(i) => {
+                selected = i;
+                let sv = &saved[i];
+                let mut lines = alloc::vec![key(format!("  {}", sv.name)), Line::blank()];
+                let against =
+                    sv.best.as_ref().map(|(d, c)| (format!("Disk {}", disks[*d].number), c));
+                lines.extend(backup::inspect(
+                    &sv.archive,
+                    against.as_ref().map(|(name, c)| (name.as_str(), *c)),
+                ));
+                ui::page(&format!("Snapshot {}", sv.name), &lines);
+            }
+        }
     };
-    let archive = &usable[choice].1;
 
     let Some(disk) = pick_disk("Restore onto which disk?", boot_device) else {
         return;
@@ -550,25 +684,21 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         Err(mismatch) => {
             return show_error(
                 "Restore GPT refused",
-                format!("this backup does not fit this disk: {mismatch}"),
+                format!("this snapshot does not fit this disk: {mismatch}"),
             )
         }
     };
 
+    let comparison = backup::compare(archive, &analysis);
     let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    lines.extend(backup::describe(archive));
-    if archive.disk_guid != current_disk_guid(&analysis) {
+    let disk_name = format!("Disk {}", disk.number);
+    lines.extend(backup::inspect(archive, Some((disk_name.as_str(), &comparison))));
+    if comparison.verdict() == backup::Match::SameGeometry {
         lines.push(Line::blank());
-        lines.push(warn("  NOTE: the disk GUID on this disk differs from the one"));
-        lines.push(warn("  in the backup. Geometry matches, so this is allowed,"));
+        lines.push(warn("  NOTE: nothing in this snapshot identifies it as this"));
+        lines.push(warn("  disk's own. The geometry fits, so it can be written,"));
         lines.push(warn("  but check it is really the disk you mean."));
     }
-    lines.extend(report::render_entries(
-        &restore.entries,
-        analysis.block_size,
-        restore.header.disk_guid,
-        "Table that will be restored:",
-    ));
     lines.extend(report::render_plan(&restore));
     if !ui::page("Restore GPT", &lines) {
         return;
@@ -588,11 +718,6 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     }
     let result = execute(&disk, &restore);
     report_write("Restore GPT", &disk, result, esp_lost);
-}
-
-/// The disk GUID currently on the disk, for comparison against a backup.
-fn current_disk_guid(analysis: &Analysis) -> gptcore::Guid {
-    analysis.best_view().map(|t| t.header.disk_guid).unwrap_or(gptcore::Guid::ZERO)
 }
 
 /// Close the gap that the corrupting writer's arithmetic depends on.

@@ -12,6 +12,7 @@ and no partition data is touched.
     sudo ./deck-corrupt.py save    /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
     sudo ./deck-corrupt.py break   /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
     sudo ./deck-corrupt.py restore /dev/nvme0n1 -i /esp/EFIGPTFIX/gpt-before.bin
+    ./deck-corrupt.py show /esp/EFIGPTFIX/gpt.001         # no root, no device
 
 `break` refuses to run unless it has first written a snapshot it can read
 back, and unless *both* tables and the protective MBR are healthy going in
@@ -40,9 +41,10 @@ import zlib
 SECTOR = 512
 GPT_SIG = b"EFI PART"
 
-# efigptfix archive format, version 1. Must match crates/gptcore/src/backup.rs.
+# efigptfix archive format. Must match crates/gptcore/src/backup.rs.
 MAGIC = b"EFIGPTBK"
-VERSION = 1
+VERSION = 2          # 2 added the metadata section; 1 is still readable
+MIN_VERSION = 1
 FIXED_LEN = 52
 ROLE_MBR, ROLE_PRI_ENTRIES, ROLE_PRI_HEADER, ROLE_BAK_ENTRIES, ROLE_BAK_HEADER = 1, 2, 3, 4, 5
 HEALTH_HEALTHY, HEALTH_MBR_ONLY = 0, 1
@@ -232,6 +234,55 @@ def mbr_health(block, last_block):
 # ------------------------------------------------------------- the archive
 
 
+def sysfs(disk_path, attr):
+    """A /sys/block/<disk>/device/<attr> value, or None.
+
+    Linux can name the drive where UEFI cannot: NVMe DiskInfo returns
+    namespace data with no model string, so this is the one chance to
+    record what the hardware actually is.
+    """
+    name = os.path.basename(os.path.realpath(disk_path))
+    try:
+        with open("/sys/block/%s/device/%s" % (name, attr)) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def metadata(disk):
+    meta = [("tool", "deck-corrupt.py %d" % VERSION), ("device", disk.path)]
+    if disk.is_block:
+        for key, attr in (("model", "model"), ("serial", "serial"), ("firmware", "firmware_rev")):
+            value = sysfs(disk.path, attr)
+            if value:
+                meta.append((key, value))
+    meta.append(("capacity", "%d blocks x %d B" % (disk.last_block + 1, SECTOR)))
+    try:
+        u = os.uname()
+        meta.append(("host", "%s %s %s" % (u.nodename, u.sysname, u.release)))
+    except OSError:
+        pass
+    return meta
+
+
+def encode_meta(meta):
+    out = bytearray()
+    for k, v in meta:
+        if "\t" in k or "\n" in k or "\n" in v:
+            continue
+        out += k.encode("utf-8") + b"\t" + v.encode("utf-8") + b"\n"
+    return bytes(out)
+
+
+def decode_meta(raw):
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            out.append((k, v))
+    return out
+
+
 def build_archive(disk, primary, backup, health):
     chunks = [
         (ROLE_MBR, 0, disk.read(0, 1)),
@@ -259,6 +310,9 @@ def build_archive(disk, primary, backup, health):
         out += struct.pack("<IQQQ", role, lba, len(data) // SECTOR, len(data))
         out += data
 
+    meta = encode_meta(metadata(disk))
+    out += struct.pack("<I", len(meta)) + meta
+
     out += struct.pack("<I", crc32(bytes(out)))
     return bytes(out)
 
@@ -269,7 +323,7 @@ def parse_archive(blob):
     if blob[:8] != MAGIC:
         raise Fatal("not an efigptfix GPT snapshot (bad magic)")
     version = struct.unpack_from("<I", blob, 8)[0]
-    if version != VERSION:
+    if not MIN_VERSION <= version <= VERSION:
         raise Fatal("snapshot format version %d is not supported" % version)
 
     body, stored = blob[:-4], struct.unpack_from("<I", blob, len(blob) - 4)[0]
@@ -303,11 +357,31 @@ def parse_archive(blob):
         chunks.append((role, lba, body[off : off + length]))
         off += length
     info["chunks"] = chunks
+
+    info["meta"] = []
+    info["version"] = version
+    if version >= 2:
+        if off + 4 > len(body):
+            raise Fatal("snapshot is truncated")
+        length = struct.unpack_from("<I", body, off)[0]
+        off += 4
+        if off + length > len(body):
+            raise Fatal("snapshot is truncated")
+        info["meta"] = decode_meta(body[off : off + length])
     return info
 
 
 # ------------------------------------------------------------- operations
 
+
+HEALTH_NAMES = {
+    0: "healthy",
+    1: "tables healthy, protective MBR wrong",
+    2: "PRIMARY WAS CORRUPT",
+    3: "BACKUP WAS CORRUPT",
+    4: "BOTH TABLES WERE CORRUPT",
+    5: "unusual (hybrid MBR or similar)",
+}
 
 ROLE_NAMES = {
     ROLE_MBR: "protective MBR",
@@ -524,6 +598,63 @@ def cmd_break(args):
     return 0
 
 
+def cmd_show(args):
+    """Everything inside a snapshot, for reading one years later."""
+    with open(args.file, "rb") as f:
+        archive = parse_archive(f.read())
+
+    print("File:         %s" % args.file)
+    print("Format:       version %d" % archive["version"])
+    print("Taken:        %s" % archive["time"])
+    print("State then:   %s" % HEALTH_NAMES.get(archive["health"], "unknown"))
+    print("Disk GUID:    %s" % guid_str(archive["disk_guid"]))
+    print(
+        "Geometry:     %d blocks x %d B = %.1f GiB"
+        % (archive["last_block"] + 1, archive["block_size"],
+           (archive["last_block"] + 1) * archive["block_size"] / 2**30)
+    )
+
+    print()
+    print("Recorded when it was written:")
+    if archive["meta"]:
+        for k, v in archive["meta"]:
+            print("    %-13s %s" % (k, v))
+    else:
+        print("    nothing: format version %d predates provenance" % archive["version"])
+
+    by_role = {role: (lba, data) for role, lba, data in archive["chunks"]}
+    header = by_role.get(ROLE_PRI_HEADER, by_role.get(ROLE_BAK_HEADER))
+    array = by_role.get(ROLE_PRI_ENTRIES, by_role.get(ROLE_BAK_ENTRIES))
+    if header and array:
+        block = header[1]
+        count = struct.unpack_from("<I", block, OFF_NUM_ENTRIES)[0]
+        stride = struct.unpack_from("<I", block, OFF_ENTRY_SIZE)[0]
+        print()
+        print("Usable range: %d..%d" % (
+            struct.unpack_from("<Q", block, OFF_FIRST_USABLE)[0],
+            struct.unpack_from("<Q", block, OFF_LAST_USABLE)[0],
+        ))
+        print("Entry array:  %d entries x %d B at LBA %d" % (
+            count, stride, struct.unpack_from("<Q", block, OFF_ENTRY_LBA)[0]))
+        print()
+        print("Partitions:")
+        print("    %2s %14s %14s  %-20s %s" % ("#", "Start", "End", "Name", "Unique GUID"))
+        data = array[1]
+        for i in range(min(count, len(data) // stride)):
+            e = data[i * stride : (i + 1) * stride]
+            if e[:16] == b"\x00" * 16:
+                continue
+            start, end = struct.unpack_from("<QQ", e, 32)
+            name = e[56:128].decode("utf-16-le", "replace").split("\x00")[0]
+            print("    %2d %14d %14d  %-20s %s" % (i + 1, start, end, name, guid_str(e[16:32])))
+
+    print()
+    print("Sectors stored:")
+    for role, lba, data in archive["chunks"]:
+        print("    LBA %-12d %s (%d sectors)" % (lba, ROLE_NAMES.get(role, role), len(data) // SECTOR))
+    return 0
+
+
 def cmd_restore(args):
     with open(args.input, "rb") as f:
         archive = parse_archive(f.read())
@@ -606,6 +737,10 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="show the change, write nothing")
     p.add_argument("--yes", action="store_true", help="skip the typed confirmation")
     p.set_defaults(func=cmd_break)
+
+    p = sub.add_parser("show", help="print everything inside a snapshot file")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("restore", help="write a snapshot back")
     p.add_argument("device")
