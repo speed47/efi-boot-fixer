@@ -23,6 +23,7 @@
 
 use crate::crc::Crc32;
 use crate::repair::{Analysis, RepairPlan, Step};
+use crate::style::{self, good, key, line, warn, Line, Style};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -168,30 +169,44 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
 }
 
 /// Lines describing the proposal, for the operator.
-pub fn describe(verdict: Verdict) -> Vec<String> {
+pub fn describe(verdict: Verdict) -> Vec<Line> {
     let mut out = Vec::new();
     match verdict {
         Verdict::Applicable { current, proposed } => {
-            out.push(alloc::format!("  FirstUsableLBA would move from {current} to {proposed}."));
-            out.push(String::from("  No partition moves and no filesystem is touched;"));
-            out.push(String::from("  only the two GPT header blocks are rewritten."));
-            out.push(String::new());
-            out.push(String::from("  WHY: the corruption seen on this hardware set the primary"));
-            out.push(String::from("  entry array to FirstUsableLBA minus its own length, which"));
-            out.push(String::from("  is correct only when no gap exists. Closing the gap should"));
-            out.push(String::from("  make that arithmetic produce the right answer."));
-            out.push(String::new());
-            out.push(String::from("  This is a THEORY that fits the observed numbers exactly,"));
-            out.push(String::from("  not a diagnosis. It is reversible: set the value back."));
+            out.push(key(alloc::format!(
+                "  FirstUsableLBA would move from {current} to {proposed}."
+            )));
+            out.push(line("  No partition moves and no filesystem is touched;"));
+            out.push(line("  only the two GPT header blocks are rewritten."));
+            out.push(Line::blank());
+            style::block(
+                &mut out,
+                Style::Dim,
+                &[
+                    "  WHY: the corruption seen on this hardware set the primary",
+                    "  entry array to FirstUsableLBA minus its own length, which",
+                    "  is correct only when no gap exists. Closing the gap should",
+                    "  make that arithmetic produce the right answer.",
+                ],
+            );
+            out.push(Line::blank());
+            style::block(
+                &mut out,
+                Style::Warn,
+                &[
+                    "  This is a THEORY that fits the observed numbers exactly,",
+                    "  not a diagnosis. It is reversible: set the value back.",
+                ],
+            );
         }
         Verdict::AlreadyMinimal { current } => {
-            out.push(alloc::format!(
+            out.push(good(alloc::format!(
                 "  FirstUsableLBA is already {current}, immediately after the"
-            ));
-            out.push(String::from("  entry array. There is no gap to close."));
+            )));
+            out.push(good("  entry array. There is no gap to close."));
         }
         Verdict::Refused(b) => {
-            out.push(alloc::format!("  Not applicable: {b}"));
+            out.push(warn(alloc::format!("  Not applicable: {b}")));
         }
     }
     out

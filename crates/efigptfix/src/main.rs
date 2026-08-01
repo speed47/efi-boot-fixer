@@ -43,6 +43,7 @@ use blockdev::UefiDisk;
 use fwcrc::FirmwareCrc32;
 use gptcore::backup::{self, Timestamp};
 use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan};
+use gptcore::style::{bad, dim, good, key, line, warn, Line, Style};
 use gptcore::{layout, prevent, report};
 use selfdev::BootDevice;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
@@ -134,15 +135,15 @@ impl Disk {
         s
     }
 
-    fn detail(&self) -> Vec<String> {
-        let health = match self.verdict {
-            Some(v) => report::verdict_line(v).to_string(),
-            None => "could not be read".to_string(),
+    fn detail(&self) -> Vec<Line> {
+        let (health, style) = match self.verdict {
+            Some(v) => (report::verdict_line(v).to_string(), report::verdict_style(v)),
+            None => ("could not be read".to_string(), Style::Bad),
         };
         alloc::vec![
-            format!("  {}", self.path),
-            format!("  {} blocks x {} B", self.last_block + 1, self.block_size),
-            format!("  GPT: {health}"),
+            dim(format!("  {}", self.path)),
+            dim(format!("  {} blocks x {} B", self.last_block + 1, self.block_size)),
+            Line::new(format!("  GPT: {health}"), style),
         ]
     }
 }
@@ -220,18 +221,18 @@ fn pick_disk(title: &str, boot_device: &BootDevice) -> Option<Disk> {
         ui::message(
             "Nothing to do",
             &alloc::vec![
-                String::from("  No fixed, writable, whole disks were found."),
-                String::new(),
-                String::from("  Only removable media is present, and this tool"),
-                String::from("  does not offer to rewrite that."),
+                bad("  No fixed, writable, whole disks were found."),
+                Line::blank(),
+                dim("  Only removable media is present, and this tool"),
+                dim("  does not offer to rewrite that."),
             ],
         );
         return None;
     }
 
     let intro = alloc::vec![
-        String::from("  Choose a disk. Removable media is not listed."),
-        String::from("  [boot] carries the volume this program came from."),
+        dim("  Choose a disk. Removable media is not listed."),
+        dim("  [boot] carries the volume this program came from."),
     ];
     let items: Vec<ui::Item> =
         disks.iter().map(|d| ui::Item::with_detail(d.label(), d.detail())).collect();
@@ -281,31 +282,36 @@ fn report_write(title: &str, disk: &Disk, result: Result<bool, String>, esp_lost
                 *esp_lost = true;
             }
             let mut lines = alloc::vec![
-                String::from("  Written and flushed."),
-                String::new(),
-                String::from("  Reboot when you are done."),
+                good("  Written and flushed."),
+                Line::blank(),
+                key("  Reboot when you are done."),
             ];
             if !exclusive {
-                lines.push(String::new());
-                lines.push(String::from("  (The disk was busy, so the write was made without"));
-                lines.push(String::from("  exclusive access. The firmware's own view of the"));
-                lines.push(String::from("  partitions is stale until you reboot.)"));
+                lines.push(Line::blank());
+                lines.push(warn("  (The disk was busy, so the write was made without"));
+                lines.push(warn("  exclusive access. The firmware's own view of the"));
+                lines.push(warn("  partitions is stale until you reboot.)"));
             }
             ui::message(title, &lines);
         }
         Err(e) => ui::message(
             &format!("{title} FAILED"),
             &alloc::vec![
-                format!("  {e}"),
-                String::new(),
-                String::from("  Do NOT reboot into the OS; use a rescue USB."),
+                bad(format!("  {e}")),
+                Line::blank(),
+                bad("  Do NOT reboot into the OS; use a rescue USB."),
             ],
         ),
     }
 }
 
 fn show_error(title: &str, message: String) {
-    ui::message(title, &alloc::vec![format!("  {message}")]);
+    ui::message(title, &alloc::vec![bad(format!("  {message}"))]);
+}
+
+/// Not a failure: a refusal, or a choice the operator made.
+fn show_note(title: &str, message: String) {
+    ui::message(title, &alloc::vec![warn(format!("  {message}"))]);
 }
 
 /// Read-only: say what is wrong, write nothing, offer nothing.
@@ -318,8 +324,11 @@ fn run_check(boot_device: &BootDevice) {
         Err(e) => return show_error("Check GPT", e),
     };
 
-    let mut lines =
-        alloc::vec![format!("  {}", disk.label()), format!("  {}", disk.path), String::new()];
+    let mut lines = alloc::vec![
+        key(format!("  {}", disk.label())),
+        dim(format!("  {}", disk.path)),
+        Line::blank()
+    ];
     lines.extend(report::render_analysis(&analysis));
     if let Some(view) = analysis.best_view() {
         let caption =
@@ -331,8 +340,8 @@ fn run_check(boot_device: &BootDevice) {
             caption,
         ));
     }
-    lines.push(String::new());
-    lines.push(String::from("  Nothing was written. This check never modifies a disk."));
+    lines.push(Line::blank());
+    lines.push(good("  Nothing was written. This check never modifies a disk."));
     ui::page("Check GPT (read only)", &lines);
 }
 
@@ -347,7 +356,7 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     };
 
     let repair = plan(&analysis, &CRC);
-    let mut lines = alloc::vec![format!("  {}", disk.label()), String::new()];
+    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     lines.extend(report::render(&analysis, repair.as_ref()));
 
     if !ui::page("Repair primary GPT", &lines) {
@@ -361,22 +370,22 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     // is alarming and, when only the protective MBR is wrong, untrue.
     let warning = if analysis.verdict == gptcore::Verdict::MbrOnly {
         alloc::vec![
-            format!("  {}", disk.label()),
-            String::new(),
-            String::from("  This rewrites the protective MBR on this disk."),
-            String::from("  Both GPTs are intact and are left alone."),
+            key(format!("  {}", disk.label())),
+            Line::blank(),
+            warn("  This rewrites the protective MBR on this disk."),
+            line("  Both GPTs are intact and are left alone."),
         ]
     } else {
         alloc::vec![
-            format!("  {}", disk.label()),
-            String::new(),
-            String::from("  This REWRITES the partition table on this disk."),
-            String::from("  The proposed table came from the backup GPT and was"),
-            String::from("  shown on the previous screen."),
+            key(format!("  {}", disk.label())),
+            Line::blank(),
+            bad("  This REWRITES the partition table on this disk."),
+            line("  The proposed table came from the backup GPT and was"),
+            line("  shown on the previous screen."),
         ]
     };
     if !ui::confirm_sequence("Authorise write", &warning) {
-        return show_error("Repair", "Cancelled. Nothing was written.".to_string());
+        return show_note("Repair", "Cancelled. Nothing was written.".to_string());
     }
     let result = execute(&disk, &repair);
     report_write("Repair", &disk, result, esp_lost);
@@ -401,15 +410,19 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     };
     let bytes = backup::encode(&archive, &CRC);
 
-    let mut lines = alloc::vec![format!("  {}", disk.label()), String::new()];
+    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     lines.extend(backup::describe(&archive));
-    lines.push(String::new());
-    lines.push(format!("  {} bytes will be written to \\{}\\ on the ESP", bytes.len(), esp::DIR));
+    lines.push(Line::blank());
+    lines.push(line(format!(
+        "  {} bytes will be written to \\{}\\ on the ESP",
+        bytes.len(),
+        esp::DIR
+    )));
     if disk.boot {
-        lines.push(String::new());
-        lines.push(String::from("  NOTE: the ESP is on this same disk, so this is a"));
-        lines.push(String::from("  convenience copy, not an off-device backup. Copy the"));
-        lines.push(String::from("  file elsewhere once you can boot again."));
+        lines.push(Line::blank());
+        lines.push(warn("  NOTE: the ESP is on this same disk, so this is a"));
+        lines.push(warn("  convenience copy, not an off-device backup. Copy the"));
+        lines.push(warn("  file elsewhere once you can boot again."));
     }
     if !ui::page("Back up GPT", &lines) {
         return;
@@ -421,10 +434,10 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
         Ok(path) => ui::message(
             "Back up GPT",
             &alloc::vec![
-                String::from("  Saved to the ESP as:"),
-                format!("    {path}"),
-                String::new(),
-                String::from("  Restore reads it from there."),
+                good("  Saved to the ESP as:"),
+                key(format!("    {path}")),
+                Line::blank(),
+                dim("  Restore reads it from there."),
             ],
         ),
         Err(e) => show_error("Back up GPT FAILED", e),
@@ -449,12 +462,12 @@ fn warn_esp_may_be_gone() -> bool {
     ui::page(
         "The ESP may no longer be reachable",
         &alloc::vec![
-            String::from("  A disk was written to with exclusive access during this"),
-            String::from("  session, which disconnects the firmware's filesystem"),
-            String::from("  driver for that disk."),
-            String::new(),
-            String::from("  Reading or writing files on the ESP may fail until you"),
-            String::from("  reboot. Continue anyway?"),
+            warn("  A disk was written to with exclusive access during this"),
+            warn("  session, which disconnects the firmware's filesystem"),
+            warn("  driver for that disk."),
+            Line::blank(),
+            line("  Reading or writing files on the ESP may fail until you"),
+            key("  reboot. Continue anyway?"),
         ],
     )
 }
@@ -469,7 +482,7 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         Err(e) => return show_error("Restore GPT", e),
     };
     if saved.is_empty() {
-        return show_error(
+        return show_note(
             "Restore GPT",
             format!("No backups found in \\{}\\ on the ESP.", esp::DIR),
         );
@@ -478,26 +491,26 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     // Decode first. A file that will not parse must never be offered as a
     // choice: a damaged snapshot is exactly what must not reach a disk.
     let mut usable: Vec<(String, backup::Archive)> = Vec::new();
-    let mut rejected: Vec<String> = Vec::new();
+    let mut rejected: Vec<Line> = Vec::new();
     for file in saved {
         match backup::decode(&file.data, &CRC) {
             Ok(a) => usable.push((file.name, a)),
-            Err(e) => rejected.push(format!("  {} - {e}", file.name)),
+            Err(e) => rejected.push(bad(format!("  {} - {e}", file.name))),
         }
     }
     if usable.is_empty() {
-        let mut lines = alloc::vec![String::from("  No usable backup files on the ESP.")];
+        let mut lines = alloc::vec![bad("  No usable backup files on the ESP.")];
         if !rejected.is_empty() {
-            lines.push(String::new());
-            lines.push(String::from("  Rejected:"));
+            lines.push(Line::blank());
+            lines.push(warn("  Rejected:"));
             lines.extend(rejected);
         }
         return ui::message("Restore GPT", &lines);
     }
     if !rejected.is_empty() {
-        let mut lines = alloc::vec![String::from("  Some files could not be read and are not")];
-        lines.push(String::from("  offered below:"));
-        lines.push(String::new());
+        let mut lines = alloc::vec![warn("  Some files could not be read and are not")];
+        lines.push(warn("  offered below:"));
+        lines.push(Line::blank());
         lines.extend(rejected);
         ui::message("Restore GPT", &lines);
     }
@@ -508,16 +521,16 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
             ui::Item::with_detail(
                 format!("{name}   {}", backup::summary(a)),
                 alloc::vec![
-                    format!("  disk GUID {}", a.disk_guid),
-                    format!("  taken {}", a.time),
-                    format!("  state then: {}", a.health.describe()),
+                    dim(format!("  disk GUID {}", a.disk_guid)),
+                    dim(format!("  taken {}", a.time)),
+                    Line::new(format!("  state then: {}", a.health.describe()), a.health.style(),),
                 ],
             )
         })
         .collect();
     let intro = alloc::vec![
-        format!("  Backups found in \\{}\\ on the ESP.", esp::DIR),
-        String::from("  A backup only fits the disk it was taken from."),
+        dim(format!("  Backups found in \\{}\\ on the ESP.", esp::DIR)),
+        dim("  A backup only fits the disk it was taken from."),
     ];
     let Some(choice) = ui::menu("Restore GPT", &intro, &items, "B = back") else {
         return;
@@ -542,13 +555,13 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         }
     };
 
-    let mut lines = alloc::vec![format!("  {}", disk.label()), String::new()];
+    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     lines.extend(backup::describe(archive));
     if archive.disk_guid != current_disk_guid(&analysis) {
-        lines.push(String::new());
-        lines.push(String::from("  NOTE: the disk GUID on this disk differs from the one"));
-        lines.push(String::from("  in the backup. Geometry matches, so this is allowed,"));
-        lines.push(String::from("  but check it is really the disk you mean."));
+        lines.push(Line::blank());
+        lines.push(warn("  NOTE: the disk GUID on this disk differs from the one"));
+        lines.push(warn("  in the backup. Geometry matches, so this is allowed,"));
+        lines.push(warn("  but check it is really the disk you mean."));
     }
     lines.extend(report::render_entries(
         &restore.entries,
@@ -562,16 +575,16 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     }
 
     let mut warning = alloc::vec![
-        format!("  {}", disk.label()),
-        String::new(),
-        String::from("  This REPLACES both partition tables with the saved copy."),
+        key(format!("  {}", disk.label())),
+        Line::blank(),
+        bad("  This REPLACES both partition tables with the saved copy."),
     ];
     if !archive.health.tables_were_sound() {
-        warning.push(String::new());
-        warning.push(String::from("  WARNING: this snapshot was taken from a DAMAGED table."));
+        warning.push(Line::blank());
+        warning.push(bad("  WARNING: this snapshot was taken from a DAMAGED table."));
     }
     if !ui::confirm_sequence("Authorise write", &warning) {
-        return show_error("Restore GPT", "Cancelled. Nothing was written.".to_string());
+        return show_note("Restore GPT", "Cancelled. Nothing was written.".to_string());
     }
     let result = execute(&disk, &restore);
     report_write("Restore GPT", &disk, result, esp_lost);
@@ -593,7 +606,7 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     };
 
     let verdict = prevent::assess(&analysis);
-    let mut lines = alloc::vec![format!("  {}", disk.label()), String::new()];
+    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     lines.extend(prevent::describe(verdict));
 
     if !ui::page("Prevent recurrence", &lines) {
@@ -606,21 +619,21 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
         return;
     };
 
-    let mut plan_lines = alloc::vec![format!("  {}", disk.label()), String::new()];
+    let mut plan_lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     plan_lines.extend(report::render_plan(&gap_plan));
     if !ui::page("Prevent recurrence: what will be written", &plan_lines) {
         return;
     }
 
     let warning = alloc::vec![
-        format!("  {}", disk.label()),
-        String::new(),
-        String::from("  This modifies a HEALTHY partition table on a theory"),
-        String::from("  about what corrupts it. No partition moves, and it is"),
-        String::from("  reversible, but it is not a repair."),
+        key(format!("  {}", disk.label())),
+        Line::blank(),
+        warn("  This modifies a HEALTHY partition table on a theory"),
+        warn("  about what corrupts it. No partition moves, and it is"),
+        warn("  reversible, but it is not a repair."),
     ];
     if !ui::confirm_sequence("Authorise write", &warning) {
-        return show_error("Prevent", "Cancelled. Nothing was written.".to_string());
+        return show_note("Prevent", "Cancelled. Nothing was written.".to_string());
     }
     let result = execute(&disk, &gap_plan);
     report_write("Prevent", &disk, result, esp_lost);
@@ -631,39 +644,39 @@ fn main_menu_items() -> Vec<ui::Item> {
         ui::Item::with_detail(
             "Check GPT",
             alloc::vec![
-                String::from("  Read both tables and report what is wrong."),
-                String::from("  Writes nothing."),
+                dim("  Read both tables and report what is wrong."),
+                dim("  Writes nothing.")
             ],
         ),
         ui::Item::with_detail(
             "Repair primary GPT from the backup",
             alloc::vec![
-                String::from("  Rebuild a corrupt primary table from the backup"),
-                String::from("  at the end of the disk."),
+                dim("  Rebuild a corrupt primary table from the backup"),
+                dim("  at the end of the disk.")
             ],
         ),
         ui::Item::with_detail(
             "Back up both GPTs to the ESP",
             alloc::vec![
-                String::from("  Save the tables to a file on this volume, so they"),
-                String::from("  can be put back exactly as they are now."),
+                dim("  Save the tables to a file on this volume, so they"),
+                dim("  can be put back exactly as they are now.")
             ],
         ),
         ui::Item::with_detail(
             "Restore GPTs from a saved backup",
             alloc::vec![
-                String::from("  Write a previously saved snapshot back onto the"),
-                String::from("  disk it was taken from."),
+                dim("  Write a previously saved snapshot back onto the"),
+                dim("  disk it was taken from.")
             ],
         ),
         ui::Item::with_detail(
             "Prevent recurrence (close the FirstUsableLBA gap)",
             alloc::vec![
-                String::from("  Lower FirstUsableLBA so the arithmetic that caused"),
-                String::from("  the corruption produces the right answer."),
+                dim("  Lower FirstUsableLBA so the arithmetic that caused"),
+                dim("  the corruption produces the right answer.")
             ],
         ),
-        ui::Item::with_detail("Exit", alloc::vec![String::from("  Return to the firmware.")]),
+        ui::Item::with_detail("Exit", alloc::vec![dim("  Return to the firmware.")]),
     ]
 }
 
@@ -673,11 +686,11 @@ fn main() -> Status {
     ui::hide_cursor();
 
     let boot_device = BootDevice::resolve();
-    let mut intro = alloc::vec![format!("  version {}", env!("CARGO_PKG_VERSION"))];
+    let mut intro = alloc::vec![dim(format!("  version {}", env!("CARGO_PKG_VERSION")))];
     if boot_device.is_known() {
-        intro.push(format!("  launched from {}", path_text(boot_device.path())));
+        intro.push(dim(format!("  launched from {}", path_text(boot_device.path()))));
     } else {
-        intro.push(String::from("  boot volume unknown - no disk will be marked [boot]"));
+        intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
     }
 
     let items = main_menu_items();
@@ -698,8 +711,8 @@ fn main() -> Status {
         ui::message(
             "Note",
             &alloc::vec![
-                String::from("  Firmware CalculateCrc32 was unavailable;"),
-                String::from("  the built-in implementation was used instead.")
+                warn("  Firmware CalculateCrc32 was unavailable;"),
+                warn("  the built-in implementation was used instead.")
             ],
         );
     }

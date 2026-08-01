@@ -134,7 +134,7 @@ fn a_snapshot_of_the_real_corruption_records_that_it_was_corrupt() {
     // header rather than assuming LBA 2.
     assert_eq!(archive.chunk(Role::PrimaryEntries).unwrap().lba, 2016);
 
-    let text = backup::describe(&archive).join("\n");
+    let text = gptcore::style::plain(&backup::describe(&archive));
     assert!(text.contains("PRIMARY WAS CORRUPT"), "{text}");
     assert!(text.contains("Restoring it reinstates the damage"), "{text}");
 }

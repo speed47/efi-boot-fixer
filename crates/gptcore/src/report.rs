@@ -5,7 +5,10 @@
 //! authorising a write deserves tests, and the report can then be rendered
 //! on a host for any disk image without booting firmware.
 //!
-//! The UEFI application prints these lines verbatim.
+//! Each line carries a [`Style`] saying what it means — damage, caption,
+//! a value that must be read — decided here, where the meaning is known.
+//! The UEFI application prints the text verbatim and picks colours from
+//! the style.
 
 use crate::entry::PartitionEntry;
 use crate::guid::Guid;
@@ -13,6 +16,7 @@ use crate::header::Defect;
 use crate::layout::{self, Confidence};
 use crate::mbr::MbrStatus;
 use crate::repair::{Analysis, Implausible, RepairPlan, Step, TableView, Verdict};
+use crate::style::{bad, dim, good, key, line, title, warn, Line, Style};
 use crate::IoError;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -45,28 +49,47 @@ pub fn verdict_line(verdict: Verdict) -> &'static str {
     }
 }
 
-fn describe_mbr(status: MbrStatus) -> String {
-    match status {
-        MbrStatus::Protective => "OK".to_string(),
-        MbrStatus::WrongSize { found, expected } => {
-            format!("wrong size ({found} blocks, expected {expected})")
+/// How serious a verdict is.
+///
+/// `PrimaryRepairable` is `Warn` rather than `Bad` on purpose: the disk is
+/// damaged, but this is the case the tool exists to fix and there is a
+/// known-good source for the repair. Reserving `Bad` for the states with no
+/// way out keeps it meaningful.
+pub fn verdict_style(verdict: Verdict) -> Style {
+    match verdict {
+        Verdict::Healthy => Style::Good,
+        Verdict::MbrOnly | Verdict::PrimaryRepairable | Verdict::BackupDegraded => Style::Warn,
+        Verdict::Unrecoverable | Verdict::RefusedHybridMbr | Verdict::RefusedImplausibleBackup => {
+            Style::Bad
         }
-        MbrStatus::Hybrid => "HYBRID - will not touch this disk".to_string(),
-        MbrStatus::Absent => "missing or not protective".to_string(),
     }
 }
 
-fn push_defects(out: &mut Vec<String>, label: &str, view: &Result<TableView, IoError>) {
+fn describe_mbr(status: MbrStatus) -> (String, Style) {
+    match status {
+        MbrStatus::Protective => ("OK".to_string(), Style::Good),
+        MbrStatus::WrongSize { found, expected } => {
+            (format!("wrong size ({found} blocks, expected {expected})"), Style::Warn)
+        }
+        MbrStatus::Hybrid => ("HYBRID - will not touch this disk".to_string(), Style::Bad),
+        MbrStatus::Absent => ("missing or not protective".to_string(), Style::Warn),
+    }
+}
+
+fn push_defects(out: &mut Vec<Line>, label: &str, view: &Result<TableView, IoError>) {
     match view {
-        Err(e) => out.push(format!("  {label:<14}: UNREADABLE ({e})")),
+        Err(e) => out.push(bad(format!("  {label:<14}: UNREADABLE ({e})"))),
         Ok(t) => {
-            let state = if t.is_valid() { "OK" } else { "CORRUPT" };
-            out.push(format!("  {label:<14}: {state}"));
+            if t.is_valid() {
+                out.push(good(format!("  {label:<14}: OK")));
+                return;
+            }
+            out.push(bad(format!("  {label:<14}: CORRUPT")));
             for d in &t.defects {
-                out.push(format!("      - {d}"));
+                out.push(bad(format!("      - {d}")));
             }
             if let Some(e) = t.entries_error {
-                out.push(format!("      - entry array unreadable ({e})"));
+                out.push(bad(format!("      - entry array unreadable ({e})")));
             }
         }
     }
@@ -74,71 +97,81 @@ fn push_defects(out: &mut Vec<String>, label: &str, view: &Result<TableView, IoE
 
 /// The per-disk body: geometry, health of each structure, and the verdict.
 /// The caller prints the identifying "Disk N: <device path>" line itself.
-pub fn render_analysis(analysis: &Analysis) -> Vec<String> {
+pub fn render_analysis(analysis: &Analysis) -> Vec<Line> {
     let mut out = Vec::new();
     let capacity = (analysis.last_block + 1).saturating_mul(analysis.block_size as u64);
-    out.push(format!(
+    // Not dim: on a screen listing several drives this is how you tell
+    // which one you are looking at.
+    out.push(line(format!(
         "  {} blocks x {} B = {}",
         analysis.last_block + 1,
         analysis.block_size,
         human_size(capacity)
-    ));
-    out.push(format!("  {:<14}: {}", "Protective MBR", describe_mbr(analysis.mbr)));
+    )));
+
+    let (mbr_text, mbr_style) = describe_mbr(analysis.mbr);
+    out.push(Line::new(format!("  {:<14}: {}", "Protective MBR", mbr_text), mbr_style));
     push_defects(&mut out, "Primary GPT", &analysis.primary);
     push_defects(&mut out, "Backup GPT", &analysis.backup);
 
     if let Some(rec) = &analysis.recognition {
-        let verdict = match rec.confidence {
-            Confidence::SteamOs => "looks like SteamOS",
-            Confidence::Partial => "PARTIAL match to SteamOS",
-            Confidence::Unrecognized => "NOT recognised as SteamOS",
+        let (verdict, style) = match rec.confidence {
+            Confidence::SteamOs => ("looks like SteamOS", Style::Good),
+            Confidence::Partial => ("PARTIAL match to SteamOS", Style::Warn),
+            Confidence::Unrecognized => ("NOT recognised as SteamOS", Style::Bad),
         };
-        out.push(format!(
-            "  {:<14}: {} ({}/{} expected partitions)",
-            "Layout",
-            verdict,
-            rec.matched.len(),
-            layout::STEAMOS_PARTITIONS.len()
+        out.push(Line::new(
+            format!(
+                "  {:<14}: {} ({}/{} expected partitions)",
+                "Layout",
+                verdict,
+                rec.matched.len(),
+                layout::STEAMOS_PARTITIONS.len()
+            ),
+            style,
         ));
         if !rec.missing.is_empty() {
-            out.push(format!("      missing: {}", rec.missing.join(", ")));
+            out.push(warn(format!("      missing: {}", rec.missing.join(", "))));
         }
         for (name, expected, found) in &rec.type_mismatches {
-            out.push(format!("      {name} has type {found}, expected {expected}"));
+            out.push(warn(format!("      {name} has type {found}, expected {expected}")));
         }
         for (i, guid, name) in &rec.unknown_types {
-            out.push(format!("      partition {} has unknown type {guid} ({name})", i + 1));
+            out.push(warn(format!("      partition {} has unknown type {guid} ({name})", i + 1)));
         }
     }
 
     if let Some(reason) = &analysis.rejection {
-        out.push(format!("  {:<14}:", "Refused"));
+        out.push(bad(format!("  {:<14}:", "Refused")));
         match reason {
             Implausible::Structure(issues) => {
                 for i in issues {
-                    out.push(format!("      - {i}"));
+                    out.push(bad(format!("      - {i}")));
                 }
             }
             Implausible::Unrecognized(rec) => {
-                out.push(format!(
+                out.push(bad(format!(
                     "      - no {} in the recovered table",
                     rec.missing_critical.join(" or ")
-                ));
+                )));
             }
             Implausible::EntryArrayCollides { entry_blocks, first_usable } => {
-                out.push(format!(
+                out.push(bad(format!(
                     "      - entry array of {entry_blocks} blocks would run past first usable LBA {first_usable}"
-                ));
+                )));
             }
         }
     }
 
-    out.push(format!("  => {}", verdict_line(analysis.verdict)));
+    out.push(Line::new(
+        format!("  => {}", verdict_line(analysis.verdict)),
+        verdict_style(analysis.verdict),
+    ));
     out
 }
 
 /// The table the operator is being asked to approve.
-pub fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<String> {
+pub fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<Line> {
     render_entries(&plan.entries, block_size, plan.header.disk_guid, "Proposed table:")
 }
 
@@ -151,20 +184,20 @@ pub fn render_entries(
     block_size: u32,
     disk_guid: Guid,
     caption: &str,
-) -> Vec<String> {
+) -> Vec<Line> {
     let mut out = Vec::new();
-    out.push(String::new());
-    out.push(format!("  {caption}"));
-    out.push(format!(
+    out.push(Line::blank());
+    out.push(title(format!("  {caption}")));
+    out.push(dim(format!(
         "    {:>2}  {:>12} {:>12} {:>10}  {:<22} {}",
         "#", "Start LBA", "End LBA", "Size", "Type", "Name"
-    ));
+    )));
     for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_used()) {
         let size = e
             .block_count()
             .map(|b| human_size(b.saturating_mul(block_size as u64)))
             .unwrap_or_else(|| "invalid".to_string());
-        out.push(format!(
+        out.push(line(format!(
             "    {:>2}  {:>12} {:>12} {:>10}  {:<22} {}",
             i + 1,
             e.starting_lba,
@@ -172,30 +205,32 @@ pub fn render_entries(
             size,
             layout::describe_type(&e.type_guid),
             e.name_string()
-        ));
+        )));
     }
-    out.push(format!("  Disk GUID: {disk_guid}"));
+    out.push(dim(format!("  Disk GUID: {disk_guid}")));
     out
 }
 
 /// Exactly what will be written, in order.
-pub fn render_plan(plan: &RepairPlan) -> Vec<String> {
+pub fn render_plan(plan: &RepairPlan) -> Vec<Line> {
     let mut out = Vec::new();
-    out.push(String::new());
-    out.push("  Will write, in this order:".to_string());
+    out.push(Line::blank());
+    out.push(title("  Will write, in this order:"));
     for step in &plan.steps {
         match step {
+            // The LBAs are the whole point of showing this screen, so they
+            // get the colour that says "read this".
             Step::Write { lba, data, what } => {
-                out.push(format!("    LBA {:<6} {} ({} bytes)", lba, what, data.len()))
+                out.push(key(format!("    LBA {:<6} {} ({} bytes)", lba, what, data.len())))
             }
-            Step::Flush { why } => out.push(format!("    flush     [{why}]")),
+            Step::Flush { why } => out.push(dim(format!("    flush     [{why}]"))),
         }
     }
     out
 }
 
 /// Everything for one disk, as the operator sees it.
-pub fn render(analysis: &Analysis, plan: Option<&RepairPlan>) -> Vec<String> {
+pub fn render(analysis: &Analysis, plan: Option<&RepairPlan>) -> Vec<Line> {
     let mut out = render_analysis(analysis);
     if let Some(plan) = plan {
         if analysis.verdict == Verdict::PrimaryRepairable {
@@ -207,8 +242,8 @@ pub fn render(analysis: &Analysis, plan: Option<&RepairPlan>) -> Vec<String> {
 }
 
 /// Used by the application when a defect list needs printing on its own.
-pub fn render_defects(defects: &[Defect]) -> Vec<String> {
-    defects.iter().map(|d| format!("      - {d}")).collect()
+pub fn render_defects(defects: &[Defect]) -> Vec<Line> {
+    defects.iter().map(|d| bad(format!("      - {d}"))).collect()
 }
 
 #[cfg(test)]
@@ -238,5 +273,15 @@ mod tests {
         ] {
             assert!(!verdict_line(v).is_empty());
         }
+    }
+
+    #[test]
+    fn only_hopeless_verdicts_are_styled_as_damage() {
+        assert_eq!(verdict_style(Verdict::Healthy), Style::Good);
+        // The case the tool exists for: damaged, but fixable from a
+        // known-good source.
+        assert_eq!(verdict_style(Verdict::PrimaryRepairable), Style::Warn);
+        assert_eq!(verdict_style(Verdict::Unrecoverable), Style::Bad);
+        assert_eq!(verdict_style(Verdict::RefusedHybridMbr), Style::Bad);
     }
 }

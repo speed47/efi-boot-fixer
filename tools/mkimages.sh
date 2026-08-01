@@ -88,6 +88,12 @@ case "$CORRUPTION" in
   # EDK II does not silently restore this, so it is the corruption that
   # actually reaches the application under OVMF. See the note below.
   bad-mbr)      printf '\x39\x30\x00\x00' | dd of="$TEST" bs=1 seek=458 conv=notrunc status=none ;;
+  # A second MBR partition record with a real type code alongside the 0xEE
+  # one. That is a hybrid MBR, which this tool refuses to touch outright,
+  # and OVMF leaves it alone -- so it is the way to reach the refusal path
+  # under firmware.
+  hybrid)       printf '\x00\x01\x01\x00\x83\xfe\xff\xff\x00\x08\x00\x00\x00\x00\x10\x00' \
+                  | dd of="$TEST" bs=1 seek=462 conv=notrunc status=none ;;
   none)         ;;
   *) echo "unknown corruption mode: $CORRUPTION" >&2; exit 1 ;;
 esac

@@ -23,6 +23,7 @@ use crate::entry::parse_array;
 use crate::guid::Guid;
 use crate::header::GptHeader;
 use crate::repair::{Analysis, RepairPlan, Step, Verdict};
+use crate::style::{self, dim, key, title, Line, Style};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -194,6 +195,14 @@ impl Health {
     /// reason to warn someone off restoring their partition table.
     pub fn tables_were_sound(self) -> bool {
         matches!(self, Health::Healthy | Health::MbrOnly)
+    }
+
+    pub fn style(self) -> Style {
+        match self {
+            Health::Healthy => Style::Good,
+            Health::MbrOnly => Style::Warn,
+            _ => Style::Bad,
+        }
     }
 
     pub fn describe(self) -> &'static str {
@@ -596,34 +605,53 @@ pub fn summary(archive: &Archive) -> String {
 }
 
 /// Lines describing an archive in full, for the screen before a restore.
-pub fn describe(archive: &Archive) -> Vec<String> {
+pub fn describe(archive: &Archive) -> Vec<Line> {
     let mut out = Vec::new();
-    out.push(format!("  Taken:      {}", archive.time));
-    out.push(format!("  Disk GUID:  {}", archive.disk_guid));
-    out.push(format!("  Geometry:   {} blocks x {} B", archive.last_block + 1, archive.block_size));
-    out.push(format!("  State then: {}", archive.health.describe()));
-    out.push(String::new());
-    out.push(String::from("  Contains:"));
+    out.push(key(format!("  Taken:      {}", archive.time)));
+    out.push(dim(format!("  Disk GUID:  {}", archive.disk_guid)));
+    out.push(dim(format!(
+        "  Geometry:   {} blocks x {} B",
+        archive.last_block + 1,
+        archive.block_size
+    )));
+    out.push(Line::new(
+        format!("  State then: {}", archive.health.describe()),
+        archive.health.style(),
+    ));
+    out.push(Line::blank());
+    out.push(title("  Contains:"));
     for chunk in &archive.chunks {
-        out.push(format!(
+        out.push(dim(format!(
             "    LBA {:<12} {} ({} blocks)",
             chunk.lba,
             chunk.role.describe(),
             chunk.blocks(archive.block_size)
-        ));
+        )));
     }
     match archive.health {
         Health::Healthy => {}
         Health::MbrOnly => {
-            out.push(String::new());
-            out.push(String::from("  NOTE: both tables were sound, but the protective MBR was"));
-            out.push(String::from("  wrong and is saved as found. Restoring puts that back"));
-            out.push(String::from("  too; the repair operation regenerates it properly."));
+            out.push(Line::blank());
+            style::block(
+                &mut out,
+                Style::Warn,
+                &[
+                    "  NOTE: both tables were sound, but the protective MBR was",
+                    "  wrong and is saved as found. Restoring puts that back",
+                    "  too; the repair operation regenerates it properly.",
+                ],
+            );
         }
         _ => {
-            out.push(String::new());
-            out.push(String::from("  WARNING: this snapshot was taken from a table that was"));
-            out.push(String::from("  already damaged. Restoring it reinstates the damage."));
+            out.push(Line::blank());
+            style::block(
+                &mut out,
+                Style::Bad,
+                &[
+                    "  WARNING: this snapshot was taken from a table that was",
+                    "  already damaged. Restoring it reinstates the damage.",
+                ],
+            );
         }
     }
     out

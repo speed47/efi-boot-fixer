@@ -28,6 +28,7 @@ pub mod mbr;
 pub mod prevent;
 pub mod repair;
 pub mod report;
+pub mod style;
 
 pub use crc::{Crc32, SoftCrc32};
 pub use disk::{BlockDevice, IoError};
@@ -35,3 +36,4 @@ pub use entry::PartitionEntry;
 pub use guid::Guid;
 pub use header::{Defect, GptHeader};
 pub use repair::{analyze, apply, plan, Analysis, RepairPlan, Step, TableView, Verdict};
+pub use style::{Line, Style};

@@ -11,10 +11,13 @@
 //!
 //! Report *formatting* lives in `gptcore::report`, which has no UEFI
 //! dependency and is tested on the host. This module only paints lines and
-//! reads answers back.
+//! reads answers back. Which colour a line gets is decided by the
+//! [`Style`] the writer attached to it, never by inspecting the text here:
+//! rewording a message must not silently change what it looks like.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use gptcore::style::{Line, Style};
 use uefi::boot;
 use uefi::proto::console::text::{Color, Key, ScanCode};
 use uefi::{print, println, system};
@@ -83,7 +86,45 @@ pub fn size() -> (usize, usize) {
     })
 }
 
+// ------------------------------------------------------------------ colour
+
+/// Body text. Also the state everything is restored to, so a screen never
+/// inherits a colour from whatever drew before it.
+const BODY: (Color, Color) = (Color::LightGray, Color::Black);
+/// The selected row in a menu.
+const HIGHLIGHT: (Color, Color) = (Color::Black, Color::Cyan);
+
+/// Semantic style to a concrete pair.
+///
+/// The light variants are used throughout because a UEFI console renders
+/// the dark ones very dark on a black background, and this has to be
+/// legible on a 7-inch handheld display at arm's length.
+fn colors(style: Style) -> (Color, Color) {
+    match style {
+        Style::Normal => BODY,
+        Style::Title => (Color::White, Color::Black),
+        Style::Dim => (Color::DarkGray, Color::Black),
+        Style::Good => (Color::LightGreen, Color::Black),
+        Style::Warn => (Color::Yellow, Color::Black),
+        Style::Bad => (Color::LightRed, Color::Black),
+        Style::Key => (Color::LightCyan, Color::Black),
+    }
+}
+
+fn paint(colors: (Color, Color)) {
+    system::with_stdout(|out| {
+        let _ = out.set_color(colors.0, colors.1);
+    });
+}
+
+fn body() {
+    paint(BODY);
+}
+
 pub fn clear() {
+    // Reset first: `clear` fills the screen with the *current* background,
+    // so clearing while a highlight is active paints the whole display.
+    body();
     system::with_stdout(|out| {
         let _ = out.clear();
     });
@@ -101,15 +142,6 @@ pub fn hide_cursor() {
     });
 }
 
-fn set_color(fg: Color, bg: Color) {
-    system::with_stdout(|out| {
-        let _ = out.set_color(fg, bg);
-    });
-}
-
-const NORMAL: (Color, Color) = (Color::LightGray, Color::Black);
-const HIGHLIGHT: (Color, Color) = (Color::Black, Color::LightGray);
-
 /// Clip to the display width.
 ///
 /// A device path is routinely longer than 80 columns, and letting it wrap
@@ -125,6 +157,17 @@ fn fit(line: &str, columns: usize) -> String {
     out
 }
 
+/// Print one styled line, then return to body colour.
+fn styled(line: &Line, columns: usize) {
+    if line.style == Style::Normal {
+        println!("{}", fit(&line.text, columns));
+        return;
+    }
+    paint(colors(line.style));
+    println!("{}", fit(&line.text, columns));
+    body();
+}
+
 fn rule(columns: usize) -> String {
     "-".repeat(columns.saturating_sub(1).min(78))
 }
@@ -132,19 +175,33 @@ fn rule(columns: usize) -> String {
 fn header(title: &str) {
     let (cols, _) = size();
     at(0, 0);
+    paint(colors(Style::Title));
     println!("{}", fit(title, cols));
+    paint(colors(Style::Dim));
     println!("{}", rule(cols));
+    body();
 }
+
+/// The key hints along the bottom, which are chrome and should not compete
+/// with the content above them.
+fn footer(rows: usize, text: &str) {
+    at(0, rows.saturating_sub(2));
+    paint(colors(Style::Dim));
+    print!("{text}");
+    body();
+}
+
+// -------------------------------------------------------------------- menu
 
 /// One selectable line, plus whatever should be shown about it while it is
 /// selected.
 pub struct Item {
     pub label: String,
-    pub detail: Vec<String>,
+    pub detail: Vec<Line>,
 }
 
 impl Item {
-    pub fn with_detail(label: impl Into<String>, detail: Vec<String>) -> Self {
+    pub fn with_detail(label: impl Into<String>, detail: Vec<Line>) -> Self {
         Item { label: label.into(), detail }
     }
 }
@@ -154,7 +211,7 @@ impl Item {
 /// Returns false if the operator backed out. A Deck cannot scroll back, so
 /// anything longer than the screen has to be navigable rather than simply
 /// printed and lost.
-pub fn page(title: &str, lines: &[String]) -> bool {
+pub fn page(title: &str, lines: &[Line]) -> bool {
     let (cols, rows) = size();
     let view = rows.saturating_sub(6).max(4);
     let mut top = 0usize;
@@ -165,18 +222,20 @@ pub fn page(title: &str, lines: &[String]) -> bool {
         clear();
         header(title);
         for line in lines.iter().skip(top).take(view) {
-            println!("{}", fit(line, cols));
+            styled(line, cols);
         }
-        at(0, rows.saturating_sub(2));
         if lines.len() > view {
+            at(0, rows.saturating_sub(3));
+            paint(colors(Style::Key));
             println!(
                 "  lines {}-{} of {}   D-pad up/down to scroll",
                 top + 1,
                 (top + view).min(lines.len()),
                 lines.len()
             );
+            body();
         }
-        print!("  A = continue    B = back");
+        footer(rows, "  A = continue    B = back");
 
         match wait() {
             Input::Up => top = top.saturating_sub(1),
@@ -191,15 +250,14 @@ pub fn page(title: &str, lines: &[String]) -> bool {
 }
 
 /// A message with a single acknowledgement.
-pub fn message(title: &str, lines: &[String]) {
+pub fn message(title: &str, lines: &[Line]) {
     let (cols, rows) = size();
     clear();
     header(title);
     for line in lines {
-        println!("{}", fit(line, cols));
+        styled(line, cols);
     }
-    at(0, rows.saturating_sub(2));
-    print!("  A = continue");
+    footer(rows, "  A = continue");
     drain();
     loop {
         match wait() {
@@ -214,7 +272,7 @@ pub fn message(title: &str, lines: &[String]) {
 ///
 /// `hint` names what B does here, which differs between the top level
 /// ("exit") and a submenu ("back").
-pub fn menu(title: &str, intro: &[String], items: &[Item], hint: &str) -> Option<usize> {
+pub fn menu(title: &str, intro: &[Line], items: &[Item], hint: &str) -> Option<usize> {
     if items.is_empty() {
         return None;
     }
@@ -239,33 +297,34 @@ pub fn menu(title: &str, intro: &[String], items: &[Item], hint: &str) -> Option
         clear();
         header(title);
         for line in intro {
-            println!("{}", fit(line, cols));
+            styled(line, cols);
         }
         println!();
 
         for (i, item) in items.iter().enumerate().skip(top).take(view) {
             if i == selected {
-                set_color(HIGHLIGHT.0, HIGHLIGHT.1);
+                paint(HIGHLIGHT);
                 // Pad so the bar spans the row rather than hugging the text.
                 let text = fit(&item.label, cols.saturating_sub(4));
                 let width = cols.saturating_sub(5);
                 println!("  {text:<width$} ");
-                set_color(NORMAL.0, NORMAL.1);
+                body();
             } else {
                 println!("   {}", fit(&item.label, cols.saturating_sub(3)));
             }
         }
         if items.len() > view {
+            paint(colors(Style::Dim));
             println!("   ... {} of {}", selected + 1, items.len());
+            body();
         }
 
         println!();
         for line in &items[selected].detail {
-            println!("{}", fit(line, cols));
+            styled(line, cols);
         }
 
-        at(0, rows.saturating_sub(2));
-        print!("  D-pad = move    A = choose    {hint}");
+        footer(rows, &alloc::format!("  D-pad = move    A = choose    {hint}"));
 
         match wait() {
             Input::Up => {
@@ -278,6 +337,8 @@ pub fn menu(title: &str, intro: &[String], items: &[Item], hint: &str) -> Option
         }
     }
 }
+
+// ----------------------------------------------------------------- consent
 
 /// The sequence that authorises a write.
 ///
@@ -300,10 +361,41 @@ fn step_name(i: Input) -> &'static str {
     }
 }
 
+/// Draw the progress boxes, colouring each one individually: done in
+/// green, the one being waited for in cyan, the rest dim. Printed piece by
+/// piece rather than as a formatted line, because this is the one place
+/// where per-word colour genuinely helps.
+fn draw_steps(position: usize) {
+    let mut names = String::from("     ");
+    for step in CONFIRM_SEQUENCE.iter() {
+        names.push_str(step_name(*step));
+        names.push_str("  ");
+    }
+    paint(colors(Style::Dim));
+    println!("{names}");
+    body();
+
+    print!("     ");
+    for (i, step) in CONFIRM_SEQUENCE.iter().enumerate() {
+        let (mark, style) = match i {
+            _ if i < position => ("[x]", Style::Good),
+            _ if i == position => ("[ ]", Style::Key),
+            _ => ("[ ]", Style::Dim),
+        };
+        paint(colors(style));
+        print!("{mark}");
+        body();
+        for _ in 0..step_name(*step).len().saturating_sub(1) {
+            print!(" ");
+        }
+    }
+    println!();
+}
+
 /// Require [`CONFIRM_SEQUENCE`] before a destructive write.
 ///
 /// Any wrong press resets progress. B cancels outright.
-pub fn confirm_sequence(title: &str, warning: &[String]) -> bool {
+pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
     let (cols, rows) = size();
     let mut position = 0usize;
     let mut wrong = false;
@@ -313,35 +405,28 @@ pub fn confirm_sequence(title: &str, warning: &[String]) -> bool {
         clear();
         header(title);
         for line in warning {
-            println!("{}", fit(line, cols));
+            styled(line, cols);
         }
         println!();
+        paint(colors(Style::Title));
         println!("  To authorise this, press in order:");
+        body();
         println!();
 
-        let mut names = String::from("     ");
-        let mut marks = String::from("     ");
-        for (i, step) in CONFIRM_SEQUENCE.iter().enumerate() {
-            let name = step_name(*step);
-            names.push_str(name);
-            names.push_str("  ");
-            let mark = if i < position { "[x]" } else { "[ ]" };
-            marks.push_str(mark);
-            for _ in 0..name.len().saturating_sub(1) {
-                marks.push(' ');
-            }
-        }
-        println!("{names}");
-        println!("{marks}");
+        draw_steps(position);
+
         println!();
         if wrong {
+            paint(colors(Style::Bad));
             println!("  wrong button - sequence reset");
+            body();
         } else if position > 0 {
+            paint(colors(Style::Key));
             println!("  next: {}", step_name(CONFIRM_SEQUENCE[position]));
+            body();
         }
 
-        at(0, rows.saturating_sub(2));
-        print!("  B = cancel, nothing is written");
+        footer(rows, "  B = cancel, nothing is written");
 
         let input = wait();
         if input == Input::Cancel {

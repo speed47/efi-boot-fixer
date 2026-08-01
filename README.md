@@ -89,7 +89,10 @@ exercise the real input path rather than a keyboard-only one. `repair-boot`
 targets disk 1, which is how the write-to-your-own-boot-disk case gets
 tested.
 
-Corruption modes: `zero-header`, `zero-all`, `bad-crc`, `bad-mbr`, `none`.
+Corruption modes: `zero-header`, `zero-all`, `bad-crc`, `bad-mbr`, `hybrid`,
+`none`. `hybrid` adds a second MBR partition record beside the `0xEE` one,
+which OVMF leaves alone, so it is the way to reach the hybrid-MBR refusal
+under firmware.
 
 `mkimages.sh` also rewrites `FirstUsableLBA` to 2048 in both headers,
 resealing the CRCs, so the QEMU disk has the same shape as the Deck's:
@@ -284,6 +287,25 @@ are authorised by a fixed sequence rather than a held button:
   next: LEFT
   B = cancel, nothing is written
 ```
+
+Colour carries meaning rather than decoration. Each line is tagged by the
+code that writes it — `gptcore::style::Style` — with the mapping to actual
+colours living in the application:
+
+| Style | Colour | Used for |
+| --- | --- | --- |
+| `Title` | white | captions introducing a block |
+| `Normal` | light grey | body text |
+| `Dim` | dark grey | device paths, column headings, provenance |
+| `Good` | light green | healthy, verified, succeeded |
+| `Warn` | yellow | needs attention, caveats worth reading |
+| `Bad` | light red | damage, refusal, failure |
+| `Key` | light cyan | the value you must actually take in: an LBA about to be overwritten, the disk you are pointed at |
+
+The UEFI side never decides a colour by looking at the text, so rewording a
+message cannot silently change what it looks like. In the confirmation gate
+each progress box is coloured individually — completed steps green, the one
+being waited for cyan, the rest dim.
 
 Any wrong press resets it; B cancels outright. A sequence was chosen over
 hold-to-confirm because it depends only on discrete presses: it does not
