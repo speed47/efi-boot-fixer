@@ -89,6 +89,15 @@ drive() {
             keys "$TAB" "$A"                        # details, then back
             keys "$DOWN" "$TAB" "$A"                # and the next one
             keys "$B" "$B" ;;
+        scroll)                                     # page through a long report
+            # Wants snapshots on the ESP already: run 'backup-twice' first
+            # against the same images, without rebuilding them.
+            keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Restore GPT, snapshot list
+            keys "$TAB"                             # View the whole record
+            keys "$DOWN" "$DOWN" "$DOWN"            # three lines per press
+            keys "$RIGHT"                           # then a whole screen
+            keys "$UP" "$LEFT"                      # and back again
+            keys "$A" "$B" "$B" ;;
         backup-twice)                               # two snapshots in a row
             keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
             keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"

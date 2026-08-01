@@ -284,25 +284,28 @@ pressing a button here cannot read the screen and should not also be racing a
 timer.
 
 **The font.** DejaVu Sans Mono, rasterised on the host by `tools/mkfont` into
-8-bit coverage bitmaps at three cell sizes and committed as generated Rust.
+8-bit coverage bitmaps at two cell sizes and committed as generated Rust.
 Each glyph is trimmed to its own bounding box, which halves the baked data;
-the whole font costs about 41 KB. Its licence is in `docs/FONT-LICENSE`.
+the whole font costs about 20 KB. Its licence is in `docs/FONT-LICENSE`.
 
 Which cell to use is chosen from the framebuffer. Taking the *largest* that
 clears the 80x25 the menus were laid out against was the obvious rule and the
-wrong one: a Deck's rotated screen is 1280x800, which the 16x32 cell divides
-into exactly 80x25, so that rule always chose it and the result was legible
-but cramped — device paths truncated and reports paginated that did not need
-to. Aiming at a target line length instead lands where it should:
+wrong one: on any screen clearing 80 columns by a little it picked the
+coarsest size that fitted, leaving device paths truncated and reports
+paginated that did not need to be. Aiming at a target line length instead
+lands where it should:
 
 | Framebuffer | Cell | Grid |
 | --- | --- | --- |
 | 1280x800 — a Deck, rotated | 12x24 | 106x33 |
 | 800x600 — OVMF's default | 8x16 | 100x37 |
-| 1920x1080 and up | 16x32 | 120x33 and up |
 
-Only sizes that still clear 80x25 are offered, automatically or on request,
-so no choice available on that screen can leave the menus unable to lay out.
+There was a 16x32 above these, on the theory that a large display should get
+large text. Measured on the hardware it was simply too big: 12x24 reads
+comfortably at arm's length on a 7-inch panel, so nothing above it was
+earning the 22 KB it cost. Only sizes that still clear 80x25 are offered,
+automatically or on request, so no choice available on the display screen can
+leave the menus unable to lay out.
 
 **Repainting.** The menus clear and redraw on every keypress, so `clear` does
 not touch a pixel: it blanks a grid of cells, and the flush that follows
@@ -373,8 +376,11 @@ pair. That structure is what makes a SteamOS install recognisable at a
 glance and it survives any single partition being renamed. A drive model is
 shown when the firmware will give one — see "Identifying drives" below.
 
-Reports paginate with the D-pad, since a Deck cannot scroll back. Writes
-are authorised by a fixed sequence rather than a held button:
+Reports paginate with the D-pad, since a Deck cannot scroll back. Up and down
+move three lines at a time, not one — the D-pad repeats at about 1.8/s while
+held, so a line per press makes a long report a chore — and left and right
+move a whole screen. Writes are authorised by a fixed sequence rather than a
+held button:
 
 ```
   To authorise this, press in order:

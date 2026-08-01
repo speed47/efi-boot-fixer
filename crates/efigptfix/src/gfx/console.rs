@@ -18,7 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::font::Font;
-use super::font_data::{LARGE, MEDIUM, SMALL};
+use super::font_data::{MEDIUM, SMALL};
 use super::{Framebuffer, Rgb, Rotation};
 use uefi::proto::console::text::Color;
 
@@ -56,7 +56,11 @@ pub fn rgb(color: Color) -> Rgb {
 /// Order matters: `fits` is monotone along it, since a smaller cell can
 /// only ever give more rows and columns. That is what lets the size be
 /// stepped one at a time without checking the rest.
-static FONTS: [&Font; 3] = [&LARGE, &MEDIUM, &SMALL];
+///
+/// There was a 16x32 above these. Measured on a Steam Deck, 12x24 already
+/// reads comfortably at arm's length on a 7-inch panel, so the larger cell
+/// was only ever costing columns — and 22 KB of baked glyphs.
+static FONTS: [&Font; 2] = [&MEDIUM, &SMALL];
 
 /// The smallest grid the menus were laid out against. Nothing narrower or
 /// shorter is offered, automatically or on request.
@@ -66,12 +70,11 @@ const MIN_ROWS: usize = 25;
 /// The line length aimed for when choosing a cell size.
 ///
 /// Picking the *largest* cell that clears the minimum was the obvious rule
-/// and the wrong one. A Steam Deck's rotated screen is 1280x800, which the
-/// 16x32 cell divides into exactly 80x25 — it clears the minimum with
-/// nothing to spare, so that rule always chose it, and the result was
-/// legible but cramped: long device paths truncated and reports paginated
-/// that did not need to. Aiming at a line length instead lands on 12x24
-/// and 106x33 there, while a genuinely large display still gets 16x32.
+/// and the wrong one: on any screen that cleared 80 columns by a little, it
+/// chose the coarsest size that fitted and left long device paths truncated
+/// and reports paginated that did not need to be. Aiming at a line length
+/// instead lands on 12x24 and 106x33 on a Deck, and drops to 8x16 only when
+/// the screen genuinely cannot carry more.
 const TARGET_COLS: usize = 104;
 
 /// Whether a cell size yields a grid the menus fit in.

@@ -238,6 +238,15 @@ impl Item {
     }
 }
 
+/// Lines moved by one press of up or down in a report.
+///
+/// Not one. The Deck's D-pad repeats at about 1.8/s while held — measured,
+/// in `docs/efiprobe-deck.log` — so a line at a time makes a long report a
+/// chore to walk. Three is enough to make progress without losing your
+/// place, and left and right still move a whole screen for getting
+/// somewhere else entirely.
+const SCROLL_LINES: usize = 3;
+
 /// A scrollable page of text, ending in "continue" or "cancel".
 ///
 /// Returns false if the operator backed out. A Deck cannot scroll back, so
@@ -260,18 +269,19 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
             at(0, rows.saturating_sub(3));
             paint(colors(Style::Key));
             outln!(
-                "  lines {}-{} of {}   D-pad up/down to scroll",
+                "  lines {}-{} of {}   up/down = {} lines, left/right = a screen",
                 top + 1,
                 (top + view).min(lines.len()),
-                lines.len()
+                lines.len(),
+                SCROLL_LINES
             );
             body();
         }
         footer(rows, "  A = continue    B = back");
 
         match wait() {
-            Input::Up => top = top.saturating_sub(1),
-            Input::Down => top = (top + 1).min(max_top),
+            Input::Up => top = top.saturating_sub(SCROLL_LINES),
+            Input::Down => top = (top + SCROLL_LINES).min(max_top),
             Input::Left => top = top.saturating_sub(view),
             Input::Right => top = (top + view).min(max_top),
             Input::Select => return true,
