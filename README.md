@@ -146,28 +146,46 @@ ESP afterwards.
 
 ### What a Steam Deck actually reports
 
-From a run on real hardware (firmware `Valve rev 0x10033`, UEFI 2.70):
+Measured on real hardware, firmware `Valve rev 0x10033`, UEFI 2.70. The raw
+capture is in `docs/efiprobe-deck.log`.
 
 | Control | Event |
 | --- | --- |
-| D-pad up/down/left/right | scan `0x01` / `0x02` / `0x04` / `0x03` |
 | A | unicode `0x000D` (CR) |
-| B, burger button | scan `0x17` (ESCAPE) |
-| X, Y | nothing at all |
-| unidentified | unicode `0x0009` (TAB) |
-| trackpad / stick | `SimplePointer[1]`, 8 counts/mm, relative dx/dy/dz plus two buttons |
+| QAM (three dots) | unicode `0x000D` (CR) — **indistinguishable from A** |
+| B | scan `0x17` (ESCAPE) |
+| Menu / burger | scan `0x17` (ESCAPE) — **indistinguishable from B** |
+| D-pad up / down / left / right | scan `0x01` / `0x02` / `0x04` / `0x03` |
+| View (two rectangles) | unicode `0x0009` (TAB) |
+| L2 trigger | `SimplePointer[1]` **right** button |
+| R2 trigger | `SimplePointer[1]` **left** button |
+| Right trackpad | `SimplePointer[1]` relative dx/dy, click = left button |
+| Left trackpad | `SimplePointer[1]` dz only, i.e. a scroll wheel |
+| X, Y | nothing |
+| L1, R1 bumpers | nothing |
+| L4, L5, R4, R5 back buttons | nothing |
+| Both sticks: click and movement | nothing |
+| STEAM button | nothing |
+| Touchscreen: tap and drag | nothing |
 
-Two `SimplePointer` handles are published; only the 8 counts/mm one emits
-anything. An `AbsolutePointer` is published with an x/y/z range of 0..65536,
-but produced no events, so whether the touchscreen is usable is still open.
+So the usable set is: **CR**, **ESCAPE**, **four D-pad scan codes**, **TAB**,
+and a relative pointer with two buttons and a scroll axis.
 
-That gives the standard console idiom — D-pad navigates, A selects, B
-cancels — and it rules out asking anyone to type. It also means the report
-has to paginate: a Deck screen cannot be scrolled back, and a table of
-eleven partitions plus defects plus the write plan does not fit on one.
+Three results worth calling out:
 
-The probe deliberately does **not** exit on ESCAPE, because B and the burger
-button both report as ESCAPE and would otherwise be untestable.
+**Keys auto-repeat while held.** Holding A for six seconds produced 63 CR
+events, about 10.5/s. That makes hold-to-confirm possible, which matters:
+`EFI_SIMPLE_TEXT_INPUT_PROTOCOL` reports presses with no key-release event,
+so without auto-repeat there would be no way to detect a held button at all.
+D-pad DOWN also repeats but far slower, around 1.8/s.
+
+**Input is buffered.** The step after the "hold A" test recorded 7 stray CR
+events before its own. A confirmation gate therefore cannot simply count
+events; it has to require them to keep *arriving*, and reset on a gap.
+
+**The touchscreen is not available.** An `EFI_ABSOLUTE_POINTER_PROTOCOL` is
+published with an 0..65536 range, but neither a tap nor a drag produced a
+single event. No touch-target interface is possible.
 
 ## Deploying to the Deck
 

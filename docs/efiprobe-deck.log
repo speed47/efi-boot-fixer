@@ -1,0 +1,83 @@
+=== efiprobe v2: guided UEFI input mapping ===
+firmware: Valve rev 0x10033, UEFI 2.70
+SimplePointer handles   : 2
+AbsolutePointer handles : 1
+  AbsolutePointer[0]: x 0..65536, y 0..65536, z 0..65536, attrs 0x0
+  SimplePointer[0]: resolution x 65536 y 65536 z 65536 counts/mm, buttons L:true R:true
+  SimplePointer[1]: resolution x 8 y 8 z 8 counts/mm, buttons L:true R:true
+
+30 steps, 6s each, then 20s free-form: about 200s total.
+Press the named control when asked. If you do not have it, or it
+does nothing, just wait: '(nothing)' is a useful result too.
+There is no way to quit early; power off if you need to stop.
+
+STEP 1/30: A
+    KEY unicode=0x000d (CR) x1
+STEP 2/30: B
+    KEY scan=0x0017 ESCAPE x1
+STEP 3/30: X
+    (nothing)
+STEP 4/30: Y
+    (nothing)
+STEP 5/30: D-pad UP
+    KEY scan=0x0001 UP x1
+STEP 6/30: D-pad DOWN
+    KEY scan=0x0002 DOWN x1
+STEP 7/30: D-pad LEFT
+    KEY scan=0x0004 LEFT x1
+STEP 8/30: D-pad RIGHT
+    KEY scan=0x0003 RIGHT x1
+STEP 9/30: L1 (left bumper)
+    (nothing)
+STEP 10/30: R1 (right bumper)
+    (nothing)
+STEP 11/30: L2 (left trigger, pull fully)
+    PTR1 events=2 dx=0..0 dy=0..0 dz=0..0 left=false right=true
+STEP 12/30: R2 (right trigger, pull fully)
+    PTR1 events=2 dx=0..0 dy=0..0 dz=0..0 left=true right=false
+STEP 13/30: View button (two rectangles)
+    KEY unicode=0x0009 (TAB) x1
+STEP 14/30: Menu / burger button
+    KEY scan=0x0017 ESCAPE x1
+STEP 15/30: STEAM button
+    (nothing)
+STEP 16/30: QAM button (three dots)
+    KEY unicode=0x000d (CR) x1
+STEP 17/30: L4 (back, upper left)
+    (nothing)
+STEP 18/30: L5 (back, lower left)
+    (nothing)
+STEP 19/30: R4 (back, upper right)
+    (nothing)
+STEP 20/30: R5 (back, lower right)
+    (nothing)
+STEP 21/30: LEFT STICK: click it in
+    (nothing)
+STEP 22/30: RIGHT STICK: click it in
+    (nothing)
+STEP 23/30: LEFT STICK: push fully right and hold
+    (nothing)
+STEP 24/30: RIGHT STICK: push fully right and hold
+    (nothing)
+STEP 25/30: LEFT TRACKPAD: swipe around, then click
+    PTR1 events=152 dx=0..0 dy=0..0 dz=-3..2 left=false right=false
+STEP 26/30: RIGHT TRACKPAD: swipe around, then click
+    PTR1 events=313 dx=-22..23 dy=-22..21 dz=0..0 left=true right=false
+STEP 27/30: TOUCHSCREEN: tap the centre of the screen
+    (nothing)
+STEP 28/30: TOUCHSCREEN: drag a finger across the screen
+    (nothing)
+STEP 29/30: HOLD A down for this whole step (auto-repeat test)
+    KEY unicode=0x000d (CR) x63
+STEP 30/30: HOLD D-pad DOWN for this whole step (auto-repeat test)
+    KEY unicode=0x000d (CR) x7
+    KEY scan=0x0002 DOWN x11
+
+FREE-FORM: 20s, press anything not covered above
+    KEY unicode=0x000d (CR) x33
+    KEY scan=0x0002 DOWN x19
+    KEY scan=0x0001 UP x1
+    KEY scan=0x0017 ESCAPE x34
+    PTR1 events=90 dx=-5..0 dy=-28..-1 dz=0..0 left=false right=false
+
+=== efiprobe finished; efiprobe.log is on the ESP ===
