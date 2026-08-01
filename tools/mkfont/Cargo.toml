@@ -1,0 +1,12 @@
+[package]
+name = "mkfont"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace: this is host build tooling, run by hand when the font
+# changes, and must not be pulled into `cargo test` for the core.
+[workspace]
+
+[dependencies]
+ab_glyph = "0.2"

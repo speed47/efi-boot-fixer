@@ -33,6 +33,7 @@ mod blockdev;
 mod diskinfo;
 mod esp;
 mod fwcrc;
+mod gfx;
 mod selfdev;
 mod ui;
 
@@ -808,7 +809,9 @@ fn main_menu_items() -> Vec<ui::Item> {
 #[entry]
 fn main() -> Status {
     uefi::helpers::init().expect("failed to initialise uefi helpers");
-    ui::hide_cursor();
+    // Settles which screen the menus are drawn on, and which way up, before
+    // anything is drawn on it.
+    ui::init();
 
     let boot_device = BootDevice::resolve();
     let mut intro = alloc::vec![dim(format!("  version {}", env!("CARGO_PKG_VERSION")))];
@@ -841,6 +844,6 @@ fn main() -> Status {
             ],
         );
     }
-    ui::clear();
+    ui::finish();
     Status::SUCCESS
 }

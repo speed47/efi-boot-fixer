@@ -26,6 +26,21 @@ BOOT_WAIT=${BOOT_WAIT:-105}
 # Gap between keypresses, long enough for a screen to repaint under TCG.
 STEP=${STEP:-3}
 
+# Framebuffer size, WxH. Delivered as the EDID preferred mode of the
+# emulated VGA adapter, which is how OVMF can be talked into a resolution
+# outside its built-in table: the video PCDs are fixed at build time and
+# ignore fw_cfg. Setting a portrait shape — 800x1280 is the Steam Deck's
+# panel exactly — is what makes the graphical backend rotate, and so the
+# only way to exercise that path anywhere but on the hardware itself.
+# Empty leaves OVMF's default. RES=none removes the video adapter entirely,
+# which leaves the firmware publishing no graphics protocol at all and is
+# how the fall back to its text console gets tested.
+RES=${RES:-}
+# Directory for periodic screendumps. The graphical backend writes nothing
+# to the serial console, so this is the only way to see what it drew.
+SHOTS=${SHOTS:-}
+SHOT_EVERY=${SHOT_EVERY:-6}
+
 CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 VARS="$DIR/vars.fd"
@@ -90,10 +105,26 @@ drive() {
     sleep 8
 }
 
+EXTRA=()
+case "$RES" in
+    "")   ;;
+    none) EXTRA+=(-vga none) ;;
+    *)    EXTRA+=(-vga none -device "VGA,edid=on,xres=${RES%x*},yres=${RES#*x}") ;;
+esac
+if [ -n "$SHOTS" ]; then
+    rm -rf "$SHOTS"; mkdir -p "$SHOTS"
+    EXTRA+=(-qmp "unix:$DIR/qmp.sock,server,nowait")
+    # Started now so it is already waiting on the socket QEMU is about to
+    # create. It gives up on its own when QEMU goes away.
+    "$(dirname "$0")/qemu-shots.py" "$DIR/qmp.sock" "$SHOTS" "$SHOT_EVERY" \
+        "$(( TIMEOUT / SHOT_EVERY ))" &
+fi
+
 set +e
 drive | timeout "$TIMEOUT" qemu-system-x86_64 \
     -machine q35 \
     -m 512 \
+    "${EXTRA[@]}" \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE" \
     -drive if=pflash,format=raw,unit=1,file="$VARS" \
     -drive file="$DIR/boot.img",format=raw,if=none,id=bootdisk \

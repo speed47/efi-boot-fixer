@@ -5,9 +5,14 @@
 //! a D-pad, A (CR), B (ESCAPE), View (TAB), and a relative pointer. Every
 //! screen therefore has to fit the display and be navigable with a D-pad.
 //!
-//! `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` gives cursor positioning and sixteen
-//! colours, so these are real full-screen menus with a highlight bar and
-//! nesting, not a scrolling transcript.
+//! The screens are drawn against a character grid with cursor positioning
+//! and sixteen colours, so these are real full-screen menus with a
+//! highlight bar and nesting, not a scrolling transcript. That grid is
+//! provided by one of two backends, chosen at startup by [`term`]: the
+//! firmware's own text console, or [`crate::gfx`] drawing on the
+//! framebuffer. The second exists so the picture can be turned to match a
+//! panel that is mounted sideways, which the Steam Deck's is; nothing in
+//! this module knows which one it is talking to.
 //!
 //! Report *formatting* lives in `gptcore::report`, which has no UEFI
 //! dependency and is tested on the host. This module only paints lines and
@@ -15,12 +20,16 @@
 //! [`Style`] the writer attached to it, never by inspecting the text here:
 //! rewording a message must not silently change what it looks like.
 
+pub(crate) mod term;
+
+use crate::gfx::Rotation;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use gptcore::style::{Line, Style};
+use term::{out, outln};
 use uefi::boot;
 use uefi::proto::console::text::{Color, Key, ScanCode};
-use uefi::{print, println, system};
+use uefi::system;
 
 /// What the hardware can actually say.
 ///
@@ -57,14 +66,37 @@ fn poll() -> Option<Input> {
     }
 }
 
+/// How long each idle turn of an input loop sleeps.
+const TICK_US: usize = 10_000;
+
 /// Block until the operator does something.
+///
+/// Also the moment the drawn screen is put up: everything above paints into
+/// a buffer, and there is no point showing a half-built screen, so the
+/// flush happens here, once, immediately before there is anything to wait
+/// for. Screens that never wait never needed to be seen.
 pub fn wait() -> Input {
+    term::flush();
     loop {
         if let Some(i) = poll() {
             return i;
         }
-        boot::stall(10_000);
+        boot::stall(TICK_US);
     }
+}
+
+/// Wait, but give up after roughly `millis`.
+fn wait_for(millis: usize) -> Option<Input> {
+    term::flush();
+    let mut waited = 0;
+    while waited < millis * 1000 {
+        if let Some(i) = poll() {
+            return Some(i);
+        }
+        boot::stall(TICK_US);
+        waited += TICK_US;
+    }
+    None
 }
 
 /// Discard anything already queued.
@@ -73,6 +105,7 @@ pub fn wait() -> Input {
 /// buffers them, so a burst can outlive the screen that provoked it. Any
 /// screen that asks a question worth getting right drains first.
 pub fn drain() {
+    term::flush();
     while poll().is_some() {}
     // A held button keeps producing events after the buffer empties; give
     // it a moment and sweep again.
@@ -81,9 +114,7 @@ pub fn drain() {
 }
 
 pub fn size() -> (usize, usize) {
-    system::with_stdout(|out| {
-        out.current_mode().ok().flatten().map(|m| (m.columns(), m.rows())).unwrap_or((80, 25))
-    })
+    term::size()
 }
 
 // ------------------------------------------------------------------ colour
@@ -112,9 +143,7 @@ fn colors(style: Style) -> (Color, Color) {
 }
 
 fn paint(colors: (Color, Color)) {
-    system::with_stdout(|out| {
-        let _ = out.set_color(colors.0, colors.1);
-    });
+    term::set_color(colors.0, colors.1);
 }
 
 fn body() {
@@ -125,21 +154,20 @@ pub fn clear() {
     // Reset first: `clear` fills the screen with the *current* background,
     // so clearing while a highlight is active paints the whole display.
     body();
-    system::with_stdout(|out| {
-        let _ = out.clear();
-    });
+    term::clear();
 }
 
 fn at(column: usize, row: usize) {
-    system::with_stdout(|out| {
-        let _ = out.set_cursor_position(column, row);
-    });
+    term::at(column, row);
 }
 
 pub fn hide_cursor() {
-    system::with_stdout(|out| {
-        let _ = out.enable_cursor(false);
-    });
+    term::hide_cursor();
+}
+
+/// Hand the screen back to the firmware. Call once, on the way out.
+pub fn finish() {
+    term::hand_back();
 }
 
 /// Clip to the display width.
@@ -160,11 +188,11 @@ fn fit(line: &str, columns: usize) -> String {
 /// Print one styled line, then return to body colour.
 fn styled(line: &Line, columns: usize) {
     if line.style == Style::Normal {
-        println!("{}", fit(&line.text, columns));
+        outln!("{}", fit(&line.text, columns));
         return;
     }
     paint(colors(line.style));
-    println!("{}", fit(&line.text, columns));
+    outln!("{}", fit(&line.text, columns));
     body();
 }
 
@@ -176,9 +204,9 @@ fn header(title: &str) {
     let (cols, _) = size();
     at(0, 0);
     paint(colors(Style::Title));
-    println!("{}", fit(title, cols));
+    outln!("{}", fit(title, cols));
     paint(colors(Style::Dim));
-    println!("{}", rule(cols));
+    outln!("{}", rule(cols));
     body();
 }
 
@@ -187,7 +215,7 @@ fn header(title: &str) {
 fn footer(rows: usize, text: &str) {
     at(0, rows.saturating_sub(2));
     paint(colors(Style::Dim));
-    print!("{text}");
+    out!("{text}");
     body();
 }
 
@@ -227,7 +255,7 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
         if lines.len() > view {
             at(0, rows.saturating_sub(3));
             paint(colors(Style::Key));
-            println!(
+            outln!(
                 "  lines {}-{} of {}   D-pad up/down to scroll",
                 top + 1,
                 (top + view).min(lines.len()),
@@ -337,7 +365,7 @@ fn run_menu(
         for line in intro {
             styled(line, cols);
         }
-        println!();
+        outln!();
 
         for (i, item) in items.iter().enumerate().skip(top).take(view) {
             if i == selected {
@@ -345,19 +373,19 @@ fn run_menu(
                 // Pad so the bar spans the row rather than hugging the text.
                 let text = fit(&item.label, cols.saturating_sub(4));
                 let width = cols.saturating_sub(5);
-                println!("  {text:<width$} ");
+                outln!("  {text:<width$} ");
                 body();
             } else {
-                println!("   {}", fit(&item.label, cols.saturating_sub(3)));
+                outln!("   {}", fit(&item.label, cols.saturating_sub(3)));
             }
         }
         if items.len() > view {
             paint(colors(Style::Dim));
-            println!("   ... {} of {}", selected + 1, items.len());
+            outln!("   ... {} of {}", selected + 1, items.len());
             body();
         }
 
-        println!();
+        outln!();
         for line in &items[selected].detail {
             styled(line, cols);
         }
@@ -415,10 +443,10 @@ fn draw_steps(position: usize) {
         names.push_str("  ");
     }
     paint(colors(Style::Dim));
-    println!("{names}");
+    outln!("{names}");
     body();
 
-    print!("     ");
+    out!("     ");
     for (i, step) in CONFIRM_SEQUENCE.iter().enumerate() {
         let (mark, style) = match i {
             _ if i < position => ("[x]", Style::Good),
@@ -426,13 +454,13 @@ fn draw_steps(position: usize) {
             _ => ("[ ]", Style::Dim),
         };
         paint(colors(style));
-        print!("{mark}");
+        out!("{mark}");
         body();
         for _ in 0..step_name(*step).len().saturating_sub(1) {
-            print!(" ");
+            out!(" ");
         }
     }
-    println!();
+    outln!();
 }
 
 /// Require [`CONFIRM_SEQUENCE`] before a destructive write.
@@ -450,22 +478,22 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
         for line in warning {
             styled(line, cols);
         }
-        println!();
+        outln!();
         paint(colors(Style::Title));
-        println!("  To authorise this, press in order:");
+        outln!("  To authorise this, press in order:");
         body();
-        println!();
+        outln!();
 
         draw_steps(position);
 
-        println!();
+        outln!();
         if wrong {
             paint(colors(Style::Bad));
-            println!("  wrong button - sequence reset");
+            outln!("  wrong button - sequence reset");
             body();
         } else if position > 0 {
             paint(colors(Style::Key));
-            println!("  next: {}", step_name(CONFIRM_SEQUENCE[position]));
+            outln!("  next: {}", step_name(CONFIRM_SEQUENCE[position]));
             body();
         }
 
@@ -487,5 +515,99 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
             wrong = true;
             position = usize::from(input == CONFIRM_SEQUENCE[0]);
         }
+    }
+}
+
+// ------------------------------------------------------------- orientation
+
+/// How long the orientation screen waits before deciding it was right.
+const ORIENT_SECONDS: usize = 6;
+
+/// Choose a backend, and settle which way up the screen goes.
+///
+/// Call once, before anything else draws.
+pub fn init() {
+    // Before taking the framebuffer, not after: the firmware's console is
+    // about to have its screen drawn on, and anything it puts there on the
+    // way out should land where our first fill will wipe it.
+    hide_cursor();
+
+    let Some(guess) = term::init() else {
+        // No usable framebuffer. The firmware's console it is, in whatever
+        // orientation the firmware has it — which is the situation this
+        // tool shipped in, and still works.
+        return;
+    };
+    if guess != Rotation::None {
+        orientation();
+    }
+}
+
+/// Offer to turn the picture.
+///
+/// Shown only when [`crate::gfx::Framebuffer::guess_rotation`] guessed, which
+/// means a portrait framebuffer, which means a panel mounted sideways. The
+/// guess is almost certainly right, so this continues on its own after a
+/// few seconds rather than demanding a press every launch. The moment
+/// anything is pressed it stops counting and waits properly: someone
+/// pressing a button here is someone who cannot read the screen, and they
+/// should not be racing a timer while they fix it.
+///
+/// LEFT and RIGHT work regardless of which way round the text came out,
+/// which is the only reason this screen can rescue a wrong guess at all.
+fn orientation() {
+    let mut rotation = term::rotation().unwrap_or_default();
+    let mut countdown = Some(ORIENT_SECONDS);
+    drain();
+
+    loop {
+        let (cols, rows) = size();
+        clear();
+        header("Display orientation");
+        outln!("  This screen is drawn by efigptfix itself, so that it can be");
+        outln!("  turned to match the panel. This one is mounted sideways, and");
+        outln!("  the firmware's own text comes out a quarter turn off.");
+        outln!();
+        paint(colors(Style::Key));
+        outln!("  Now showing: {}", fit(rotation.name(), cols));
+        body();
+        outln!();
+        outln!("  If you can read this the right way up, there is nothing to do.");
+
+        match countdown {
+            Some(0) => return,
+            Some(left) => {
+                paint(colors(Style::Dim));
+                outln!("  Continuing in {left}s.");
+                body();
+            }
+            None => {}
+        }
+
+        footer(rows, "  LEFT / RIGHT = turn the picture    A = this way up is right");
+
+        let input = match countdown {
+            Some(left) => match wait_for(1000) {
+                None => {
+                    countdown = Some(left - 1);
+                    continue;
+                }
+                // Any press at all stops the clock, including the one being
+                // acted on below.
+                Some(input) => {
+                    countdown = None;
+                    input
+                }
+            },
+            None => wait(),
+        };
+
+        match input {
+            Input::Left => rotation = rotation.previous(),
+            Input::Right => rotation = rotation.next(),
+            Input::Select | Input::Cancel => return,
+            _ => continue,
+        }
+        term::set_rotation(rotation);
     }
 }

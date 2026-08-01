@@ -27,7 +27,9 @@ sequence and shows exactly which LBAs it will write first.
 ```
 crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
 crates/efigptfix/    the EFI_APPLICATION (its own workspace; UEFI target only)
-tools/               image builders and the QEMU harness
+  src/ui/            the menus, and the two backends they can be drawn on
+  src/gfx/           framebuffer, rotation, baked font, character console
+tools/               image builders, the QEMU harness, the font rasteriser
 ```
 
 `gptcore` performs no I/O and knows nothing about firmware. It reads through a
@@ -55,6 +57,11 @@ Note that the UEFI application is a separate workspace from `gptcore`, so it
 needs its own cargo invocation with an explicit `--target`; the Makefile
 handles that. It also prefers `~/.cargo/bin/cargo` when present, because
 distro cargo packages generally ship no std for the UEFI target.
+
+The glyph bitmaps in `crates/efigptfix/src/gfx/font_data.rs` are generated and
+committed, so a normal build needs neither a font installed nor the tool that
+bakes one. `make font` re-bakes them from DejaVu Sans Mono and writes a
+specimen image next to the result; see "the panel is mounted sideways" below.
 
 ## Testing
 
@@ -88,6 +95,27 @@ lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
 exercise the real input path rather than a keyboard-only one. `repair-boot`
 targets disk 1, which is how the write-to-your-own-boot-disk case gets
 tested.
+
+The graphical backend writes nothing to the serial console, so a run that
+exercises it has to be photographed rather than read:
+
+```sh
+make qemu-shots                     # 800x1280 framebuffer, i.e. rotated
+make qemu-shots QRES=1280x800       # landscape, i.e. not rotated
+```
+
+Screendumps land in `build/shots` as PPM, one every few seconds, taken over
+QMP by `tools/qemu-shots.py`. `RES` is delivered as the EDID preferred mode of
+the emulated VGA adapter, which is the way to get OVMF outside its built-in
+mode table — its video PCDs are fixed at build time and ignore `fw_cfg`.
+
+`RES=none` removes the video adapter altogether, so the firmware publishes no
+graphics protocol and the application falls back to the text console. That run
+prints to serial like any other, which is the point of testing it:
+
+```sh
+RES=none ./tools/run-qemu.sh build/images menu
+```
 
 Corruption modes: `zero-header`, `zero-all`, `bad-crc`, `bad-mbr`, `hybrid`,
 `none`. `hybrid` adds a second MBR partition record beside the `0xEE` one,
@@ -215,6 +243,56 @@ events; it has to require them to keep *arriving*, and reset on a gap.
 published with an 0..65536 range, but neither a tap nor a drag produced a
 single event. No touch-target interface is possible.
 
+## Output: the panel is mounted sideways
+
+The Deck's LCD is a portrait panel turned on its side. The firmware reports it
+honestly — 800 across, 1280 down — and lays its text console out in those
+coordinates, so everything printed through
+`EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` arrives on the glass a quarter turn
+anticlockwise. The tool was usable that way only because a handheld can be
+physically rotated to read it.
+
+There is no fixing that through the text protocol: it hands out a character
+grid and nothing underneath it. So the application also carries its own
+renderer. It takes the framebuffer from `EFI_GRAPHICS_OUTPUT_PROTOCOL`, draws
+characters from a font baked into the binary, and puts every pixel through a
+rotation on the way out.
+
+Both backends are always built, and one is chosen at startup:
+
+| Condition | Backend |
+| --- | --- |
+| a graphics protocol with a CPU-addressable framebuffer | own renderer, rotated to suit the panel |
+| `PixelBltOnly`, or no graphics protocol at all | the firmware's text console, as before |
+
+Nothing above `crates/efigptfix/src/ui/term.rs` knows which one it got. The
+menus, the reports and the confirmation gate are written once, against a
+character grid with a cursor and sixteen colours, and drawn by either.
+
+**Which way up.** A framebuffer taller than it is wide means a panel mounted
+sideways, and the correction is a quarter turn clockwise; anything else is
+taken at face value. That is a guess, so when it is made the first screen
+offers to change it, with LEFT and RIGHT turning the picture — controls that
+work no matter which way round the text came out, which is the only reason
+the screen can rescue a wrong guess. It continues on its own after six
+seconds, and stops counting the moment anything is pressed: someone pressing
+a button here cannot read the screen and should not also be racing a timer.
+
+**The font.** DejaVu Sans Mono, rasterised on the host by `tools/mkfont` into
+8-bit coverage bitmaps at two cell sizes and committed as generated Rust. The
+16x32 cell divides 1280x800 of rotated Deck screen into exactly 80x25 — the
+geometry the menus were already laid out against — and 8x16 covers smaller
+framebuffers, OVMF's included. Each glyph is trimmed to its own bounding box,
+which halves the baked data; the whole font costs about 28 KB. Its licence is
+in `docs/FONT-LICENSE`.
+
+**Repainting.** The menus clear and redraw on every keypress, so `clear` does
+not touch a pixel: it blanks a grid of cells, and the flush that follows
+repaints only the cells whose contents actually changed. Moving the highlight
+bar costs two rows rather than a screen, and there is no black flash under the
+cursor. The framebuffer is filled outright exactly once, when the orientation
+changes.
+
 ## Deploying to the Deck
 
 Copy to the ESP and invoke it manually from the firmware menu. Deliberately
@@ -230,9 +308,11 @@ must be off, as the binary is unsigned.
 ### Using it
 
 A full-screen D-pad menu with a highlight bar, because the hardware has no
-keyboard. `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` provides cursor positioning and
-sixteen colours, so no extra dependencies are involved. The selected item's
-description appears below the list, which doubles as inline help:
+keyboard. Cursor positioning and sixteen colours are all it needs, which is
+why the same screens can be drawn either by the firmware's text console or by
+the application's own renderer — see "the panel is mounted sideways" above.
+The selected item's description appears below the list, which doubles as
+inline help:
 
 ```
 efigptfix

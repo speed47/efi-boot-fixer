@@ -31,9 +31,14 @@ ESP        ?= /boot/efi
 
 .DEFAULT_GOAL := help
 
+# Rasterised on the host and committed, so building the application needs
+# neither this font installed nor the tool that bakes it.
+FONT       ?= /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+FONT_DATA  := $(EFI_CRATE)/src/gfx/font_data.rs
+
 .PHONY: help build debug probe-esp test test-unit test-integration fmt fmt-check \
-        clippy check size dist images qemu qemu-repair verify-image \
-        install clean distclean
+        clippy check size dist images qemu qemu-repair qemu-shots verify-image \
+        font install clean distclean
 
 help: ## Show this help
 	@echo "efigptfix targets:"
@@ -51,6 +56,12 @@ build: ## Build both EFI binaries (release)
 
 debug: ## Build the EFI application (debug, unstripped)
 	cd $(EFI_CRATE) && $(UEFI_CARGO) build --target $(TARGET)
+
+font: ## Re-bake the glyph bitmaps from $(FONT) (writes a specimen too)
+	@test -f "$(FONT)" || { echo "no font at $(FONT); set FONT=..." >&2; exit 1; }
+	cd tools/mkfont && $(UEFI_CARGO) run --release -- \
+	  "$(abspath $(FONT))" "$(abspath $(FONT_DATA))" "$(abspath $(BUILD))/specimen-"
+	@echo "look at $(BUILD)/specimen-*.pgm before committing the result."
 
 size: build ## Report the binary size
 	@ls -l $(EFI) | awk '{printf "%s  %d bytes (%.1f KiB)\n", $$NF, $$5, $$5/1024}'
@@ -80,13 +91,15 @@ test-unit: ## Run gptcore unit tests only
 test-integration: ## Run the sgdisk-backed image tests only (requires gdisk)
 	$(CARGO) test --test repair_images
 
-fmt: ## Format both workspaces
+fmt: ## Format every workspace
 	$(CARGO) fmt --all
 	cd $(EFI_CRATE) && $(UEFI_CARGO) fmt --all
+	cd tools/mkfont && $(UEFI_CARGO) fmt --all
 
 fmt-check: ## Check formatting without writing
 	$(CARGO) fmt --all -- --check
 	cd $(EFI_CRATE) && $(UEFI_CARGO) fmt --all -- --check
+	cd tools/mkfont && $(UEFI_CARGO) fmt --all -- --check
 
 clippy: ## Lint both workspaces, warnings are errors
 	$(CARGO) clippy --all-targets -- -D warnings
@@ -108,6 +121,16 @@ qemu: images ## Boot under OVMF and drive the menus (SCRIPT=...)
 
 qemu-repair: images ## Boot under OVMF and repair the test disk
 	./tools/run-qemu.sh $(IMAGES) repair
+
+# The graphical backend writes nothing to the serial console, so looking at
+# it means photographing the framebuffer. QRES is the shape OVMF is asked
+# for: 800x1280 is the Steam Deck's panel, and a portrait framebuffer is
+# what makes the backend rotate, so it is the default here.
+QRES ?= 800x1280
+
+qemu-shots: images ## Boot with a $(QRES) framebuffer and screendump the menus
+	SHOTS=$(BUILD)/shots RES=$(QRES) ./tools/run-qemu.sh $(IMAGES) $(SCRIPT)
+	@echo "screenshots in $(BUILD)/shots (PPM; any viewer or ImageMagick)"
 
 verify-image: ## Ask sgdisk what it thinks of the test disk
 	@sgdisk -v $(IMAGES)/test.img 2>&1 \
