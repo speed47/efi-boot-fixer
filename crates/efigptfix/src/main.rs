@@ -25,7 +25,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use blockdev::UefiDisk;
 use fwcrc::FirmwareCrc32;
-use gptcore::repair::{analyze, apply, plan, Verdict};
+use gptcore::repair::{analyze, apply, plan};
 use selfdev::BootDevice;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
 use uefi::prelude::*;
@@ -124,22 +124,17 @@ fn handle_disk(index: usize, handle: Handle) -> bool {
     };
     drop(disk);
 
-    ui::print_analysis(&analysis);
-    uefi::println!("  => {}", ui::verdict_line(analysis.verdict));
-
     if !analysis.verdict.will_write() {
+        ui::print_report(&analysis, None);
         uefi::println!();
         return false;
     }
     let Some(repair) = plan(&analysis, &CRC) else {
+        ui::print_report(&analysis, None);
         uefi::println!();
         return false;
     };
-
-    if analysis.verdict == Verdict::PrimaryRepairable {
-        ui::print_table(&repair, analysis.block_size);
-    }
-    ui::print_plan(&repair);
+    ui::print_report(&analysis, Some(&repair));
     uefi::println!();
 
     if !ui::confirm(CONFIRM_WORD) {

@@ -25,6 +25,7 @@ pub mod header;
 pub mod layout;
 pub mod mbr;
 pub mod repair;
+pub mod report;
 
 pub use crc::{Crc32, SoftCrc32};
 pub use disk::{BlockDevice, IoError};

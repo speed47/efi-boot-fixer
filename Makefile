@@ -14,6 +14,7 @@ UEFI_CARGO ?= $(if $(wildcard $(HOME)/.cargo/bin/cargo),$(HOME)/.cargo/bin/cargo
 TARGET     := x86_64-unknown-uefi
 EFI_CRATE  := crates/efigptfix
 EFI        := $(EFI_CRATE)/target/$(TARGET)/release/efigptfix.efi
+PROBE      := $(EFI_CRATE)/target/$(TARGET)/release/efiprobe.efi
 EFI_DEBUG  := $(EFI_CRATE)/target/$(TARGET)/debug/efigptfix.efi
 
 BUILD      ?= build
@@ -30,7 +31,7 @@ ESP        ?= /boot/efi
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build debug test test-unit test-integration fmt fmt-check \
+.PHONY: help build debug probe-esp test test-unit test-integration fmt fmt-check \
         clippy check size dist images qemu qemu-confirm verify-image \
         install clean distclean
 
@@ -43,9 +44,10 @@ help: ## Show this help
 
 # ------------------------------------------------------------------ build
 
-build: ## Build the EFI application (release)
+build: ## Build both EFI binaries (release)
 	cd $(EFI_CRATE) && $(UEFI_CARGO) build --release --target $(TARGET)
 	@echo "built $(EFI) ($$(stat -c %s $(EFI)) bytes)"
+	@echo "built $(PROBE) ($$(stat -c %s $(PROBE)) bytes)"
 
 debug: ## Build the EFI application (debug, unstripped)
 	cd $(EFI_CRATE) && $(UEFI_CARGO) build --target $(TARGET)
@@ -53,11 +55,19 @@ debug: ## Build the EFI application (debug, unstripped)
 size: build ## Report the binary size
 	@ls -l $(EFI) | awk '{printf "%s  %d bytes (%.1f KiB)\n", $$NF, $$5, $$5/1024}'
 
-dist: build ## Stage the binary and a checksum in build/dist
+dist: build ## Stage both binaries and a checksum in build/dist
 	@mkdir -p $(DIST)
 	cp $(EFI) $(DIST)/efigptfix.efi
-	cd $(DIST) && sha256sum efigptfix.efi > SHA256SUMS
+	cp $(PROBE) $(DIST)/efiprobe.efi
+	cd $(DIST) && sha256sum efigptfix.efi efiprobe.efi > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
+
+probe-esp: build ## Copy just the input probe to $(ESP)/EFI/BOOT/BOOTX64.EFI
+	@test -d "$(ESP)" || { echo "no ESP mounted at $(ESP); set ESP=..." >&2; exit 1; }
+	install -D -m 0644 $(PROBE) "$(ESP)/EFI/efiprobe.efi"
+	@echo "installed $(ESP)/EFI/efiprobe.efi"
+	@echo "run it from the firmware's 'boot from file' menu;"
+	@echo "it writes efiprobe.log to the root of that same ESP." 
 
 # ------------------------------------------------------------------- test
 

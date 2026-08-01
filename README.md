@@ -109,6 +109,40 @@ The QEMU harness is not in CI: driving the confirmation prompt over a serial
 console depends on boot timing, which is exactly the kind of thing that turns
 into a flaky job. Run `make qemu-confirm` locally instead.
 
+## Input: the Deck has no keyboard
+
+The confirmation gate currently asks the operator to type `REPAIR`. On a
+Steam Deck that is impossible: there is no built-in keyboard, Bluetooth is
+not available in the firmware environment, and few people have a USB-C
+keyboard to hand. The buttons, sticks, trackpads and touchscreen are the
+only realistic inputs, and how the firmware exposes them is not something
+to guess at.
+
+`efiprobe.efi` answers that empirically. It enumerates the input protocols
+the firmware publishes and logs every event it sees:
+
+| Protocol | What it would give us |
+| --- | --- |
+| `EFI_SIMPLE_TEXT_INPUT_PROTOCOL` | scan codes and Unicode chars, i.e. buttons mapped to keys |
+| `EFI_SIMPLE_POINTER_PROTOCOL` | relative motion from trackpads or a mouse |
+| `EFI_ABSOLUTE_POINTER_PROTOCOL` | the touchscreen, with its coordinate range |
+
+Everything goes to `efiprobe.log` **on the ESP it was launched from**,
+flushed after every line, as well as to the screen. The screen scrolls and
+cannot be copied off the device; the file can be read from Linux afterwards,
+and cutting the power keeps whatever was logged up to that moment. The probe
+exits on its own after 180 seconds, because without a keyboard there may be
+no way to tell it to stop.
+
+```sh
+make probe-esp ESP=/path/to/esp     # installs EFI/efiprobe.efi
+# boot menu -> boot from file -> efiprobe.efi
+# press each control in turn, then read EFI/../efiprobe.log
+```
+
+Verified end to end under OVMF, including recovering the log file from the
+ESP afterwards.
+
 ## Deploying to the Deck
 
 Copy to the ESP and invoke it manually from the firmware menu. Deliberately
