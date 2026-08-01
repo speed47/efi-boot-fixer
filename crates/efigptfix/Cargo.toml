@@ -1,0 +1,17 @@
+[package]
+name = "efigptfix"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+gptcore = { path = "../gptcore" }
+uefi = { version = "0.33", features = ["alloc", "global_allocator", "panic_handler"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

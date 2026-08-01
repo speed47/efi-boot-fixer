@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  UEFI_TARGET: x86_64-unknown-uefi
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-uefi
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The UEFI application is its own workspace, so it has to be
+          # listed separately or its target dir is never cached.
+          workspaces: |
+            .
+            crates/efigptfix
+
+      # The integration tests build real disk images with sgdisk and use it
+      # as the oracle for whether a repair worked.
+      - name: Install gdisk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdisk
+
+      - name: Formatting
+        run: make fmt-check
+
+      - name: Clippy
+        run: make clippy
+
+      - name: Tests
+        run: make test
+
+  build:
+    name: Build EFI binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-uefi
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            crates/efigptfix
+
+      - name: Build and stage
+        run: make dist
+
+      # Cheap guard against shipping something that is not a bootable EFI
+      # application, e.g. if the target or subsystem ever changes.
+      - name: Verify PE32+ headers
+        run: |
+          python3 - build/dist/efigptfix.efi <<'EOF'
+          import struct, sys
+          data = open(sys.argv[1], 'rb').read()
+          assert data[:2] == b'MZ', "missing MZ magic"
+          pe = struct.unpack_from('<I', data, 0x3c)[0]
+          assert data[pe:pe+4] == b'PE\0\0', "missing PE signature"
+          machine, = struct.unpack_from('<H', data, pe + 4)
+          magic,   = struct.unpack_from('<H', data, pe + 24)
+          subsys,  = struct.unpack_from('<H', data, pe + 92)
+          assert machine == 0x8664, f"machine {machine:#x}, expected x86_64"
+          assert magic == 0x20b, f"optional header {magic:#x}, expected PE32+"
+          assert subsys == 10, f"subsystem {subsys}, expected 10 (EFI application)"
+          print(f"ok: PE32+ x86_64 EFI application, {len(data)} bytes")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: efigptfix
+          path: build/dist/
+          if-no-files-found: error
+
+  continuous:
+    name: Continuous prerelease
+    needs: [test, build]
+    # Tracks whatever the repository's default branch is called, so this
+    # does not silently stop firing if the branch is main or master.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: efigptfix
+          path: dist
+
+      - name: Replace the continuous prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Remove the previous rolling release and its tag. Both are
+          # tolerated as missing: the first run has neither, and a tag can
+          # outlive its release if a run was cancelled midway.
+          gh release delete continuous --cleanup-tag --yes || true
+          git push --delete origin continuous || true
+
+          cat > notes.md <<EOF
+          Rolling build of \`main\`, replaced on every push. **Unsigned and
+          untested on your hardware** - prefer a tagged release if one exists.
+
+          Commit: \`${GITHUB_SHA}\`
+          Built: $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          ## Install
+
+          Copy to the EFI system partition and invoke it from the firmware's
+          "boot from file" menu. Secure Boot must be off.
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS
+          cp efigptfix.efi /esp/EFI/efigptfix.efi
+          \`\`\`
+
+          It never writes without you typing the confirmation word, and it
+          excludes the device it booted from.
+          EOF
+
+          gh release create continuous dist/* \
+            --prerelease \
+            --target "${GITHUB_SHA}" \
+            --title "Continuous build (${GITHUB_SHA:0:7})" \
+            --notes-file notes.md
+
+  release:
+    name: Draft release
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: efigptfix
+          path: dist
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          ## Install
+
+          Copy to the EFI system partition and invoke it from the firmware's
+          "boot from file" menu. Deliberately not an NVRAM boot entry, since
+          SteamOS rewrites the boot order on update. Secure Boot must be off,
+          as this binary is unsigned.
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS
+          cp efigptfix.efi /esp/EFI/efigptfix.efi
+          \`\`\`
+
+          EOF
+
+          # --generate-notes appends the commit log below the text above.
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --draft \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            --generate-notes

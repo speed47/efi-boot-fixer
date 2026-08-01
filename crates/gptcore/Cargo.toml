@@ -1,0 +1,8 @@
+[package]
+name = "gptcore"
+description = "no_std GPT parsing, validation and repair planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
