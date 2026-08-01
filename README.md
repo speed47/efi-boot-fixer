@@ -143,6 +143,31 @@ make probe-esp ESP=/path/to/esp     # installs EFI/efiprobe.efi
 Verified end to end under OVMF, including recovering the log file from the
 ESP afterwards.
 
+### What a Steam Deck actually reports
+
+From a run on real hardware (firmware `Valve rev 0x10033`, UEFI 2.70):
+
+| Control | Event |
+| --- | --- |
+| D-pad up/down/left/right | scan `0x01` / `0x02` / `0x04` / `0x03` |
+| A | unicode `0x000D` (CR) |
+| B, burger button | scan `0x17` (ESCAPE) |
+| X, Y | nothing at all |
+| unidentified | unicode `0x0009` (TAB) |
+| trackpad / stick | `SimplePointer[1]`, 8 counts/mm, relative dx/dy/dz plus two buttons |
+
+Two `SimplePointer` handles are published; only the 8 counts/mm one emits
+anything. An `AbsolutePointer` is published with an x/y/z range of 0..65536,
+but produced no events, so whether the touchscreen is usable is still open.
+
+That gives the standard console idiom — D-pad navigates, A selects, B
+cancels — and it rules out asking anyone to type. It also means the report
+has to paginate: a Deck screen cannot be scrolled back, and a table of
+eleven partitions plus defects plus the write plan does not fit on one.
+
+The probe deliberately does **not** exit on ESCAPE, because B and the burger
+button both report as ESCAPE and would otherwise be untestable.
+
 ## Deploying to the Deck
 
 Copy to the ESP and invoke it manually from the firmware menu. Deliberately
