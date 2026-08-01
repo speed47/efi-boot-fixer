@@ -216,6 +216,50 @@ pub fn check_structure(
     issues
 }
 
+/// A cheap "is this the machine's own disk?" signal for the disk picker.
+///
+/// Distinct from [`recognize`], which decides whether a *recovered table*
+/// may be written back and is therefore strict. This one only decorates a
+/// list of disks with a hint, so it errs towards recognising: the A/B pair
+/// structure is what makes a SteamOS install unmistakable at a glance, and
+/// it survives renaming of any single partition.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SteamOsHint {
+    pub esp: bool,
+    /// Used entries carrying the Linux root type GUID.
+    pub roots: usize,
+    /// Used entries carrying the Linux /var type GUID.
+    pub vars: usize,
+    /// Names present in both an `-A` and a `-B` form.
+    pub ab_pairs: usize,
+}
+
+impl SteamOsHint {
+    pub fn likely(&self) -> bool {
+        // Two roots, two /var, or two A/B name pairs: any one of those plus
+        // an ESP is more structure than a coincidence produces.
+        self.esp && (self.roots >= 2 || self.vars >= 2 || self.ab_pairs >= 2)
+    }
+}
+
+pub fn steamos_hint(entries: &[PartitionEntry]) -> SteamOsHint {
+    let used: Vec<&PartitionEntry> = entries.iter().filter(|e| e.is_used()).collect();
+    let names: Vec<String> = used.iter().map(|e| e.name_string()).collect();
+
+    let ab_pairs = names
+        .iter()
+        .filter_map(|n| n.strip_suffix("-A"))
+        .filter(|base| names.iter().any(|n| n.strip_suffix("-B") == Some(base)))
+        .count();
+
+    SteamOsHint {
+        esp: used.iter().any(|e| e.type_guid == EFI_SYSTEM_PARTITION),
+        roots: used.iter().filter(|e| e.type_guid == LINUX_ROOT_X86_64).count(),
+        vars: used.iter().filter(|e| e.type_guid == LINUX_VAR).count(),
+        ab_pairs,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Confidence {
     /// Matches the stock SteamOS layout closely.
@@ -350,6 +394,35 @@ mod tests {
         let r = recognize(&table);
         assert_eq!(r.confidence, Confidence::Unrecognized);
         assert_eq!(r.missing_critical, alloc::vec!["esp", "rootfs-A"]);
+    }
+
+    #[test]
+    fn the_ab_pairs_identify_a_steamos_disk() {
+        let hint = steamos_hint(&steamos_table());
+        assert!(hint.likely(), "{hint:?}");
+        assert_eq!(hint.roots, 2);
+        assert_eq!(hint.vars, 2);
+        // efi, rootfs and var each appear as -A/-B.
+        assert_eq!(hint.ab_pairs, 3);
+    }
+
+    #[test]
+    fn a_plain_windows_disk_is_not_mistaken_for_steamos() {
+        let table = alloc::vec![
+            entry("EFI system partition", EFI_SYSTEM_PARTITION, 2048, 200_000),
+            entry("Microsoft reserved partition", MS_RESERVED, 200_001, 234_000),
+            entry("Basic data partition", MS_BASIC_DATA, 234_001, 900_000),
+            entry("", WINDOWS_RECOVERY, 900_001, 950_000),
+        ];
+        assert!(!steamos_hint(&table).likely());
+    }
+
+    #[test]
+    fn renaming_one_partition_does_not_lose_the_hint() {
+        let mut table = steamos_table();
+        // Only the type GUIDs are left to go on for rootfs.
+        table[4] = entry("rootfs-B-renamed", LINUX_ROOT_X86_64, 60_000, 61_000);
+        assert!(steamos_hint(&table).likely());
     }
 
     #[test]

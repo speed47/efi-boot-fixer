@@ -7,6 +7,8 @@
 //!
 //! The UEFI application prints these lines verbatim.
 
+use crate::entry::PartitionEntry;
+use crate::guid::Guid;
 use crate::header::Defect;
 use crate::layout::{self, Confidence};
 use crate::mbr::MbrStatus;
@@ -137,14 +139,27 @@ pub fn render_analysis(analysis: &Analysis) -> Vec<String> {
 
 /// The table the operator is being asked to approve.
 pub fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<String> {
+    render_entries(&plan.entries, block_size, plan.header.disk_guid, "Proposed table:")
+}
+
+/// A partition list under a caption. Shared by the read-only check, which
+/// shows what is on the disk now, and the write paths, which show what
+/// would be there afterwards — deliberately the same rendering, so the two
+/// can be compared line for line.
+pub fn render_entries(
+    entries: &[PartitionEntry],
+    block_size: u32,
+    disk_guid: Guid,
+    caption: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
     out.push(String::new());
-    out.push("  Proposed table:".to_string());
+    out.push(format!("  {caption}"));
     out.push(format!(
         "    {:>2}  {:>12} {:>12} {:>10}  {:<22} {}",
         "#", "Start LBA", "End LBA", "Size", "Type", "Name"
     ));
-    for (i, e) in plan.entries.iter().enumerate().filter(|(_, e)| e.is_used()) {
+    for (i, e) in entries.iter().enumerate().filter(|(_, e)| e.is_used()) {
         let size = e
             .block_count()
             .map(|b| human_size(b.saturating_mul(block_size as u64)))
@@ -159,7 +174,7 @@ pub fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<String> {
             e.name_string()
         ));
     }
-    out.push(format!("  Disk GUID: {}", plan.header.disk_guid));
+    out.push(format!("  Disk GUID: {disk_guid}"));
     out
 }
 

@@ -51,6 +51,32 @@ sgdisk -n 1:2048:+256M -t 1:ef00 -c 1:esp \
        -n 9:0:+16M    -t 9:2700 \
        -n 10:0:+20G   -t 10:0700 -c 10:"Basic data partition" "$TEST" >/dev/null
 
+# Widen the gap between the entry array and the first usable block, so the
+# QEMU disk has the same shape as the Deck's. sgdisk writes FirstUsableLBA
+# 34; the Deck's table came from util-linux fdisk, which writes 2048, and
+# that gap is exactly what the "prevent recurrence" operation closes.
+# Nothing here moves a partition: the first one already starts at 2048.
+python3 - "$TEST" <<'PY'
+import struct, sys, zlib
+
+path = sys.argv[1]
+FIRST_USABLE = 2048
+
+with open(path, "r+b") as f:
+    f.seek(0, 2)
+    last_lba = f.tell() // 512 - 1
+    for lba in (1, last_lba):
+        f.seek(lba * 512)
+        block = bytearray(f.read(512))
+        assert block[:8] == b"EFI PART", f"no GPT header at LBA {lba}"
+        size = struct.unpack_from("<I", block, 12)[0]
+        struct.pack_into("<Q", block, 40, FIRST_USABLE)
+        struct.pack_into("<I", block, 16, 0)
+        struct.pack_into("<I", block, 16, zlib.crc32(block[:size]) & 0xFFFFFFFF)
+        f.seek(lba * 512)
+        f.write(block)
+PY
+
 echo "--- test.img table before corruption ---"
 sgdisk -p "$TEST" | sed -n '/^Number/,$p'
 

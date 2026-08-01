@@ -1,14 +1,17 @@
-//! Never write to the disk we booted from.
+//! Which disk did this image come from?
 //!
 //! `LoadedImage->DeviceHandle` is the *partition* the image came from (the
-//! ESP), not the disk. To exclude the whole device we compare device
-//! paths: a candidate disk is off limits if its path is a prefix of the
-//! boot volume's path, since that means the boot volume is a partition of
-//! that disk.
+//! ESP), not the disk. To attribute it to a whole device we compare device
+//! paths: a disk carries the boot volume if its path is a prefix of the
+//! boot volume's path.
 //!
-//! If the boot device cannot be determined at all, [`BootDevice::unknown`]
-//! excludes everything. Refusing to act beats guessing wrong about which
-//! disk is the SD card.
+//! This used to be an exclusion. It is now only a label. The tool is meant
+//! to be copied onto the Deck's own ESP and run from there, so the disk it
+//! booted from is usually the disk that needs repairing — refusing to touch
+//! it would defeat the point. Knowing which one it is still matters, both
+//! because the operator should be told what they are pointing at and
+//! because writing to that disk tears down the filesystem driver serving
+//! the ESP (see `esp::Volume`).
 
 use alloc::boxed::Box;
 use uefi::boot;
@@ -42,11 +45,12 @@ impl BootDevice {
 
     /// True if `disk` is the device we booted from, or carries it.
     ///
-    /// Returns `true` when the boot device is unknown, so an
-    /// undeterminable boot path excludes every disk rather than none.
+    /// An unknown boot device answers `false` for every disk: nothing gets
+    /// the label, and the menu says so rather than claiming a disk is not
+    /// the boot disk when we simply cannot tell.
     pub fn covers(&self, disk: &DevicePath) -> bool {
         let Some(boot) = self.path.as_deref() else {
-            return true;
+            return false;
         };
         is_prefix_of(disk, boot)
     }

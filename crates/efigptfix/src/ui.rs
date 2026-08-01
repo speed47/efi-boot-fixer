@@ -5,13 +5,18 @@
 //! a D-pad, A (CR), B (ESCAPE), View (TAB), and a relative pointer. Every
 //! screen therefore has to fit the display and be navigable with a D-pad.
 //!
+//! `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` gives cursor positioning and sixteen
+//! colours, so these are real full-screen menus with a highlight bar and
+//! nesting, not a scrolling transcript.
+//!
 //! Report *formatting* lives in `gptcore::report`, which has no UEFI
 //! dependency and is tested on the host. This module only paints lines and
 //! reads answers back.
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use uefi::boot;
-use uefi::proto::console::text::{Key, ScanCode};
+use uefi::proto::console::text::{Color, Key, ScanCode};
 use uefi::{print, println, system};
 
 /// What the hardware can actually say.
@@ -96,6 +101,30 @@ pub fn hide_cursor() {
     });
 }
 
+fn set_color(fg: Color, bg: Color) {
+    system::with_stdout(|out| {
+        let _ = out.set_color(fg, bg);
+    });
+}
+
+const NORMAL: (Color, Color) = (Color::LightGray, Color::Black);
+const HIGHLIGHT: (Color, Color) = (Color::Black, Color::LightGray);
+
+/// Clip to the display width.
+///
+/// A device path is routinely longer than 80 columns, and letting it wrap
+/// pushes everything below it off the bottom of a screen that cannot
+/// scroll back.
+fn fit(line: &str, columns: usize) -> String {
+    let limit = columns.saturating_sub(1).max(8);
+    if line.chars().count() <= limit {
+        return line.to_string();
+    }
+    let mut out: String = line.chars().take(limit.saturating_sub(1)).collect();
+    out.push('~');
+    out
+}
+
 fn rule(columns: usize) -> String {
     "-".repeat(columns.saturating_sub(1).min(78))
 }
@@ -103,8 +132,21 @@ fn rule(columns: usize) -> String {
 fn header(title: &str) {
     let (cols, _) = size();
     at(0, 0);
-    println!("{title}");
+    println!("{}", fit(title, cols));
     println!("{}", rule(cols));
+}
+
+/// One selectable line, plus whatever should be shown about it while it is
+/// selected.
+pub struct Item {
+    pub label: String,
+    pub detail: Vec<String>,
+}
+
+impl Item {
+    pub fn with_detail(label: impl Into<String>, detail: Vec<String>) -> Self {
+        Item { label: label.into(), detail }
+    }
 }
 
 /// A scrollable page of text, ending in "continue" or "cancel".
@@ -113,16 +155,17 @@ fn header(title: &str) {
 /// anything longer than the screen has to be navigable rather than simply
 /// printed and lost.
 pub fn page(title: &str, lines: &[String]) -> bool {
-    let (_, rows) = size();
+    let (cols, rows) = size();
     let view = rows.saturating_sub(6).max(4);
     let mut top = 0usize;
     let max_top = lines.len().saturating_sub(view);
+    drain();
 
     loop {
         clear();
         header(title);
         for line in lines.iter().skip(top).take(view) {
-            println!("{line}");
+            println!("{}", fit(line, cols));
         }
         at(0, rows.saturating_sub(2));
         if lines.len() > view {
@@ -149,12 +192,12 @@ pub fn page(title: &str, lines: &[String]) -> bool {
 
 /// A message with a single acknowledgement.
 pub fn message(title: &str, lines: &[String]) {
+    let (cols, rows) = size();
     clear();
     header(title);
     for line in lines {
-        println!("{line}");
+        println!("{}", fit(line, cols));
     }
-    let (_, rows) = size();
     at(0, rows.saturating_sub(2));
     print!("  A = continue");
     drain();
@@ -166,27 +209,63 @@ pub fn message(title: &str, lines: &[String]) {
     }
 }
 
-/// A D-pad menu. Returns the chosen index, or `None` if B was pressed.
-pub fn menu(title: &str, intro: &[String], items: &[&str]) -> Option<usize> {
+/// A D-pad menu with a highlight bar. Returns the chosen index, or `None`
+/// if the operator backed out.
+///
+/// `hint` names what B does here, which differs between the top level
+/// ("exit") and a submenu ("back").
+pub fn menu(title: &str, intro: &[String], items: &[Item], hint: &str) -> Option<usize> {
+    if items.is_empty() {
+        return None;
+    }
     let mut selected = 0usize;
+    let mut top = 0usize;
     drain();
+
     loop {
+        let (cols, rows) = size();
+        let detail_rows = items.iter().map(|i| i.detail.len()).max().unwrap_or(0);
+        // title, rule, intro, blank, [items], blank, detail, blank, hint
+        let overhead = 2 + intro.len() + 1 + detail_rows + 3;
+        let view = rows.saturating_sub(overhead).clamp(1, items.len());
+
+        // Keep the selection inside the window.
+        if selected < top {
+            top = selected;
+        } else if selected >= top + view {
+            top = selected + 1 - view;
+        }
+
         clear();
         header(title);
         for line in intro {
-            println!("{line}");
+            println!("{}", fit(line, cols));
         }
         println!();
-        for (i, item) in items.iter().enumerate() {
+
+        for (i, item) in items.iter().enumerate().skip(top).take(view) {
             if i == selected {
-                println!("   > {item}");
+                set_color(HIGHLIGHT.0, HIGHLIGHT.1);
+                // Pad so the bar spans the row rather than hugging the text.
+                let text = fit(&item.label, cols.saturating_sub(4));
+                let width = cols.saturating_sub(5);
+                println!("  {text:<width$} ");
+                set_color(NORMAL.0, NORMAL.1);
             } else {
-                println!("     {item}");
+                println!("   {}", fit(&item.label, cols.saturating_sub(3)));
             }
         }
-        let (_, rows) = size();
+        if items.len() > view {
+            println!("   ... {} of {}", selected + 1, items.len());
+        }
+
+        println!();
+        for line in &items[selected].detail {
+            println!("{}", fit(line, cols));
+        }
+
         at(0, rows.saturating_sub(2));
-        print!("  D-pad up/down = move    A = choose    B = exit");
+        print!("  D-pad = move    A = choose    {hint}");
 
         match wait() {
             Input::Up => {
@@ -225,7 +304,7 @@ fn step_name(i: Input) -> &'static str {
 ///
 /// Any wrong press resets progress. B cancels outright.
 pub fn confirm_sequence(title: &str, warning: &[String]) -> bool {
-    let (_, rows) = size();
+    let (cols, rows) = size();
     let mut position = 0usize;
     let mut wrong = false;
     drain();
@@ -234,7 +313,7 @@ pub fn confirm_sequence(title: &str, warning: &[String]) -> bool {
         clear();
         header(title);
         for line in warning {
-            println!("{line}");
+            println!("{}", fit(line, cols));
         }
         println!();
         println!("  To authorise this, press in order:");

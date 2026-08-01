@@ -1,13 +1,26 @@
 # efigptfix
 
-A UEFI application that rebuilds a corrupt primary GPT from the backup GPT,
-targeting a Steam Deck that dual-boots Windows and SteamOS.
+A UEFI application for inspecting, repairing, backing up and restoring GUID
+partition tables, targeting a Steam Deck that dual-boots Windows and SteamOS.
 
 It runs from the ESP under the firmware's "boot from file" menu, which works
 even with the primary table destroyed because the Deck firmware falls back to
 the backup GPT for partition enumeration. The Linux kernel does not fall back
 without the `gpt` cmdline option, which is why `steamcl.efi` loads and then
 dies at `pivot_root`.
+
+Five operations, all driven with the D-pad:
+
+| Operation | Writes | What it does |
+| --- | --- | --- |
+| Check GPT | never | reads both tables and reports every defect |
+| Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
+| Back up both GPTs | ESP file | snapshots both tables to `\EFIGPTFIX\` on the ESP |
+| Restore GPTs | disk | writes a saved snapshot back |
+| Prevent recurrence | disk | closes the `FirstUsableLBA` gap (see below) |
+
+Everything that touches a disk is gated behind a five-press confirmation
+sequence and shows exactly which LBAs it will write first.
 
 ## Layout
 
@@ -59,16 +72,29 @@ primary, because it transparently falls back to the backup and reports on the
 table it loaded. The harness therefore also requires the absence of any
 `Caution`/`Warning`/`ERROR` text before calling a disk healthy.
 
-Under QEMU + OVMF, with two NVMe disks so the boot-device exclusion is
-genuinely exercised (the app boots from one and must repair the other):
+Under QEMU + OVMF, with two NVMe disks: `boot.img` carries the ESP the image
+is launched from and appears as disk 1, `test.img` is a SteamOS-shaped disk
+and appears as disk 2.
 
 ```sh
-./tools/mkimages.sh /tmp/imgs crates/efigptfix/target/x86_64-unknown-uefi/release/efigptfix.efi bad-mbr
-./tools/run-qemu.sh /tmp/imgs yes     # 'yes' types the confirmation
-sgdisk -v /tmp/imgs/test.img          # verify the result independently
+make images CORRUPTION=bad-mbr
+./tools/run-qemu.sh build/images repair   # or check, backup, restore, prevent, menu
+sgdisk -v build/images/test.img           # verify the result independently
 ```
 
+`run-qemu.sh` drives the menus over the serial console, where OVMF's
+`TerminalDxe` turns `ESC[A`..`ESC[D` into D-pad scan codes, CR into A and a
+lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
+exercise the real input path rather than a keyboard-only one. `repair-boot`
+targets disk 1, which is how the write-to-your-own-boot-disk case gets
+tested.
+
 Corruption modes: `zero-header`, `zero-all`, `bad-crc`, `bad-mbr`, `none`.
+
+`mkimages.sh` also rewrites `FirstUsableLBA` to 2048 in both headers,
+resealing the CRCs, so the QEMU disk has the same shape as the Deck's:
+sgdisk writes 34, and the gap is the whole subject of the prevention
+operation.
 
 ### OVMF repairs the primary GPT before your application runs
 
@@ -105,18 +131,17 @@ edited, so its tag always points at the current `main`. Both the release and
 its tag are removed with `|| true`, since the first run has neither and a
 cancelled run can leave a tag without a release.
 
-The QEMU harness is not in CI: driving the confirmation prompt over a serial
-console depends on boot timing, which is exactly the kind of thing that turns
-into a flaky job. Run `make qemu-confirm` locally instead.
+The QEMU harness is not in CI: driving the menus over a serial console
+depends on boot timing, which is exactly the kind of thing that turns into a
+flaky job. Run `make qemu SCRIPT=repair` locally instead.
 
 ## Input: the Deck has no keyboard
 
-The confirmation gate currently asks the operator to type `REPAIR`. On a
-Steam Deck that is impossible: there is no built-in keyboard, Bluetooth is
-not available in the firmware environment, and few people have a USB-C
-keyboard to hand. The buttons, sticks, trackpads and touchscreen are the
-only realistic inputs, and how the firmware exposes them is not something
-to guess at.
+Everything about the interface follows from one constraint: there is no
+built-in keyboard, Bluetooth is not available in the firmware environment,
+and few people have a USB-C keyboard to hand. The buttons, sticks, trackpads
+and touchscreen are the only realistic inputs, and how the firmware exposes
+them is not something to guess at.
 
 `efiprobe.efi` answers that empirically. It enumerates the input protocols
 the firmware publishes and logs every event it sees:
@@ -201,20 +226,51 @@ must be off, as the binary is unsigned.
 
 ### Using it
 
-A D-pad menu, because the hardware has no keyboard:
+A full-screen D-pad menu with a highlight bar, because the hardware has no
+keyboard. `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` provides cursor positioning and
+sixteen colours, so no extra dependencies are involved. The selected item's
+description appears below the list, which doubles as inline help:
 
 ```
 efigptfix
 ------------------------------------------------------------------
   version 0.1.0
-  booted from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
-  that device and the disk carrying it are excluded
+  launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
-   > Scan and repair a corrupt primary GPT
-     Prevent recurrence (close the FirstUsableLBA gap)
-     Exit
-  D-pad up/down = move    A = choose    B = exit
+  Check GPT                                          <- highlighted
+   Repair primary GPT from the backup
+   Back up both GPTs to the ESP
+   Restore GPTs from a saved backup
+   Prevent recurrence (close the FirstUsableLBA gap)
+   Exit
+
+  Read both tables and report what is wrong.
+  Writes nothing.
+  D-pad = move    A = choose    B = exit
 ```
+
+Choosing an operation opens a disk picker, which is where the identifying
+detail lives:
+
+```
+Repair primary GPT
+------------------------------------------------------------------
+  Choose a disk. Removable media is not listed.
+  [boot] carries the volume this program came from.
+
+   Disk 1    96.0 MiB  [boot]
+  Disk 2   931.5 GiB  [SteamOS]                      <- highlighted
+
+  PciRoot(0x0)/Pci(0x3,0x0)/NVMe(0x1,...)
+  1953525168 blocks x 512 B
+  GPT: primary GPT is repairable from the backup
+```
+
+`[SteamOS]` is inferred from the table itself: an ESP plus either two Linux
+root partitions, two `/var` partitions, or two names forming an `-A`/`-B`
+pair. That structure is what makes a SteamOS install recognisable at a
+glance and it survives any single partition being renamed. A drive model is
+shown when the firmware will give one — see "Identifying drives" below.
 
 Reports paginate with the D-pad, since a Deck cannot scroll back. Writes
 are authorised by a fixed sequence rather than a held button:
@@ -240,18 +296,36 @@ first, for the same reason.
 Applied in order, before anything is written:
 
 - whole disks only (`Media->LogicalPartition == FALSE`)
-- never removable media, never read-only media
-- never the device it booted from, identified by comparing the candidate
-  disk's device path against the boot volume's as a prefix — so the SD card
-  and USB sticks are excluded, and so is the disk hosting its own ESP
-- **nothing at all** if the boot device cannot be identified
+- never removable media, never read-only media — so the SD card and USB
+  sticks never appear as repair targets
 - never a disk with a hybrid MBR (some legacy OS depends on that view)
 - never a backup table that fails structural checks (overlaps, ranges outside
   the usable area, inverted extents) or whose entry array would collide with
   the first usable LBA
 - never a table without an `esp` and a `rootfs-A`, which is the stale-backup
   guard
+- never a saved snapshot whose block size or disk size does not match
 - never without the operator entering the confirmation sequence
+
+### Not excluding the boot disk
+
+Earlier versions refused to write to the disk this image booted from, and
+refused to write anywhere at all if that disk could not be identified. That
+was backwards. The whole point is to live on the Deck's own ESP so a broken
+partition table can be fixed without a USB stick or a keyboard — which makes
+the boot disk the disk that needs repairing. It is now labelled `[boot]` in
+the picker and otherwise treated like any other.
+
+One real consequence: `OpenProtocolAttributes::Exclusive` on a whole disk
+disconnects the partition and filesystem drivers serving it, including the
+one serving the ESP this program was loaded from. The running image survives
+(it is already in memory), but ESP access afterwards may not, so file
+operations happen before block writes and a warning appears if you go back to
+the backup or restore screens afterwards. If the firmware refuses the
+exclusive open entirely, the write falls back to a shared open rather than
+failing — being unable to repair the machine's only drive would be the worse
+outcome — and the result screen says which happened. This path is exercised
+under OVMF by `run-qemu.sh build/images repair-boot`.
 
 The repair rewrites `MyLBA`, `AlternateLBA` and `PartitionEntryLBA` field by
 field rather than copying the backup block, and recomputes both CRCs. The
@@ -264,6 +338,57 @@ implementation is the fallback, and the app says which one it used.
 
 Windows partitions alongside SteamOS are expected and are not treated as
 suspicious.
+
+## Backup and restore
+
+Snapshots go to `\EFIGPTFIX\gpt-YYYYMMDD-HHMMSS.bin` on the ESP the program
+was launched from, timestamped from `EFI_RUNTIME_SERVICES.GetTime`. A name is
+never reused: a collision gets a `-2` suffix rather than replacing anything.
+
+The file is not a `dd` of the first 34 sectors. Each structure is stored as a
+separate chunk with a role — protective MBR, primary entry array, primary
+header, backup entry array, backup header — alongside the geometry it came
+from, the disk GUID, and the health of the table at the time. That buys three
+things a raw dump does not:
+
+- restore refuses a disk whose block size or block count differs, instead of
+  writing a table that describes a different device;
+- the operator is told, before authorising, whether the snapshot was taken
+  from a healthy table — restoring a corrupt one is a real way to make things
+  worse, and the screen says so in as many words;
+- the write order puts entry arrays on the medium and flushes them before the
+  headers that name them, exactly as a repair does.
+
+Everything is little-endian and ends with a CRC32 over the whole file, so a
+truncated or bit-rotted snapshot is rejected outright rather than
+half-restored. Files that fail to decode are listed as rejected and never
+offered as a choice.
+
+The checksum is written by `gBS->CalculateCrc32` under firmware and verified
+by `gptcore`'s own implementation on the host; a snapshot taken under OVMF
+was confirmed byte-for-byte against `zlib.crc32`, so archives are portable
+between the two.
+
+A caveat the tool states on screen: when the ESP is on the disk being backed
+up, this is a convenience copy, not an off-device backup.
+
+## Identifying drives
+
+There is no protocol that hands over "vendor and model".
+`EFI_DISK_INFO_PROTOCOL` exposes the raw identification payload of whichever
+transport the drive is on, and what that contains differs per transport:
+
+| Transport | Call | Payload |
+| --- | --- | --- |
+| SCSI, USB mass storage | `Inquiry()` | SCSI INQUIRY — vendor at byte 8, product at 16 |
+| ATA, AHCI | `Identify()` | ATA IDENTIFY DEVICE — model at byte 54, byte-swapped per word |
+| NVMe | `Identify()` | *namespace* data, which carries no model string; `Inquiry()` returns `EFI_NOT_FOUND` |
+
+So on the Deck's internal NVMe drive there is nothing to show, and the picker
+falls back to capacity, flags and device path. The extraction is best-effort
+throughout and returns nothing rather than guessing: a wrong drive name in a
+list of disks you are about to overwrite is worse than no name at all. Any
+payload that does not decode to printable ASCII is discarded.
 
 ## The expected layout, and why matching is by name
 
@@ -320,11 +445,20 @@ gives `34 - 32 = 2`, which is correct. It only goes wrong when there is a
 gap between the entry array and the first usable block — and this table was
 written by util-linux fdisk, which leaves exactly such a gap (sgdisk warns
 about it). That is a plausible reason the corruption recurs here and not on
-most machines, and it suggests a possible permanent fix: setting
-`FirstUsableLBA` to 34 would make the buggy arithmetic produce the right
-answer. No partition moves, since the first one starts at 2048 either way.
-gdisk can do it from the experts' menu with `j`. Untested — a hypothesis
-that fits the arithmetic exactly, not a diagnosis.
+most machines, and it suggests a permanent fix: setting `FirstUsableLBA` to
+34 would make the buggy arithmetic produce the right answer. No partition
+moves, since the first one starts at 2048 either way.
+
+That is the "prevent recurrence" operation. It rewrites only the two header
+blocks, and refuses unless both tables are healthy, the primary array is at
+LBA 2, the headers agree on `FirstUsableLBA`, and no partition starts below
+the proposed value. It is presented on screen as a **theory that fits the
+observed numbers exactly, not a diagnosis**, with its own separate
+confirmation, because unlike a repair it modifies a healthy table on a
+hypothesis. It is reversible: set the value back. (The user confirmed the
+corruption followed a Windows 24H2 → 25H2 upgrade, which is reportedly
+well-known behaviour; that is consistent with the arithmetic but does not
+prove the mechanism.)
 
 ## Testing against real hardware
 

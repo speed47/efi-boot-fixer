@@ -141,6 +141,16 @@ pub struct Analysis {
 }
 
 impl Analysis {
+    /// Whichever table is worth believing, for purposes that only want to
+    /// look at the partitions — identifying the disk in a picker, say.
+    /// Prefers the primary, falls back to the backup, and settles for a
+    /// damaged primary rather than nothing.
+    pub fn best_view(&self) -> Option<&TableView> {
+        let primary = self.primary.as_ref().ok();
+        let backup = self.backup.as_ref().ok();
+        primary.filter(|t| t.is_valid()).or(backup.filter(|t| t.is_valid())).or(primary).or(backup)
+    }
+
     /// The table a repair would be built from.
     pub fn source(&self) -> Option<&TableView> {
         match self.verdict {

@@ -32,7 +32,7 @@ ESP        ?= /boot/efi
 .DEFAULT_GOAL := help
 
 .PHONY: help build debug probe-esp test test-unit test-integration fmt fmt-check \
-        clippy check size dist images qemu qemu-confirm verify-image \
+        clippy check size dist images qemu qemu-repair verify-image \
         install clean distclean
 
 help: ## Show this help
@@ -40,7 +40,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Variables: CORRUPTION=$(CORRUPTION)  ESP=$(ESP)  IMAGES=$(IMAGES)"
+	@echo "Variables: CORRUPTION=$(CORRUPTION)  SCRIPT=$(SCRIPT)  ESP=$(ESP)  IMAGES=$(IMAGES)"
 
 # ------------------------------------------------------------------ build
 
@@ -99,11 +99,15 @@ check: fmt-check clippy test build ## Everything CI runs
 images: build ## Build the QEMU boot and test disk images
 	./tools/mkimages.sh $(IMAGES) $(EFI) $(CORRUPTION)
 
-qemu: images ## Boot under OVMF, declining the repair
-	./tools/run-qemu.sh $(IMAGES) no
+# SCRIPT names a menu walk in tools/run-qemu.sh: none, menu, check, repair,
+# repair-boot, repair-cancel, backup, restore, prevent.
+SCRIPT ?= menu
 
-qemu-confirm: images ## Boot under OVMF and type the confirmation
-	./tools/run-qemu.sh $(IMAGES) yes
+qemu: images ## Boot under OVMF and drive the menus (SCRIPT=...)
+	./tools/run-qemu.sh $(IMAGES) $(SCRIPT)
+
+qemu-repair: images ## Boot under OVMF and repair the test disk
+	./tools/run-qemu.sh $(IMAGES) repair
 
 verify-image: ## Ask sgdisk what it thinks of the test disk
 	@sgdisk -v $(IMAGES)/test.img 2>&1 \

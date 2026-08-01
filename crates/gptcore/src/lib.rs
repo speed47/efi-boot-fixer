@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod backup;
 pub mod crc;
 pub mod disk;
 pub mod entry;
