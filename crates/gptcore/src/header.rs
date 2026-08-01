@@ -60,18 +60,57 @@ pub struct GptHeader {
 /// short-circuited so the report can show the operator the full picture.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Defect {
-    BadSignature { found: u64 },
-    BadRevision { found: u32 },
-    HeaderSizeOutOfRange { found: u32, block_size: u32 },
-    ReservedNonZero { found: u32 },
-    HeaderCrcMismatch { stored: u32, computed: u32 },
-    MyLbaMismatch { stored: u64, read_from: u64 },
-    AlternateLbaOutOfRange { stored: u64, last_block: u64 },
-    EntrySizeInvalid { found: u32 },
-    EntryCountOutOfRange { found: u32 },
-    EntryArrayCrcMismatch { stored: u32, computed: u32 },
-    UsableRangeInvalid { first: u64, last: u64, last_block: u64 },
-    EntryArrayOutOfRange { entry_lba: u64, blocks: u64, last_block: u64 },
+    BadSignature {
+        found: u64,
+    },
+    BadRevision {
+        found: u32,
+    },
+    HeaderSizeOutOfRange {
+        found: u32,
+        block_size: u32,
+    },
+    ReservedNonZero {
+        found: u32,
+    },
+    HeaderCrcMismatch {
+        stored: u32,
+        computed: u32,
+    },
+    MyLbaMismatch {
+        stored: u64,
+        read_from: u64,
+    },
+    AlternateLbaOutOfRange {
+        stored: u64,
+        last_block: u64,
+    },
+    EntrySizeInvalid {
+        found: u32,
+    },
+    EntryCountOutOfRange {
+        found: u32,
+    },
+    EntryArrayCrcMismatch {
+        stored: u32,
+        computed: u32,
+    },
+    UsableRangeInvalid {
+        first: u64,
+        last: u64,
+        last_block: u64,
+    },
+    EntryArrayOutOfRange {
+        entry_lba: u64,
+        blocks: u64,
+        last_block: u64,
+    },
+    /// The primary entry array must start at LBA 2. Observed in the wild
+    /// at 2016 (FirstUsableLBA - 32) with a correctly recomputed header
+    /// CRC, so nothing but this check and the array CRC catches it.
+    PrimaryEntryLbaNotTwo {
+        found: u64,
+    },
 }
 
 impl fmt::Display for Defect {
@@ -119,6 +158,9 @@ impl fmt::Display for Defect {
                 "entry array at LBA {} spanning {} blocks does not fit before block {}",
                 entry_lba, blocks, last_block
             ),
+            Defect::PrimaryEntryLbaNotTwo { found } => {
+                write!(f, "primary PartitionEntryLBA is {}, must be 2", found)
+            }
         }
     }
 }
@@ -223,6 +265,11 @@ impl GptHeader {
                 last: self.last_usable_lba,
                 last_block,
             });
+        }
+        // Only the primary is pinned to LBA 2; the backup's array sits
+        // just below its header at the end of the disk.
+        if read_from == 1 && self.partition_entry_lba != 2 {
+            out.push(Defect::PrimaryEntryLbaNotTwo { found: self.partition_entry_lba });
         }
         if let Some(blocks) = self.entry_array_blocks(block_size) {
             let end = self.partition_entry_lba.checked_add(blocks);

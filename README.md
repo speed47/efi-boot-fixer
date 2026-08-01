@@ -172,6 +172,46 @@ thing that goes stale across an OS release, and being strict about it turns a
 recovery tool into a brick. A stale or foreign backup is still caught,
 because its names will not line up either.
 
+## What the corruption actually is
+
+Captured from the affected Deck, the damage is two bytes in LBA 1:
+
+```
+PartitionEntryLBA:  2  ->  2016
+HeaderCRC32:               recomputed so the header still verifies
+```
+
+Nothing else differs. The protective MBR, the entire entry array at LBA
+2-33, and the backup GPT are all untouched — `gptbackup` and
+`gptbackupfixed` are byte-identical, so gdisk's repair only rewrote the
+primary header.
+
+Two things follow, and they shaped the code:
+
+**The header CRC is valid.** Whatever wrote this recomputed it correctly.
+A GPT checker that validates only the header CRC — which is the obvious
+thing to write — reports this disk as perfectly healthy. What catches it is
+the partition-entry-array CRC (the array is read from 2016, finds nothing,
+and fails to match) and an explicit check that a primary header points at
+LBA 2. `tests/deck_corrupt.rs` asserts both, and asserts the *absence* of a
+header CRC defect so nobody later "simplifies" the check away.
+
+**2016 is 2048 - 32.** The entry array is 32 sectors, and `FirstUsableLBA`
+on this disk is 2048. So the writer computed
+`PartitionEntryLBA = FirstUsableLBA - entry_array_sectors`, i.e. it placed
+the array immediately below the first usable block instead of at LBA 2.
+
+On a conventionally-formatted disk `FirstUsableLBA` is 34, and that formula
+gives `34 - 32 = 2`, which is correct. It only goes wrong when there is a
+gap between the entry array and the first usable block — and this table was
+written by util-linux fdisk, which leaves exactly such a gap (sgdisk warns
+about it). That is a plausible reason the corruption recurs here and not on
+most machines, and it suggests a possible permanent fix: setting
+`FirstUsableLBA` to 34 would make the buggy arithmetic produce the right
+answer. No partition moves, since the first one starts at 2048 either way.
+gdisk can do it from the experts' menu with `j`. Untested — a hypothesis
+that fits the arithmetic exactly, not a diagnosis.
+
 ## Testing against real hardware
 
 `crates/gptcore/tests/data/deck/` holds real sectors from a dual-booting

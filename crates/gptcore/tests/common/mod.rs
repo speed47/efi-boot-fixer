@@ -239,16 +239,36 @@ fn blank(tag: &str) -> Image {
 /// CRCs resealed. Type GUIDs, names and extents are untouched, because
 /// those are what the layout checks actually key on.
 pub fn deck_image() -> Image {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/deck");
-    let head = std::fs::read(dir.join("head.bin")).expect("tests/data/deck/head.bin");
-    let tail = std::fs::read(dir.join("tail.bin")).expect("tests/data/deck/tail.bin");
+    image_from_dumps("tests/data/deck", "head.bin", "deck")
+}
+
+/// The disk in the state it was actually found in: the primary header has
+/// a valid CRC but points its entry array at LBA 2016 instead of 2.
+pub fn deck_corrupt_image() -> Image {
+    image_from_dumps("tests/data/deck-corrupt", "head-broken.bin", "deckbad")
+}
+
+/// The first 34 sectors as gdisk wrote them after repairing that disk, for
+/// comparing our output against an independent implementation's.
+pub fn deck_expected_fixed_head() -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/deck-corrupt/head-fixed.bin"),
+    )
+    .expect("tests/data/deck-corrupt/head-fixed.bin")
+}
+
+fn image_from_dumps(subdir: &str, head_name: &str, tag: &str) -> Image {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(subdir);
+    let head =
+        std::fs::read(dir.join(head_name)).unwrap_or_else(|_| panic!("{subdir}/{head_name}"));
+    let tail = std::fs::read(dir.join("tail.bin")).unwrap_or_else(|_| panic!("{subdir}/tail.bin"));
     let sectors: u64 = std::fs::read_to_string(dir.join("sectors.txt"))
-        .expect("tests/data/deck/sectors.txt")
+        .unwrap_or_else(|_| panic!("{subdir}/sectors.txt"))
         .trim()
         .parse()
         .expect("sector count");
 
-    let path = unique_path("deck");
+    let path = unique_path(tag);
     let f = File::create(&path).expect("create image");
     f.set_len(sectors * BLOCK_SIZE as u64).expect("sparse resize");
     f.write_all_at(&head, 0).expect("write head");
