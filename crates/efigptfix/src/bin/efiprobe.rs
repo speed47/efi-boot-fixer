@@ -83,7 +83,7 @@ impl AbsolutePointer {
 
 const TICK_US: usize = 5_000; // 5 ms
 const TICKS_PER_SEC: u32 = (1_000_000 / TICK_US) as u32;
-const STEP_SECONDS: u32 = 4;
+const STEP_SECONDS: u32 = 6;
 const FREEFORM_SECONDS: u32 = 20;
 
 /// The controls to walk through, in order.

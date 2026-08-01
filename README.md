@@ -131,8 +131,9 @@ Everything goes to `efiprobe.log` **on the ESP it was launched from**,
 flushed after every line, as well as to the screen. The screen scrolls and
 cannot be copied off the device; the file can be read from Linux afterwards,
 and cutting the power keeps whatever was logged up to that moment. The probe
-exits on its own after 180 seconds, because without a keyboard there may be
-no way to tell it to stop.
+walks 30 guided steps at 6 seconds each plus a 20-second free-form phase,
+then exits on its own after roughly 200 seconds, because without a keyboard
+there may be no way to tell it to stop.
 
 ```sh
 make probe-esp ESP=/path/to/esp     # installs EFI/efiprobe.efi
