@@ -1,89 +1,284 @@
-//! Console output and the confirmation gate.
+//! Screen handling and the operator's side of the conversation.
 //!
-//! All report *formatting* lives in `gptcore::report`, which has no UEFI
-//! dependency and is tested on the host. This module only puts the lines on
-//! the screen and reads the operator's answer back.
+//! Built for a Steam Deck in firmware, which means: no keyboard, no
+//! scrollback, and the measured input set from `docs/efiprobe-deck.log` —
+//! a D-pad, A (CR), B (ESCAPE), View (TAB), and a relative pointer. Every
+//! screen therefore has to fit the display and be navigable with a D-pad.
+//!
+//! Report *formatting* lives in `gptcore::report`, which has no UEFI
+//! dependency and is tested on the host. This module only paints lines and
+//! reads answers back.
 
 use alloc::string::String;
-use gptcore::repair::{Analysis, RepairPlan};
-use gptcore::report;
 use uefi::boot;
 use uefi::proto::console::text::{Key, ScanCode};
 use uefi::{print, println, system};
 
-pub fn banner() {
-    println!(
-        "efigptfix {} - repair a corrupt primary GPT from the backup",
-        env!("CARGO_PKG_VERSION")
-    );
-    println!();
+/// What the hardware can actually say.
+///
+/// Note two collisions measured on the Deck: QAM is indistinguishable from
+/// A, and the burger button from B. Neither can carry a separate meaning.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Input {
+    Up,
+    Down,
+    Left,
+    Right,
+    /// A, or QAM.
+    Select,
+    /// B, or the burger button.
+    Cancel,
+    /// The View button.
+    Tab,
 }
 
-fn print_lines(lines: &[String]) {
-    for line in lines {
-        println!("{line}");
+fn poll() -> Option<Input> {
+    let key = system::with_stdin(|stdin| stdin.read_key().ok().flatten())?;
+    match key {
+        Key::Special(ScanCode::UP) => Some(Input::Up),
+        Key::Special(ScanCode::DOWN) => Some(Input::Down),
+        Key::Special(ScanCode::LEFT) => Some(Input::Left),
+        Key::Special(ScanCode::RIGHT) => Some(Input::Right),
+        Key::Special(ScanCode::ESCAPE) => Some(Input::Cancel),
+        Key::Printable(c) => match char::from(c) {
+            '\r' | '\n' => Some(Input::Select),
+            '\t' => Some(Input::Tab),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
-/// The full per-disk report: health, verdict, and if applicable the
-/// proposed table and the ordered write plan.
-pub fn print_report(analysis: &Analysis, plan: Option<&RepairPlan>) {
-    print_lines(&report::render(analysis, plan));
-}
-
-fn next_key() -> Option<Key> {
-    system::with_stdin(|stdin| stdin.read_key().ok().flatten())
-}
-
-/// Block until the operator types `word` exactly, or presses Escape.
-///
-/// NOTE: this requires a keyboard, which a Steam Deck does not have in the
-/// firmware environment. Pending the results of the input probe, this is
-/// the wrong gate for the target hardware; see `bin/efiprobe.rs`.
-pub fn confirm(word: &str) -> bool {
-    print!("  Type {word} then Enter to write, or Esc to skip: ");
-    let mut typed = String::new();
+/// Block until the operator does something.
+pub fn wait() -> Input {
     loop {
-        let Some(key) = next_key() else {
-            boot::stall(10_000);
-            continue;
-        };
-        match key {
-            Key::Special(ScanCode::ESCAPE) => {
-                println!();
-                return false;
-            }
-            Key::Printable(c) => match char::from(c) {
-                '\r' | '\n' => {
-                    println!();
-                    return typed == word;
-                }
-                '\u{8}' => {
-                    if typed.pop().is_some() {
-                        print!("\u{8} \u{8}");
-                    }
-                }
-                ch => {
-                    typed.push(ch);
-                    print!("{ch}");
-                }
-            },
+        if let Some(i) = poll() {
+            return i;
+        }
+        boot::stall(10_000);
+    }
+}
+
+/// Discard anything already queued.
+///
+/// Keys auto-repeat on this hardware (~10/s while held) and the firmware
+/// buffers them, so a burst can outlive the screen that provoked it. Any
+/// screen that asks a question worth getting right drains first.
+pub fn drain() {
+    while poll().is_some() {}
+    // A held button keeps producing events after the buffer empties; give
+    // it a moment and sweep again.
+    boot::stall(150_000);
+    while poll().is_some() {}
+}
+
+pub fn size() -> (usize, usize) {
+    system::with_stdout(|out| {
+        out.current_mode().ok().flatten().map(|m| (m.columns(), m.rows())).unwrap_or((80, 25))
+    })
+}
+
+pub fn clear() {
+    system::with_stdout(|out| {
+        let _ = out.clear();
+    });
+}
+
+fn at(column: usize, row: usize) {
+    system::with_stdout(|out| {
+        let _ = out.set_cursor_position(column, row);
+    });
+}
+
+pub fn hide_cursor() {
+    system::with_stdout(|out| {
+        let _ = out.enable_cursor(false);
+    });
+}
+
+fn rule(columns: usize) -> String {
+    "-".repeat(columns.saturating_sub(1).min(78))
+}
+
+fn header(title: &str) {
+    let (cols, _) = size();
+    at(0, 0);
+    println!("{title}");
+    println!("{}", rule(cols));
+}
+
+/// A scrollable page of text, ending in "continue" or "cancel".
+///
+/// Returns false if the operator backed out. A Deck cannot scroll back, so
+/// anything longer than the screen has to be navigable rather than simply
+/// printed and lost.
+pub fn page(title: &str, lines: &[String]) -> bool {
+    let (_, rows) = size();
+    let view = rows.saturating_sub(6).max(4);
+    let mut top = 0usize;
+    let max_top = lines.len().saturating_sub(view);
+
+    loop {
+        clear();
+        header(title);
+        for line in lines.iter().skip(top).take(view) {
+            println!("{line}");
+        }
+        at(0, rows.saturating_sub(2));
+        if lines.len() > view {
+            println!(
+                "  lines {}-{} of {}   D-pad up/down to scroll",
+                top + 1,
+                (top + view).min(lines.len()),
+                lines.len()
+            );
+        }
+        print!("  A = continue    B = back");
+
+        match wait() {
+            Input::Up => top = top.saturating_sub(1),
+            Input::Down => top = (top + 1).min(max_top),
+            Input::Left => top = top.saturating_sub(view),
+            Input::Right => top = (top + view).min(max_top),
+            Input::Select => return true,
+            Input::Cancel => return false,
+            Input::Tab => {}
+        }
+    }
+}
+
+/// A message with a single acknowledgement.
+pub fn message(title: &str, lines: &[String]) {
+    clear();
+    header(title);
+    for line in lines {
+        println!("{line}");
+    }
+    let (_, rows) = size();
+    at(0, rows.saturating_sub(2));
+    print!("  A = continue");
+    drain();
+    loop {
+        match wait() {
+            Input::Select | Input::Cancel => return,
             _ => {}
         }
     }
 }
 
-/// Block until Enter or Escape, discarding anything else.
-pub fn wait_for_enter() {
+/// A D-pad menu. Returns the chosen index, or `None` if B was pressed.
+pub fn menu(title: &str, intro: &[String], items: &[&str]) -> Option<usize> {
+    let mut selected = 0usize;
+    drain();
     loop {
-        let Some(key) = next_key() else {
-            boot::stall(10_000);
-            continue;
-        };
-        match key {
-            Key::Special(ScanCode::ESCAPE) => return,
-            Key::Printable(c) if matches!(char::from(c), '\r' | '\n') => return,
+        clear();
+        header(title);
+        for line in intro {
+            println!("{line}");
+        }
+        println!();
+        for (i, item) in items.iter().enumerate() {
+            if i == selected {
+                println!("   > {item}");
+            } else {
+                println!("     {item}");
+            }
+        }
+        let (_, rows) = size();
+        at(0, rows.saturating_sub(2));
+        print!("  D-pad up/down = move    A = choose    B = exit");
+
+        match wait() {
+            Input::Up => {
+                selected = if selected == 0 { items.len() - 1 } else { selected - 1 };
+            }
+            Input::Down => selected = (selected + 1) % items.len(),
+            Input::Select => return Some(selected),
+            Input::Cancel => return None,
             _ => {}
+        }
+    }
+}
+
+/// The sequence that authorises a write.
+///
+/// Chosen over hold-to-confirm deliberately: it depends only on discrete
+/// presses, so it does not rely on the firmware's auto-repeat behaviour,
+/// and a buffered burst of repeats cannot walk through it. Five specific
+/// presses in order is not something a thumb does by accident.
+pub const CONFIRM_SEQUENCE: [Input; 5] =
+    [Input::Left, Input::Right, Input::Left, Input::Right, Input::Select];
+
+fn step_name(i: Input) -> &'static str {
+    match i {
+        Input::Up => "UP",
+        Input::Down => "DOWN",
+        Input::Left => "LEFT",
+        Input::Right => "RIGHT",
+        Input::Select => "A",
+        Input::Cancel => "B",
+        Input::Tab => "VIEW",
+    }
+}
+
+/// Require [`CONFIRM_SEQUENCE`] before a destructive write.
+///
+/// Any wrong press resets progress. B cancels outright.
+pub fn confirm_sequence(title: &str, warning: &[String]) -> bool {
+    let (_, rows) = size();
+    let mut position = 0usize;
+    let mut wrong = false;
+    drain();
+
+    loop {
+        clear();
+        header(title);
+        for line in warning {
+            println!("{line}");
+        }
+        println!();
+        println!("  To authorise this, press in order:");
+        println!();
+
+        let mut names = String::from("     ");
+        let mut marks = String::from("     ");
+        for (i, step) in CONFIRM_SEQUENCE.iter().enumerate() {
+            let name = step_name(*step);
+            names.push_str(name);
+            names.push_str("  ");
+            let mark = if i < position { "[x]" } else { "[ ]" };
+            marks.push_str(mark);
+            for _ in 0..name.len().saturating_sub(1) {
+                marks.push(' ');
+            }
+        }
+        println!("{names}");
+        println!("{marks}");
+        println!();
+        if wrong {
+            println!("  wrong button - sequence reset");
+        } else if position > 0 {
+            println!("  next: {}", step_name(CONFIRM_SEQUENCE[position]));
+        }
+
+        at(0, rows.saturating_sub(2));
+        print!("  B = cancel, nothing is written");
+
+        let input = wait();
+        if input == Input::Cancel {
+            return false;
+        }
+        if input == CONFIRM_SEQUENCE[position] {
+            wrong = false;
+            position += 1;
+            if position == CONFIRM_SEQUENCE.len() {
+                return true;
+            }
+        } else {
+            // Restarting from a correct first press is the common case
+            // after a fumble; do not make them lift off and start again.
+            wrong = true;
+            position = usize::from(input == CONFIRM_SEQUENCE[0]);
         }
     }
 }

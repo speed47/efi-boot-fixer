@@ -199,6 +199,42 @@ cp efigptfix.efi /esp/EFI/efigptfix.efi
 Then boot menu -> "Boot from file" -> the ESP -> `efigptfix.efi`. Secure Boot
 must be off, as the binary is unsigned.
 
+### Using it
+
+A D-pad menu, because the hardware has no keyboard:
+
+```
+efigptfix
+------------------------------------------------------------------
+  version 0.1.0
+  booted from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
+  that device and the disk carrying it are excluded
+
+   > Scan and repair a corrupt primary GPT
+     Prevent recurrence (close the FirstUsableLBA gap)
+     Exit
+  D-pad up/down = move    A = choose    B = exit
+```
+
+Reports paginate with the D-pad, since a Deck cannot scroll back. Writes
+are authorised by a fixed sequence rather than a held button:
+
+```
+  To authorise this, press in order:
+
+     LEFT  RIGHT  LEFT  RIGHT  A
+     [x]   [x]    [ ]   [ ]    [ ]
+
+  next: LEFT
+  B = cancel, nothing is written
+```
+
+Any wrong press resets it; B cancels outright. A sequence was chosen over
+hold-to-confirm because it depends only on discrete presses: it does not
+rely on the firmware's auto-repeat, and a buffered burst of repeats cannot
+walk through it. Every screen that asks a question drains queued input
+first, for the same reason.
+
 ## What it will and will not touch
 
 Applied in order, before anything is written:
@@ -215,7 +251,7 @@ Applied in order, before anything is written:
   the first usable LBA
 - never a table without an `esp` and a `rootfs-A`, which is the stale-backup
   guard
-- never without the operator typing `REPAIR` at the prompt
+- never without the operator entering the confirmation sequence
 
 The repair rewrites `MyLBA`, `AlternateLBA` and `PartitionEntryLBA` field by
 field rather than copying the backup block, and recomputes both CRCs. The

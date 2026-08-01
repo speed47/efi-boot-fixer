@@ -125,3 +125,77 @@ fn every_type_guid_on_the_real_disk_is_known() {
     }
     assert!(unknown.is_empty(), "unnamed partition types: {unknown:?}");
 }
+
+// ---------------------------------------------------------------- prevention
+
+/// The real disk has FirstUsableLBA 2048 with the entry array ending at 33,
+/// which is exactly the gap the Windows corruption's arithmetic trips over.
+#[test]
+fn the_real_deck_is_a_candidate_for_closing_the_gap() {
+    let img = deck_image();
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(
+        gptcore::prevent::assess(&analysis),
+        gptcore::prevent::Verdict::Applicable { current: 2048, proposed: 34 }
+    );
+}
+
+#[test]
+fn closing_the_gap_leaves_the_disk_healthy_and_the_table_unchanged() {
+    let img = deck_image();
+    let before = img.print();
+
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    let plan = gptcore::prevent::plan(&analysis, &CRC).expect("a plan");
+
+    // Only the two header blocks; the entry arrays are already correct.
+    let touched: Vec<u64> = plan.writes().map(|(lba, _)| lba).collect();
+    assert_eq!(touched, vec![1, 1_953_525_167]);
+
+    apply(&mut dev, &plan).unwrap();
+    drop(dev);
+
+    assert!(img.is_clean(), "sgdisk unhappy:\n{}", img.verify());
+    assert_eq!(before, img.print(), "partitions must not move");
+
+    let mut dev = img.disk();
+    let after = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(after.verdict, Verdict::Healthy);
+    assert_eq!(after.primary.as_ref().unwrap().header.first_usable_lba, 34);
+    assert_eq!(after.backup.as_ref().unwrap().header.first_usable_lba, 34);
+}
+
+#[test]
+fn closing_the_gap_is_idempotent() {
+    let img = deck_image();
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    apply(&mut dev, &gptcore::prevent::plan(&analysis, &CRC).unwrap()).unwrap();
+    drop(dev);
+
+    let mut dev = img.disk();
+    let second = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(
+        gptcore::prevent::assess(&second),
+        gptcore::prevent::Verdict::AlreadyMinimal { current: 34 }
+    );
+    assert!(gptcore::prevent::plan(&second, &CRC).is_none());
+}
+
+/// A disk whose primary is broken must be repaired first; this operation
+/// rewrites healthy headers and has no business guessing at a damaged one.
+#[test]
+fn a_damaged_disk_is_refused_for_prevention() {
+    let img = deck_image();
+    img.zero_lba(1, 1);
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(
+        gptcore::prevent::assess(&analysis),
+        gptcore::prevent::Verdict::Refused(gptcore::prevent::Blocker::TableNotHealthy)
+    );
+    assert!(gptcore::prevent::plan(&analysis, &CRC).is_none());
+    assert!(dev.writes().is_empty());
+}
