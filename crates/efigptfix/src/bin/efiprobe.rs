@@ -263,26 +263,39 @@ fn scan_name(code: u16) -> &'static str {
 /// Screen plus `efiprobe.log`, flushed every line so a power-off keeps it.
 struct Log {
     file: Option<RegularFile>,
+    /// What happened to any log from a previous run. Reported in the
+    /// header so a spliced log can never be mistaken for a clean one.
+    previous: &'static str,
 }
 
 impl Log {
     fn open() -> Self {
-        let file = (|| {
-            let mut fs = boot::get_image_file_system(boot::image_handle()).ok()?;
-            let mut root = fs.open_volume().ok()?;
-            // CreateReadWrite does not truncate: a shorter run would leave
-            // the tail of a longer previous one behind. Remove it first.
-            if let Ok(old) =
-                root.open(cstr16!("efiprobe.log"), FileMode::ReadWrite, FileAttribute::empty())
-            {
-                let _ = old.delete();
-            }
-            let handle = root
-                .open(cstr16!("efiprobe.log"), FileMode::CreateReadWrite, FileAttribute::empty())
-                .ok()?;
-            handle.into_regular_file()
-        })();
-        Log { file }
+        let mut previous = "none";
+        let Ok(mut fs) = boot::get_image_file_system(boot::image_handle()) else {
+            return Log { file: None, previous };
+        };
+        let Ok(mut root) = fs.open_volume() else {
+            return Log { file: None, previous };
+        };
+
+        // CreateReadWrite does not truncate: a shorter run would leave the
+        // tail of a longer previous one spliced on. Remove it first, and do
+        // not ignore a failure to do so - a silently spliced log is worse
+        // than no log, because it looks like valid data.
+        if let Ok(old) =
+            root.open(cstr16!("efiprobe.log"), FileMode::ReadWrite, FileAttribute::empty())
+        {
+            previous = match old.delete() {
+                Ok(()) => "removed",
+                Err(_) => "COULD NOT REMOVE - output below may be spliced onto an older run",
+            };
+        }
+
+        let file = root
+            .open(cstr16!("efiprobe.log"), FileMode::CreateReadWrite, FileAttribute::empty())
+            .ok()
+            .and_then(|h| h.into_regular_file());
+        Log { file, previous }
     }
 
     fn line(&mut self, text: &str) {
@@ -358,6 +371,7 @@ fn main() -> Status {
     if log.file.is_none() {
         log.line("WARNING: could not create efiprobe.log on the ESP; screen only.");
     }
+    log.line(&format!("previous log: {}", log.previous));
 
     let mut pointers = open_all::<Pointer>();
     let mut touches = open_all::<AbsolutePointer>();
