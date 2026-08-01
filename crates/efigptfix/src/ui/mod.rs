@@ -196,8 +196,12 @@ fn styled(line: &Line, columns: usize) {
     body();
 }
 
+/// The line under a heading, spanning the writable width.
+///
+/// One short of the full width, so that writing it never puts the cursor
+/// past the last column and costs a wrapped blank line.
 fn rule(columns: usize) -> String {
-    "-".repeat(columns.saturating_sub(1).min(78))
+    "-".repeat(columns.saturating_sub(1))
 }
 
 fn header(title: &str) {
@@ -518,10 +522,10 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
     }
 }
 
-// ------------------------------------------------------------- orientation
+// ----------------------------------------------------------------- display
 
-/// How long the orientation screen waits before deciding it was right.
-const ORIENT_SECONDS: usize = 6;
+/// How long the display screen waits before deciding it was right.
+const DISPLAY_SECONDS: usize = 6;
 
 /// Choose a backend, and settle which way up the screen goes.
 ///
@@ -539,11 +543,11 @@ pub fn init() {
         return;
     };
     if guess != Rotation::None {
-        orientation();
+        display();
     }
 }
 
-/// Offer to turn the picture.
+/// Offer to turn the picture, and to change how much of it fits.
 ///
 /// Shown only when [`crate::gfx::Framebuffer::guess_rotation`] guessed, which
 /// means a portrait framebuffer, which means a panel mounted sideways. The
@@ -555,36 +559,47 @@ pub fn init() {
 ///
 /// LEFT and RIGHT work regardless of which way round the text came out,
 /// which is the only reason this screen can rescue a wrong guess at all.
-fn orientation() {
+/// UP and DOWN step the text size, because how big is comfortable is a
+/// judgement about a particular person looking at a particular panel from
+/// wherever they happen to be holding it, and no amount of arithmetic here
+/// settles it.
+fn display() {
     let mut rotation = term::rotation().unwrap_or_default();
-    let mut countdown = Some(ORIENT_SECONDS);
+    let mut countdown = Some(DISPLAY_SECONDS);
+    let mut at_limit = false;
     drain();
 
     loop {
         let (cols, rows) = size();
         clear();
-        header("Display orientation");
+        header("Display");
         outln!("  This screen is drawn by efigptfix itself, so that it can be");
         outln!("  turned to match the panel. This one is mounted sideways, and");
         outln!("  the firmware's own text comes out a quarter turn off.");
         outln!();
         paint(colors(Style::Key));
-        outln!("  Now showing: {}", fit(rotation.name(), cols));
+        outln!("  Now showing: {}, {cols} x {rows} characters", fit(rotation.name(), cols));
         body();
         outln!();
         outln!("  If you can read this the right way up, there is nothing to do.");
 
-        match countdown {
-            Some(0) => return,
-            Some(left) => {
-                paint(colors(Style::Dim));
-                outln!("  Continuing in {left}s.");
-                body();
+        if at_limit {
+            paint(colors(Style::Dim));
+            outln!("  No further text size that way.");
+            body();
+        } else {
+            match countdown {
+                Some(0) => return,
+                Some(left) => {
+                    paint(colors(Style::Dim));
+                    outln!("  Continuing in {left}s.");
+                    body();
+                }
+                None => {}
             }
-            None => {}
         }
 
-        footer(rows, "  LEFT / RIGHT = turn the picture    A = this way up is right");
+        footer(rows, "  LEFT / RIGHT = turn    UP / DOWN = text size    A = done");
 
         let input = match countdown {
             Some(left) => match wait_for(1000) {
@@ -602,11 +617,14 @@ fn orientation() {
             None => wait(),
         };
 
+        at_limit = false;
         match input {
             Input::Left => rotation = rotation.previous(),
             Input::Right => rotation = rotation.next(),
+            Input::Up => at_limit = !term::resize_text(true),
+            Input::Down => at_limit = !term::resize_text(false),
             Input::Select | Input::Cancel => return,
-            _ => continue,
+            Input::Tab => continue,
         }
         term::set_rotation(rotation);
     }

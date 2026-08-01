@@ -80,6 +80,17 @@ pub fn set_rotation(rotation: Rotation) {
     });
 }
 
+/// Step the cell size one up or down, reporting whether it moved.
+///
+/// Nothing to do on the text console: its mode is the firmware's business
+/// and there is no font of ours involved.
+pub fn resize_text(bigger: bool) -> bool {
+    with(|b| match b {
+        Backend::Gfx(console) => console.resize_text(bigger),
+        Backend::Text => false,
+    })
+}
+
 pub fn size() -> (usize, usize) {
     with(|b| match b {
         Backend::Gfx(console) => console.size(),

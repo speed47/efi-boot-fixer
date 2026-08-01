@@ -6,10 +6,16 @@
 //! committed, so building the application needs neither this tool nor a
 //! font installed.
 //!
-//! Two cell sizes come out of one run. 16x32 is what a Steam Deck gets:
-//! 1280x800 of usable screen divided by that cell is exactly 80x25, the
-//! geometry the menus were already written against. 8x16 covers the smaller
-//! framebuffers everything else offers, OVMF's 800x600 included.
+//! Three cell sizes come out of one run, and the application picks between
+//! them from the framebuffer it is handed. 12x24 is what a Steam Deck gets:
+//! 1280x800 of rotated screen divided by that cell is 106x33. 16x32 is for
+//! genuinely large displays, and 8x16 for the small framebuffers a lot of
+//! firmware offers, OVMF's 800x600 included.
+//!
+//! The heights are not chosen freely. A monospace face has one advance
+//! width and one ascent-to-descent band, and the ratio between them here is
+//! about 1.93 — so 8, 12 and 16 columns want 16, 24 and 32 rows, and
+//! anything else either crops the glyphs or pads them with dead space.
 //!
 //! Coverage is stored at 8 bits per pixel, and each glyph is trimmed to its
 //! own bounding box. Trimming matters more than it sounds: a monospace cell
@@ -210,6 +216,7 @@ fn main() {
     let font = FontVec::try_from_vec(bytes).expect("not a usable TrueType font");
 
     let small = bake(&font, 8, 16);
+    let medium = bake(&font, 12, 24);
     let large = bake(&font, 16, 32);
 
     let source = Path::new(&ttf).file_name().unwrap().to_string_lossy().into_owned();
@@ -225,6 +232,7 @@ fn main() {
     )
     .unwrap();
     emit(&mut out, "SMALL", &small);
+    emit(&mut out, "MEDIUM", &medium);
     emit(&mut out, "LARGE", &large);
 
     std::fs::write(&dest, out).unwrap_or_else(|e| {
@@ -232,7 +240,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    for (name, b) in [("8x16", &small), ("16x32", &large)] {
+    for (name, b) in [("8x16", &small), ("12x24", &medium), ("16x32", &large)] {
         if let Some(prefix) = &specimen_prefix {
             preview(b, &format!("{prefix}{name}.pgm"));
         }

@@ -18,7 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::font::Font;
-use super::font_data::{LARGE, SMALL};
+use super::font_data::{LARGE, MEDIUM, SMALL};
 use super::{Framebuffer, Rgb, Rotation};
 use uefi::proto::console::text::Color;
 
@@ -51,15 +51,55 @@ pub fn rgb(color: Color) -> Rgb {
     }
 }
 
-/// The narrowest and shortest grid worth using the large font for.
+/// The cell sizes available, largest first.
 ///
-/// 80x25 is what the menus were laid out against, so the large font is
-/// taken whenever it still reaches that. On a Steam Deck it does exactly:
-/// 1280x800 of logical screen over a 16x32 cell is 80 by 25 with nothing
-/// left over. Smaller framebuffers — OVMF's 800x600, most of all — drop to
-/// the small font rather than lose columns.
+/// Order matters: `fits` is monotone along it, since a smaller cell can
+/// only ever give more rows and columns. That is what lets the size be
+/// stepped one at a time without checking the rest.
+static FONTS: [&Font; 3] = [&LARGE, &MEDIUM, &SMALL];
+
+/// The smallest grid the menus were laid out against. Nothing narrower or
+/// shorter is offered, automatically or on request.
 const MIN_COLS: usize = 80;
 const MIN_ROWS: usize = 25;
+
+/// The line length aimed for when choosing a cell size.
+///
+/// Picking the *largest* cell that clears the minimum was the obvious rule
+/// and the wrong one. A Steam Deck's rotated screen is 1280x800, which the
+/// 16x32 cell divides into exactly 80x25 — it clears the minimum with
+/// nothing to spare, so that rule always chose it, and the result was
+/// legible but cramped: long device paths truncated and reports paginated
+/// that did not need to. Aiming at a line length instead lands on 12x24
+/// and 106x33 there, while a genuinely large display still gets 16x32.
+const TARGET_COLS: usize = 104;
+
+/// Whether a cell size yields a grid the menus fit in.
+fn fits(font: &Font, width: usize, height: usize) -> bool {
+    width / font.cell_w >= MIN_COLS && height / font.cell_h >= MIN_ROWS
+}
+
+/// The cell size to start with: whichever lands nearest [`TARGET_COLS`],
+/// among those that fit.
+///
+/// Falls back to the smallest, which is the only honest answer on a
+/// framebuffer too small for any of them — the menus will be clipped, but
+/// clipped is better than not drawn.
+fn automatic(width: usize, height: usize) -> usize {
+    let mut best = FONTS.len() - 1;
+    let mut closest = usize::MAX;
+    for (index, font) in FONTS.iter().enumerate() {
+        if !fits(font, width, height) {
+            continue;
+        }
+        let distance = (width / font.cell_w).abs_diff(TARGET_COLS);
+        if distance < closest {
+            closest = distance;
+            best = index;
+        }
+    }
+    best
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
@@ -71,7 +111,9 @@ struct Cell {
 
 pub struct Console {
     fb: Framebuffer,
-    font: &'static Font,
+    /// Index into [`FONTS`]. Held as an index rather than a reference so
+    /// the operator can step it up and down.
+    font: usize,
     cols: usize,
     rows: usize,
     /// Logical pixel position of cell (0, 0). The grid rarely divides the
@@ -90,9 +132,10 @@ pub struct Console {
 
 impl Console {
     pub fn new(fb: Framebuffer) -> Self {
+        let (width, height) = fb.logical_size();
         let mut console = Console {
             fb,
-            font: &SMALL,
+            font: automatic(width, height),
             cols: 0,
             rows: 0,
             origin: (0, 0),
@@ -106,28 +149,53 @@ impl Console {
         console
     }
 
-    /// Recompute the grid for the current orientation and repaint from
-    /// scratch. The only place that fills the whole framebuffer.
+    fn font(&self) -> &'static Font {
+        FONTS[self.font]
+    }
+
+    /// Recompute the grid for the current cell size and orientation, and
+    /// repaint from scratch. The only place that fills the whole
+    /// framebuffer.
     fn relayout(&mut self) {
         let (width, height) = self.fb.logical_size();
 
-        self.font = if width / LARGE.cell_w >= MIN_COLS && height / LARGE.cell_h >= MIN_ROWS {
-            &LARGE
-        } else {
-            &SMALL
-        };
-        self.cols = width / self.font.cell_w;
-        self.rows = height / self.font.cell_h;
-        self.origin = (
-            (width - self.cols * self.font.cell_w) / 2,
-            (height - self.rows * self.font.cell_h) / 2,
-        );
+        // A quarter turn swaps the axes, so a size chosen while the screen
+        // was the other way round may no longer fit. Ask again rather than
+        // hold on to a choice that has stopped making sense.
+        if !fits(self.font(), width, height) {
+            self.font = automatic(width, height);
+        }
+        let font = self.font();
+
+        self.cols = width / font.cell_w;
+        self.rows = height / font.cell_h;
+        self.origin =
+            ((width - self.cols * font.cell_w) / 2, (height - self.rows * font.cell_h) / 2);
 
         let blank = Cell { ch: b' ', fg: self.fg, bg: self.bg };
         self.cells = vec![blank; self.cols * self.rows];
         self.shown = vec![None; self.cols * self.rows];
         self.cursor = (0, 0);
         self.fb.fill(self.bg);
+    }
+
+    /// Step one cell size up or down, if there is one that still fits.
+    ///
+    /// Returns whether anything changed, so the caller can tell the
+    /// operator they have run out of sizes rather than leaving them
+    /// pressing a button that silently does nothing.
+    pub fn resize_text(&mut self, bigger: bool) -> bool {
+        let next = if bigger { self.font.checked_sub(1) } else { Some(self.font + 1) };
+        let Some(next) = next.filter(|i| *i < FONTS.len()) else {
+            return false;
+        };
+        let (width, height) = self.fb.logical_size();
+        if !fits(FONTS[next], width, height) {
+            return false;
+        }
+        self.font = next;
+        self.relayout();
+        true
     }
 
     pub const fn size(&self) -> (usize, usize) {
@@ -194,6 +262,7 @@ impl Console {
 
     /// Draw every cell that changed since the last flush.
     pub fn flush(&mut self) {
+        let font = self.font();
         for row in 0..self.rows {
             for col in 0..self.cols {
                 let index = row * self.cols + col;
@@ -202,10 +271,10 @@ impl Console {
                     continue;
                 }
                 self.fb.draw_cell(
-                    self.font,
+                    font,
                     char::from(cell.ch),
-                    self.origin.0 + col * self.font.cell_w,
-                    self.origin.1 + row * self.font.cell_h,
+                    self.origin.0 + col * font.cell_w,
+                    self.origin.1 + row * font.cell_h,
                     cell.fg,
                     cell.bg,
                 );

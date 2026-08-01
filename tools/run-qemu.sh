@@ -99,6 +99,13 @@ drive() {
             keys "$A" "$B" ;;
         menu)                                       # walk the menu, choose nothing
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;
+        display)                                    # the startup display screen
+            # Only reached with a portrait RES, and only if the first key
+            # lands while it is still up -- it continues on its own after
+            # six seconds. Tune BOOT_WAIT, not this.
+            keys "$DOWN" "$DOWN" "$UP"              # text size down, down, up
+            keys "$LEFT" "$RIGHT"                   # turn away and back
+            keys "$A" "$B" ;;                       # accept, then exit
         *)
             echo "unknown script: $SCRIPT" >&2; exit 1 ;;
     esac
