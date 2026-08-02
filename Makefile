@@ -114,7 +114,8 @@ images: build ## Build the QEMU boot and test disk images
 
 # SCRIPT names a menu walk in tools/run-qemu.sh: none, menu, overview, check,
 # repair, repair-boot, repair-cancel, backup, restore, prevent, and the
-# boot* walks over the NVRAM screens.
+# boot* walks over the NVRAM screens. ONE_DISK=1 (with check-one) leaves the
+# test disk off the machine, which is how the skipped picker gets exercised.
 SCRIPT ?= menu
 
 qemu: images ## Boot under OVMF and drive the menus (SCRIPT=...)

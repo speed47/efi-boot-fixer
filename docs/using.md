@@ -78,8 +78,8 @@ time, and the same string is stored in snapshot metadata and written to
 
 ## The disk picker
 
-Choosing an operation opens a disk picker, which is where the identifying
-detail lives:
+Choosing an operation opens a disk picker when there is more than one disk,
+which is where the identifying detail lives:
 
 ```
 Repair primary GPT
@@ -100,6 +100,27 @@ root partitions, two `/var` partitions, or two names forming an `-A`/`-B`
 pair. That structure is what makes a SteamOS install recognisable at a glance
 and it survives any single partition being renamed. A drive model is shown
 when the firmware will give one — see [internals.md](internals.md).
+
+**One disk is taken without asking.** A menu of one is not a choice, and on
+a machine with a single internal drive — the normal case for the hardware
+this was written for — every operation used to open with a press that could
+only mean "yes, that one".
+
+What makes that safe is the line below the title. From the moment a disk is
+chosen, by hand or by there being nothing else, every screen the operation
+draws names it:
+
+```
+Authorise write
+  Disk 1   931.5 GiB  [boot]  [SteamOS]  KXG60ZNV1T02
+------------------------------------------------------------------
+  This REWRITES the partition table on this disk.
+```
+
+It is held by a guard in the application rather than written into each
+screen's body, so an operation that gives up early cannot leave the next
+screen naming the wrong disk. Nothing is ever authorised without the target
+in front of you.
 
 ## Reports and the confirmation gate
 

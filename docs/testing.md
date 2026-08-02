@@ -31,6 +31,18 @@ lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
 exercise the real input path rather than a keyboard-only one. `repair-boot`
 targets disk 1, which is how the write-to-your-own-boot-disk case gets tested.
 
+`ONE_DISK=1` leaves `test.img` off the machine, which is the only way to
+exercise the picker being skipped — the shape of the hardware this tool is
+actually for. The `check-one` walk presses once where two presses would
+otherwise be needed, so what it proves is in the serial log rather than on a
+disk:
+
+```sh
+RES=none ONE_DISK=1 ./tools/run-qemu.sh build/images check-one | tee one.log
+grep -c "Choose a disk" one.log        # 0: the picker never appeared
+grep -o "Check GPT (read only)" one.log # the report, reached in one press
+```
+
 The graphical backend writes nothing to the serial console, so a run that
 exercises it has to be photographed rather than read:
 

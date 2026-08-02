@@ -246,7 +246,17 @@ fn pick_disk(title: &str, boot_device: &BootDevice) -> Option<Disk> {
 /// which disk each snapshot belongs to — so it scans once and picks from
 /// that, rather than throwing the analyses away and having `pick_disk`
 /// redo every one of them.
+///
+/// A single disk is taken without asking. A menu of one is not a choice,
+/// and on the hardware this was written for it is the normal case: every
+/// operation opened with a press that could only mean "yes, that one".
+/// What made it safe to drop is that the disk is now named in the header of
+/// every screen the operation goes on to draw — see [`ui::working_on`] — so
+/// nothing is authorised without the target in front of the operator.
 fn pick_from(title: &str, disks: Vec<Disk>) -> Option<Disk> {
+    if disks.len() == 1 {
+        return disks.into_iter().next();
+    }
     if disks.is_empty() {
         ui::message(
             "Nothing to do",
@@ -485,13 +495,13 @@ fn run_check(boot_device: &BootDevice) {
     let Some(disk) = pick_disk("Check GPT", boot_device) else {
         return;
     };
+    let _on = ui::working_on(disk.label());
     let analysis = match &disk.analysis {
         Ok(a) => a,
         Err(e) => return show_error("Check GPT", e.clone()),
     };
 
-    let mut lines = alloc::vec![key(format!("  {}", disk.label()))];
-    lines.extend(ui::wrapped(&format!("  {}", disk.path), Style::Dim, "    "));
+    let mut lines = ui::wrapped(&format!("  {}", disk.path), Style::Dim, "    ");
     lines.push(Line::blank());
     lines.extend(report::render_analysis(analysis));
     if let Some(view) = analysis.best_view() {
@@ -514,16 +524,14 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     let Some(disk) = pick_disk("Repair primary GPT", boot_device) else {
         return;
     };
+    let _on = ui::working_on(disk.label());
     let analysis = match &disk.analysis {
         Ok(a) => a,
         Err(e) => return show_error("Repair", e.clone()),
     };
 
     let repair = plan(analysis, &CRC);
-    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    lines.extend(report::render(analysis, repair.as_ref()));
-
-    if !ui::page("Repair primary GPT", &lines) {
+    if !ui::page("Repair primary GPT", &report::render(analysis, repair.as_ref())) {
         return;
     }
     let Some(repair) = repair else {
@@ -534,15 +542,11 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     // is alarming and, when only the protective MBR is wrong, untrue.
     let warning = if analysis.verdict == gptcore::Verdict::MbrOnly {
         alloc::vec![
-            key(format!("  {}", disk.label())),
-            Line::blank(),
             warn("  This rewrites the protective MBR on this disk."),
             line("  Both GPTs are intact and are left alone."),
         ]
     } else {
         alloc::vec![
-            key(format!("  {}", disk.label())),
-            Line::blank(),
             bad("  This REWRITES the partition table on this disk."),
             line("  The proposed table came from the backup GPT and was"),
             line("  shown on the previous screen."),
@@ -563,6 +567,7 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     let Some(disk) = pick_disk("Back up GPT", boot_device) else {
         return;
     };
+    let _on = ui::working_on(disk.label());
     let analysis = match &disk.analysis {
         Ok(a) => a,
         Err(e) => return show_error("Back up GPT", e.clone()),
@@ -580,8 +585,7 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     };
     let bytes = backup::encode(&archive, &CRC);
 
-    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    lines.extend(backup::describe(&archive));
+    let mut lines = backup::describe(&archive);
     lines.push(Line::blank());
     lines.push(line(format!(
         "  {} bytes will be written to \\{}\\ on the ESP",
@@ -855,6 +859,7 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     let Some(disk) = pick_from("Restore onto which disk?", disks) else {
         return;
     };
+    let _on = ui::working_on(disk.label());
     let analysis = match &disk.analysis {
         Ok(a) => a,
         Err(e) => return show_error("Restore GPT", e.clone()),
@@ -871,9 +876,8 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     };
 
     let comparison = backup::compare(archive, analysis);
-    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     let disk_name = format!("Disk {}", disk.number);
-    lines.extend(backup::inspect(archive, Some((disk_name.as_str(), &comparison))));
+    let mut lines = backup::inspect(archive, Some((disk_name.as_str(), &comparison)));
     if comparison.verdict() == backup::Match::SameGeometry {
         lines.push(Line::blank());
         lines.push(warn("  NOTE: nothing in this snapshot identifies it as this"));
@@ -885,11 +889,8 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         return;
     }
 
-    let mut warning = alloc::vec![
-        key(format!("  {}", disk.label())),
-        Line::blank(),
-        bad("  This REPLACES both partition tables with the saved copy."),
-    ];
+    let mut warning =
+        alloc::vec![bad("  This REPLACES both partition tables with the saved copy.")];
     if !archive.health.tables_were_sound() {
         warning.push(Line::blank());
         warning.push(bad("  WARNING: this snapshot was taken from a DAMAGED table."));
@@ -906,16 +907,14 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     let Some(disk) = pick_disk("Prevent recurrence", boot_device) else {
         return;
     };
+    let _on = ui::working_on(disk.label());
     let analysis = match &disk.analysis {
         Ok(a) => a,
         Err(e) => return show_error("Prevent", e.clone()),
     };
 
     let verdict = prevent::assess(analysis);
-    let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    lines.extend(prevent::describe(verdict));
-
-    if !ui::page("Prevent recurrence", &lines) {
+    if !ui::page("Prevent recurrence", &prevent::describe(verdict)) {
         return;
     }
     if !verdict.will_write() {
@@ -925,15 +924,11 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
         return;
     };
 
-    let mut plan_lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    plan_lines.extend(report::render_plan(&gap_plan));
-    if !ui::page("Prevent recurrence: what will be written", &plan_lines) {
+    if !ui::page("Prevent recurrence: what will be written", &report::render_plan(&gap_plan)) {
         return;
     }
 
     let warning = alloc::vec![
-        key(format!("  {}", disk.label())),
-        Line::blank(),
         warn("  This modifies a HEALTHY partition table on a theory"),
         warn("  about what corrupts it. No partition moves, and it is"),
         warn("  reversible, but it is not a repair."),

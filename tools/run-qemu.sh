@@ -85,6 +85,9 @@ expected_effect() {
         # never to the disk being backed up.
         none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice|bootentries)
             want=no-change ;;
+        # The test disk is not attached at all, so there is nothing to say
+        # about it.
+        check-one) want=skip ;;
         # Lowering FirstUsableLBA is what Prevent does to a *healthy*
         # table, and these images are built with FirstUsableLBA 2048 above
         # a 32-block entry array, so there is always a gap to close.
@@ -163,6 +166,13 @@ drive() {
         check)                                      # GPT item 1, disk 2, page
             gpt_menu
             keys "$A" "$DOWN" "$A" "$A" "$B" "$B" ;;
+        check-one)                                  # ONE_DISK=1: no picker
+            # One press should land on the report itself. If the picker were
+            # still offered, the second A would choose the disk and the run
+            # would end one screen short of it -- so grep the serial log for
+            # "Check GPT (read only)" to tell the two apart.
+            gpt_menu
+            keys "$A" "$A" "$B" "$B" ;;
         repair)                                     # GPT item 4
             gpt_menu
             keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A"
@@ -274,6 +284,15 @@ drive() {
     sleep 8
 }
 
+# One disk instead of two, which is the shape of the machine this tool is
+# for and the only way to exercise the picker being skipped. The disk left
+# out is test.img, so a run with this set has no post-condition to check.
+DISKS=()
+if [ "${ONE_DISK:-0}" != 1 ]; then
+    DISKS+=(-drive "file=$DIR/test.img,format=raw,if=none,id=testdisk"
+            -device nvme,drive=testdisk,serial=TESTDISK)
+fi
+
 EXTRA=()
 case "$RES" in
     "")   ;;
@@ -301,8 +320,7 @@ drive | timeout "$TIMEOUT" qemu-system-x86_64 \
     -drive if=pflash,format=raw,unit=1,file="$VARS" \
     -drive file="$DIR/boot.img",format=raw,if=none,id=bootdisk \
     -device nvme,drive=bootdisk,serial=BOOTDISK \
-    -drive file="$DIR/test.img",format=raw,if=none,id=testdisk \
-    -device nvme,drive=testdisk,serial=TESTDISK \
+    "${DISKS[@]}" \
     -net none \
     -nographic
 rc=$?

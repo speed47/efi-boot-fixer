@@ -30,6 +30,7 @@ pub(crate) mod term;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
 use gptcore::style::{Line, Style};
 use term::{out, outln};
 use uefi::boot;
@@ -237,11 +238,76 @@ fn rule(columns: usize) -> String {
     "-".repeat(columns.saturating_sub(1))
 }
 
+// ------------------------------------------------------------- the subject
+
+/// Single-threaded interior mutability, as in [`term`]: a UEFI application
+/// owns the machine, and nothing else can reach this.
+struct Subject(UnsafeCell<Option<String>>);
+
+// SAFETY: as above.
+unsafe impl Sync for Subject {}
+
+static SUBJECT: Subject = Subject(UnsafeCell::new(None));
+
+fn with_subject<R>(f: impl FnOnce(Option<&str>) -> R) -> R {
+    // SAFETY: single-threaded, and `f` only draws — nothing below it sets
+    // the subject while this borrow is live.
+    let slot = unsafe { &*SUBJECT.0.get() };
+    f(slot.as_deref())
+}
+
+fn set_subject(value: Option<String>) {
+    // SAFETY: as above, and no borrow from `with_subject` outlives its call.
+    unsafe { *SUBJECT.0.get() = value };
+}
+
+/// Names what every screen is about, under the title, until it is dropped.
+///
+/// The disk picker is skipped when there is only one disk, so a screen
+/// proposing to overwrite a partition table can no longer rely on the
+/// operator having just chosen the disk by hand. Naming it in the header
+/// puts that back, on every screen of the operation rather than in a line
+/// of body text each screen has to remember to write.
+///
+/// A guard rather than a pair of calls because these operations leave by
+/// half a dozen early returns apiece, and a header still naming the last
+/// disk on a screen about something else would be worse than no header at
+/// all. Hold one at a time: the innermost drop clears the header. Bind it
+/// to a name — `let _on = ui::working_on(..)` — since `let _ =` would drop
+/// it before the first screen is drawn.
+#[must_use = "the header only names it while this is held"]
+pub struct Subtitle(());
+
+pub fn working_on(what: impl Into<String>) -> Subtitle {
+    set_subject(Some(what.into()));
+    Subtitle(())
+}
+
+impl Drop for Subtitle {
+    fn drop(&mut self) {
+        set_subject(None);
+    }
+}
+
+/// Rows the header occupies: the title, the subject if there is one, and
+/// the rule. Every screen that has to know how much room is left asks.
+fn header_rows() -> usize {
+    with_subject(|subject| 2 + usize::from(subject.is_some()))
+}
+
 fn header(title: &str) {
     let (cols, _) = size();
     at(0, 0);
     paint(colors(Style::Title));
     outln!("{}", fit(title, cols));
+    with_subject(|subject| {
+        if let Some(text) = subject {
+            // Key, because this is the thing on the screen that must
+            // actually be taken in: the disk about to be written to.
+            paint(colors(Style::Key));
+            outln!("  {}", fit(text, cols.saturating_sub(2)));
+        }
+    });
     paint(colors(Style::Dim));
     outln!("{}", rule(cols));
     body();
@@ -293,7 +359,9 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
         // Measured each time round: the display screen is reachable from
         // here, and a page drawn for the old grid would be the wrong length.
         let (cols, rows) = size();
-        let view = rows.saturating_sub(6).max(4);
+        // The header, the scroll indicator, the footer and the blank row
+        // above it.
+        let view = rows.saturating_sub(header_rows() + 4).max(4);
         let max_top = lines.len().saturating_sub(view);
         top = top.min(max_top);
 
@@ -403,8 +471,8 @@ fn run_menu(
     loop {
         let (cols, rows) = size();
         let detail_rows = items.iter().map(|i| i.detail.len()).max().unwrap_or(0);
-        // title, rule, intro, blank, [items], blank, detail, blank, hint
-        let overhead = 2 + intro.len() + 1 + detail_rows + 3;
+        // header, intro, blank, [items], blank, detail, blank, hint
+        let overhead = header_rows() + intro.len() + 1 + detail_rows + 3;
         let view = rows.saturating_sub(overhead).clamp(1, items.len());
 
         // Keep the selection inside the window.

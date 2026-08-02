@@ -12,7 +12,9 @@ Applied in order, before anything is written:
 - never a table without an `esp` and a `rootfs-A`, which is the stale-backup
   guard
 - never a saved snapshot whose block size or disk size does not match
-- never without the operator entering the confirmation sequence
+- never without the operator entering the confirmation sequence, on a screen
+  whose header names the disk about to be written to — which is what allows
+  the picker to be skipped when there is only one disk to pick
 
 The NVRAM screens add their own, and touch no disk at all:
 
