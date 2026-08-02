@@ -7,17 +7,20 @@ dual-boot setup.
 
 ## The reason it was created
 
-It is meant for a machine that no longer boots: it runs from the ESP under
-the firmware's "boot from file" menu, needs no keyboard, no USB stick and no
-working operating system, and can repair the very disk it was launched from.
-That works even with the primary table corrupted, because the Deck firmware
-falls back to the backup GPT for partition enumeration. The Linux kernel does
-not fall back however, which is why `steamcl.efi` loads but ultimately fails to boot.
-Symptoms are either:
+When dual-booting SteamOS and Windows, more often than not you'll run into issues
+when upgrading them, as they don't tolerate each other very well, and like to take
+all the room for themselves (well, especially Windows).
+
+The upgrade to Windows 24H2 is especially infamous with this, symptoms are either:
 
 - Black screen when booting SteamOS, even manually through `steamcl.efi`
 - Dropping you to a `grub>` prompt after attempting to boot
 - Verbose boot logs ending in `ERROR: Mounting /dev/disk/bypartuuid/<UUIDOFYOURPARTITION> failed.`
+
+This precise upgrade is known to corrupt the primary GPT, this is what this tool
+was written for, but it now supports more features to (hopefully) always be able to salvage
+your Steam Deck that no longer boots, even if you're on the go and don't have any
+USB keyboard at hand, and no USB recovery key.
 
 ## Features
 
@@ -101,9 +104,9 @@ using the tool itself if you want it.
   the text size. It starts up the right way round on a Deck, so this is only
   there if it comes out wrong or you want the text bigger.
 - Start with **Check GPT** — it writes nothing and tells you what is wrong.
-- Then **Back up both GPTs**, before anything that writes.
-- Writing requires the sequence **LEFT RIGHT LEFT RIGHT A**; any wrong press
-  resets it, and B cancels with nothing written.
+- Then **Back up both GPTs**, before anything that writes. DO NOT SKIP THIS STEP.
+- In any case, actually writing requires the sequence **LEFT RIGHT LEFT RIGHT A**;
+  any wrong press resets it, and B cancels with nothing written.
 
 [docs/using.md](docs/using.md) walks through the screens.
 
