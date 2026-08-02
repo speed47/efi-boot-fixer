@@ -53,13 +53,25 @@ pub fn rgb(color: Color) -> Rgb {
 
 /// The cell sizes available, largest first.
 ///
-/// Order matters: `fits` is monotone along it, since a smaller cell can
-/// only ever give more rows and columns. That is what lets the size be
-/// stepped one at a time without checking the rest.
+/// Largest first is load-bearing in two places: [`Console::resize_text`]
+/// reads "bigger" as one step *down* the index, and [`automatic`] falls
+/// back to the last entry when nothing clears the minimum, which has to be
+/// the smallest to stand a chance.
+///
+/// `fits` is also monotone along the order, since a smaller cell can only
+/// ever give more rows and columns. That is what lets `resize_text` treat
+/// one candidate that does not fit as "nothing further that way" and stop,
+/// rather than having to look past it for a smaller size that might. Note
+/// that it does still check the candidate — monotonicity saves the scan,
+/// not the test. [`automatic`] does not step at all: it scores every size
+/// that fits against [`TARGET_COLS`] and takes the closest.
 ///
 /// There was a 16x32 above these. Measured on a Steam Deck, 12x24 already
 /// reads comfortably at arm's length on a 7-inch panel, so the larger cell
-/// was only ever costing columns — and 22 KB of baked glyphs.
+/// was only ever costing columns — and 22 KB of baked glyphs. With two
+/// entries left, that scoring loop decides between exactly two candidates;
+/// it stays written as a search because the sizes are a build-time choice
+/// and this is the code that would have to be right if a third returned.
 static FONTS: [&Font; 2] = [&MEDIUM, &SMALL];
 
 /// The smallest grid the menus were laid out against. Nothing narrower or
