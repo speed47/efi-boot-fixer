@@ -66,14 +66,14 @@ impl BlockDevice for FileDisk {
     }
 
     fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), IoError> {
-        if buf.len() % self.block_size as usize != 0 {
+        if !buf.len().is_multiple_of(self.block_size as usize) {
             return Err(IoError::Unaligned);
         }
         self.file.read_exact_at(buf, lba * self.block_size as u64).map_err(|_| IoError::DeviceError)
     }
 
     fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> Result<(), IoError> {
-        if buf.len() % self.block_size as usize != 0 {
+        if !buf.len().is_multiple_of(self.block_size as usize) {
             return Err(IoError::Unaligned);
         }
         self.file

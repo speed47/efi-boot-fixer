@@ -201,7 +201,7 @@ impl GptHeader {
         {
             return None;
         }
-        if self.size_of_partition_entry < 128 || self.size_of_partition_entry % 8 != 0 {
+        if self.size_of_partition_entry < 128 || !self.size_of_partition_entry.is_multiple_of(8) {
             return None;
         }
         (self.number_of_partition_entries as usize)
@@ -248,7 +248,7 @@ impl GptHeader {
         if self.alternate_lba == 0 || self.alternate_lba > last_block {
             out.push(Defect::AlternateLbaOutOfRange { stored: self.alternate_lba, last_block });
         }
-        if self.size_of_partition_entry < 128 || self.size_of_partition_entry % 8 != 0 {
+        if self.size_of_partition_entry < 128 || !self.size_of_partition_entry.is_multiple_of(8) {
             out.push(Defect::EntrySizeInvalid { found: self.size_of_partition_entry });
         }
         if self.number_of_partition_entries == 0

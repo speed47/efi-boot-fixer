@@ -21,6 +21,10 @@ use crate::gfx::{Framebuffer, Rotation};
 use uefi::proto::console::text::Color;
 use uefi::system;
 
+// Exactly one of these exists, in the static below, for as long as the
+// program runs. Boxing the large variant to even the two out would buy an
+// allocation and a pointer hop on every character drawn, and save nothing.
+#[allow(clippy::large_enum_variant)]
 enum Backend {
     /// The firmware's text console, in whatever orientation it likes.
     Text,
