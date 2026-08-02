@@ -129,24 +129,37 @@ jobs:
           git push --delete origin continuous || true
 
           cat > notes.md <<EOF
-          Rolling build of \`main\`, replaced on every push. **Unsigned and
-          untested on your hardware** - prefer a tagged release if one exists.
+          Rolling build of the default branch, replaced on every push.
+          **Unsigned and untested on your hardware** - prefer a tagged release
+          if one exists.
 
           Commit: \`${GITHUB_SHA}\`
           Built: $(date -u '+%Y-%m-%d %H:%M UTC')
 
           ## Install
 
-          Copy to the EFI system partition and invoke it from the firmware's
-          "boot from file" menu. Secure Boot must be off.
+          Copy to the EFI system partition:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
           cp gpttoolk.efi /esp/EFI/gpttoolk.efi
           \`\`\`
 
-          It never writes without you typing the confirmation word, and it
-          excludes the device it booted from.
+          Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
+          reach the Boot Manager, and choose "Boot From File" -> the ESP ->
+          \`gpttoolk.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
+          rewrites the boot order on update. Secure Boot must be off, as the
+          binary is unsigned.
+
+          Nothing is written until you enter the five-press confirmation
+          sequence (LEFT RIGHT LEFT RIGHT A), and every write names the exact
+          LBAs first. The disk this image was launched from is a valid target -
+          that is the whole point - and is labelled \`[boot]\` in the picker.
+
+          \`efiprobe.efi\` is attached too: it only reports what the firmware
+          sees from each control, and writes nothing to any disk.
+
+          Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/README.md
           EOF
 
           gh release create continuous dist/* \
@@ -180,15 +193,28 @@ jobs:
           cat > notes.md <<EOF
           ## Install
 
-          Copy to the EFI system partition and invoke it from the firmware's
-          "boot from file" menu. Deliberately not an NVRAM boot entry, since
-          SteamOS rewrites the boot order on update. Secure Boot must be off,
-          as this binary is unsigned.
+          Copy to the EFI system partition:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
           cp gpttoolk.efi /esp/EFI/gpttoolk.efi
           \`\`\`
+
+          Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
+          reach the Boot Manager, and choose "Boot From File" -> the ESP ->
+          \`gpttoolk.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
+          rewrites the boot order on update. Secure Boot must be off, as this
+          binary is unsigned.
+
+          Nothing is written until you enter the five-press confirmation
+          sequence (LEFT RIGHT LEFT RIGHT A), and every write names the exact
+          LBAs first. The disk this image was launched from is a valid target -
+          that is the whole point - and is labelled \`[boot]\` in the picker.
+
+          \`efiprobe.efi\` is attached too: it only reports what the firmware
+          sees from each control, and writes nothing to any disk.
+
+          Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md
 
           EOF
 
