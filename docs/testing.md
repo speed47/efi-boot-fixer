@@ -21,7 +21,7 @@ appears as disk 1, `test.img` is a SteamOS-shaped disk and appears as disk 2.
 
 ```sh
 make images CORRUPTION=bad-mbr
-./tools/run-qemu.sh build/images repair   # or check, backup, restore, prevent, menu
+./tools/run-qemu.sh build/images repair   # or overview, check, backup, restore, prevent, menu
 sgdisk -v build/images/test.img           # verify the result independently
 ```
 

@@ -23,7 +23,8 @@ The NVRAM screens add their own, and touch no disk at all:
   skip — see [boot.md](boot.md)
 - a new entry is written before the `BootOrder` that names it, never after
 - no boot entry is ever deleted; removing one is left to the firmware's own
-  menu
+  menu, and restoring a saved configuration overwrites the variables that
+  snapshot holds and no others
 - the same confirmation sequence applies, including to `BootNext`, which
   reverts itself and could have been exempted
 

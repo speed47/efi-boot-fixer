@@ -24,16 +24,24 @@ USB keyboard at hand, and no USB recovery key.
 
 ## Features
 
-Five operations, all driven with the D-pad:
+All driven with the D-pad, from one read-only summary and two submenus:
 
 | Operation | Writes | What it does |
 | --- | --- | --- |
-| Check GPT | never | reads both tables and reports every defect |
-| Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
+| **Check this machine** | never | every disk's table, the boot list and the loaders on the ESPs, on one page |
+| *Partition tables (GPT)* | | |
+| Check a disk's GPT | never | reads both tables and reports every defect |
 | Back up both GPTs | ESP file | snapshots both tables to `\BOOTFIXR\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
+| Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
-| Boot entries (NVRAM) | NVRAM | shows the firmware's boot list and the loaders on the ESPs; registers one, sets the default, or boots one once |
+| *Boot entries (NVRAM)* | | |
+| View the boot entries | never | the firmware's boot list, including entries that have fallen out of it |
+| Scan the ESPs | never | the loaders installed on disk, and whether NVRAM points at each |
+| Register a bootloader | NVRAM | adds a boot entry for a loader nothing points at |
+| Set the default | NVRAM | moves an entry to the front of the boot order |
+| Boot something once | NVRAM | tries an entry without committing to it |
+| Restore the boot configuration | NVRAM | writes back a saved copy of the entries and the order |
 
 - **No keyboard needed.** The Deck's buttons are the only input; the menus,
   reports and prompts are built for a D-pad and two buttons.
@@ -103,8 +111,10 @@ using the tool itself if you want it.
   screen from anywhere: LEFT and RIGHT turn the picture, UP and DOWN change
   the text size. It starts up the right way round on a Deck, so this is only
   there if it comes out wrong or you want the text bigger.
-- Start with **Check GPT** — it writes nothing and tells you what is wrong.
-- Then **Back up both GPTs**, before anything that writes. DO NOT SKIP THIS STEP.
+- Start with **Check this machine** — it writes nothing, looks at everything,
+  and ends by naming the menu that holds the fix for what it found.
+- Then **Partition tables (GPT) → Back up both GPTs**, before anything that
+  writes. DO NOT SKIP THIS STEP.
 - In any case, actually writing requires the sequence **LEFT RIGHT LEFT RIGHT A**;
   any wrong press resets it, and B cancels with nothing written.
 

@@ -83,7 +83,7 @@ expected_effect() {
         # Read-only walks, the run that declines at the gate, and the two
         # backup runs — those write a file to the ESP on the boot disk,
         # never to the disk being backed up.
-        none|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice|bootentries)
+        none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice|bootentries)
             want=no-change ;;
         # Lowering FirstUsableLBA is what Prevent does to a *healthy*
         # table, and these images are built with FirstUsableLBA 2048 above
@@ -145,54 +145,74 @@ keys() {
 # The five-press gate: LEFT RIGHT LEFT RIGHT A.
 confirm() { keys "$LEFT" "$RIGHT" "$LEFT" "$RIGHT" "$A"; }
 
+# Into the two submenus from the top level, which is where every operation
+# now lives: "Partition tables (GPT)" is the second row and "Boot entries
+# (NVRAM)" the third, below "Check this machine".
+gpt_menu()   { keys "$DOWN" "$A"; }
+nvram_menu() { keys "$DOWN" "$DOWN" "$A"; }
+
 drive() {
     sleep "$BOOT_WAIT"
     case "$SCRIPT" in
         none)                                       # look at the menu, leave
             keys "$B" ;;
-        check)                                      # item 1, disk 2, page, exit
-            keys "$A" "$DOWN" "$A" "$A" "$B" ;;
-        repair)                                     # item 2
-            keys "$DOWN" "$A" "$DOWN" "$A" "$A"
-            confirm
+        overview)                                   # the read-only summary
+            keys "$A"                               # Check this machine
+            keys "$DOWN" "$DOWN"                    # scroll it
             keys "$A" "$B" ;;
+        check)                                      # GPT item 1, disk 2, page
+            gpt_menu
+            keys "$A" "$DOWN" "$A" "$A" "$B" "$B" ;;
+        repair)                                     # GPT item 4
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A"
+            confirm
+            keys "$A" "$B" "$B" ;;
         repair-boot)                                # repair disk 1, the disk
-            keys "$DOWN" "$A" "$A" "$A"             # this image booted from
+            gpt_menu                                # this image booted from
+            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$A" "$A"
             confirm
-            keys "$A" "$B" ;;
+            keys "$A" "$B" "$B" ;;
         repair-cancel)                              # decline at the gate
-            keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$B" "$A" "$B" ;;
-        backup)                                     # item 3
-            keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A" "$B" ;;
-        restore)                                    # item 4
-            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$A" "$DOWN" "$A" "$A"
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$B" "$A" "$B" "$B" ;;
+        backup)                                     # GPT item 2
+            gpt_menu
+            keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A" "$B" "$B" ;;
+        restore)                                    # GPT item 3
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$A" "$A" "$DOWN" "$A" "$A"
             confirm
-            keys "$A" "$B" ;;
+            keys "$A" "$B" "$B" ;;
         inspect)                                    # browse snapshots, View
-            keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Restore GPT
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$A"               # Restore GPTs
             keys "$DOWN"                            # second snapshot
             keys "$TAB" "$A"                        # details, then back
             keys "$DOWN" "$TAB" "$A"                # and the next one
-            keys "$B" "$B" ;;
+            keys "$B" "$B" "$B" ;;
         scroll)                                     # page through a long report
             # Wants snapshots on the ESP already: run 'backup-twice' first
             # against the same images, without rebuilding them.
-            keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Restore GPT, snapshot list
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$A"               # Restore GPTs, snapshot list
             keys "$TAB"                             # View the whole record
             keys "$DOWN" "$DOWN" "$DOWN"            # three lines per press
             keys "$RIGHT"                           # then a whole screen
             keys "$UP" "$LEFT"                      # and back again
-            keys "$A" "$B" "$B" ;;
+            keys "$A" "$B" "$B" "$B" ;;
         backup-twice)                               # two snapshots in a row
-            keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
-            keys "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
-            keys "$B" ;;
-        prevent)                                    # item 5
+            gpt_menu                                # the submenu reopens on
+            keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"    # its first row each time
+            keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
+            keys "$B" "$B" ;;
+        prevent)                                    # GPT item 5
+            gpt_menu
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
             confirm
-            keys "$A" "$B" ;;
-        bootentries)                                # item 6, both read-only screens
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$A" "$B" "$B" ;;
+        bootentries)                                # both read-only screens
+            nvram_menu
             keys "$A"                               # View the boot entries
             keys "$DOWN" "$DOWN"                    # scroll it
             keys "$A"                               # dismiss, back to submenu
@@ -200,7 +220,7 @@ drive() {
             keys "$DOWN" "$A"                       # scroll, dismiss
             keys "$B" "$B" ;;
         bootnext)                                   # set BootNext, the one-shot
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            nvram_menu
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"   # Boot something once
             keys "$A"                               # the first entry
             keys "$A"                               # review page, continue
@@ -209,7 +229,7 @@ drive() {
             keys "$A"                               # the result
             keys "$B" "$B" ;;
         bootdefault)                                # move an entry to the front
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            nvram_menu
             keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Set the default boot entry
             keys "$DOWN" "$A"                       # the second entry, not the first
             keys "$A" "$A"                          # review, then the saved note
@@ -217,7 +237,7 @@ drive() {
             keys "$A"
             keys "$B" "$B" ;;
         bootregister)                               # add an entry for a loader
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            nvram_menu
             keys "$DOWN" "$DOWN" "$A"               # Register a bootloader
             keys "$A"                               # the first candidate
             keys "$DOWN" "$A"                       # add at the end, not as default
@@ -225,8 +245,20 @@ drive() {
             confirm
             keys "$A"
             keys "$B" "$B" ;;
+        bootrestore)                                # put a saved copy back
+            # Wants a boot.NNN on the ESP, which only a run that changed
+            # NVRAM leaves behind: run 'bootregister' first against the same
+            # images, with KEEP_VARS=1 here to see it undone.
+            nvram_menu
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$A"                               # the first snapshot
+            keys "$A"                               # review page, continue
+            keys "$A"                               # the saved-configuration note
+            confirm
+            keys "$A"
+            keys "$B" "$B" ;;
         menu)                                       # walk the menu, choose nothing
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;
+            keys "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;
         display)                                    # the display screen
             # Opened with View from the main menu, so there is no timer to
             # race any more. RES=none has no framebuffer to turn, and the

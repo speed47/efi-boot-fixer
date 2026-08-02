@@ -255,6 +255,63 @@ fn decodes_a_snapshot_written_by_the_tool_under_firmware() {
     assert_eq!(bootcfg::encode(&snap, &CRC), bytes);
 }
 
+// ------------------------------------------------------- restoring a copy
+
+/// The same invariant as registering, on the way back: an entry is on the
+/// medium before the order that names it, and `BootNext` — the one variable
+/// that steers the very next boot — is armed last of all.
+#[test]
+fn restoring_writes_entries_first_the_order_last() {
+    let mut snap = snapshot();
+    snap.vars.push((String::from("BootNext"), vec![0x01, 0x00]));
+
+    let names: Vec<String> = bootcfg::plan_restore(&snap).iter().map(|w| w.name.clone()).collect();
+    assert_eq!(names, ["Boot0000", "Boot0001", "Timeout", "BootOrder", "BootNext"]);
+}
+
+/// The bytes put back are the bytes saved. A restore that re-encoded what
+/// it read would defeat the reason the snapshot stores variables opaquely.
+#[test]
+fn restoring_writes_the_saved_bytes_verbatim() {
+    let mut snap = snapshot();
+    let rubbish = vec![0xff; 7];
+    snap.vars.push((String::from("Boot0009"), rubbish.clone()));
+    assert!(bootopt::decode(&rubbish).is_err());
+
+    let writes = bootcfg::plan_restore(&snap);
+    for (name, data) in &snap.vars {
+        let write = writes.iter().find(|w| &w.name == name).expect("{name} is not in the plan");
+        assert_eq!(&write.data, data, "{name} was not written verbatim");
+    }
+}
+
+/// Nothing is deleted: a plan holds exactly the variables the file holds,
+/// so an entry registered since the snapshot survives the restore.
+#[test]
+fn restoring_touches_nothing_the_snapshot_does_not_hold() {
+    let snap = snapshot();
+    assert_eq!(bootcfg::plan_restore(&snap).len(), snap.vars.len());
+}
+
+#[test]
+fn an_empty_snapshot_plans_no_writes() {
+    let snap = Snapshot { time: Timestamp::default(), vars: Vec::new(), meta: Vec::new() };
+    assert!(bootcfg::plan_restore(&snap).is_empty());
+}
+
+/// The review screen is read by someone deciding whether this is the right
+/// file, so a write says what it puts back rather than how long it is.
+#[test]
+fn a_restore_plan_says_what_each_write_puts_back() {
+    let writes = bootcfg::plan_restore(&snapshot());
+    let entry = writes.iter().find(|w| w.name == "Boot0001").unwrap();
+    assert!(entry.what.contains("EFI Internal Shell"), "{}", entry.what);
+    let order = writes.iter().find(|w| w.name == "BootOrder").unwrap();
+    assert!(order.what.contains('2'), "{}", order.what);
+    let timeout = writes.iter().find(|w| w.name == "Timeout").unwrap();
+    assert!(timeout.what.contains("3 s"), "{}", timeout.what);
+}
+
 #[test]
 fn describing_a_snapshot_names_every_variable_in_it() {
     let snap = snapshot();

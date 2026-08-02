@@ -108,6 +108,9 @@ queued input first. See [docs/input.md](docs/input.md).
   session's first NVRAM write. Its variables are stored as opaque bytes and
   never re-encoded — an entry this build cannot parse is the one most worth
   copying exactly.
+- `bootcfg::plan_restore` follows the same rule on the way back: every
+  `Boot####` before the `BootOrder` naming it, `BootNext` last of all, and
+  nothing deleted. Asserted in `tests/bootwrite.rs`.
 - Boot slots are allocated **lowest free**; snapshot filenames count up and
   never fill a gap. The rules are opposite on purpose: a filename holds the
   only copy of something, a boot slot holds nothing.
@@ -126,6 +129,11 @@ queued input first. See [docs/input.md](docs/input.md).
 
 ## Conventions
 
+- **A menu row carries its action, never its index.** `Menu<A>` in `main.rs`
+  pairs each row with an enum variant, so reordering a menu is one edit
+  rather than an edit to a list and a matching edit to a `match` on numbers
+  that nothing checks against it. The QEMU walks in `tools/run-qemu.sh` do
+  count presses, and are the thing to update when a menu changes.
 - Commit subjects are short prose in the imperative, describing the change's
   point rather than its mechanics: "Refuse a hybrid MBR in Prevent too, not
   just in Repair", "Cut the parts of gptcore nothing calls".

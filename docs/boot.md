@@ -132,13 +132,14 @@ two-entry `BootOrder` are always there to render.
 
 ## Changing the boot configuration
 
-Three operations write to NVRAM. None of them touches a disk.
+Four operations write to NVRAM. None of them touches a disk.
 
 | Operation | Writes | Reversible by |
 | --- | --- | --- |
 | Register a bootloader | `Boot####` then `BootOrder` | the firmware's own boot menu |
 | Set the default | `BootOrder` | the same screen |
 | Boot something once | `BootNext` | itself, as the firmware consumes it |
+| Restore the boot configuration | every variable in a `boot.NNN` | an earlier snapshot |
 
 ### The snapshot that comes first
 
@@ -157,6 +158,32 @@ whose ESP has become unreachable, changing a boot entry may be the only
 remedy left, and refusing outright would disable the tool precisely when it
 is needed. A failure becomes a question with the consequence written out,
 and the snapshot is retried before the next write rather than marked done.
+
+### Putting a snapshot back
+
+`bootcfg::plan_restore` turns a `boot.NNN` into the list of writes that puts
+it back, in the order entries first, settings, `BootOrder`, `BootNext`. The
+first and third of those are the write-ordering rule below, applied on the
+way back. `BootNext` is last because it is the only variable here that
+steers the very next boot, and arming it before the entry it names is back
+would be exactly backwards.
+
+**Nothing is deleted.** The plan holds precisely the variables the file
+holds, so an entry registered after the snapshot was taken survives the
+restore. This puts back what was saved; it does not make NVRAM identical to
+the moment of the save, and the screen says so before the gate. Deleting a
+boot entry is still left to the firmware's own menu — see
+[safety.md](safety.md).
+
+The bytes written are the bytes saved, never re-encoded. A `Boot####` this
+build cannot parse goes back exactly as it came out, which is the whole
+reason the snapshot stores variables opaquely; `tests/bootwrite.rs` asserts
+it with a deliberately unparseable entry.
+
+What is *not* preserved is the variable's attributes: the snapshot stores
+name and data, and everything written back gets the same
+non-volatile/boot-service/runtime set every other write here uses — which is
+what the firmware's own boot manager sets on these variables anyway.
 
 ### Write ordering
 
@@ -208,7 +235,13 @@ the resulting state is described rather than guessed at.
 make qemu SCRIPT=bootnext      # sets BootNext
 make qemu SCRIPT=bootdefault   # moves an entry to the front
 make qemu SCRIPT=bootregister  # adds an entry for a loader on the ESP
+make qemu SCRIPT=bootrestore   # writes a saved snapshot back
 ```
+
+`bootrestore` needs a `boot.NNN` on the ESP, which only a run that changed
+something leaves behind: run `bootregister` first against the same images,
+then `KEEP_VARS=1 make qemu SCRIPT=bootrestore` to watch the entry it added
+be undone by the copy taken before it.
 
 Each run starts from a pristine OVMF varstore. Afterwards the write can be
 read back from the host, which is the assertion that matters:
@@ -223,7 +256,6 @@ reboot.
 
 ## Not yet done
 
-Restoring a `boot.NNN` snapshot has no screen. The files are written,
-checksummed and documented, and `bootcfg::decode` reads them back with host
-tests behind it, but putting one back is still a manual job. Deleting a boot
-entry is likewise left to the firmware's own menu.
+Deleting a boot entry is left to the firmware's own menu. Nothing here
+removes a variable: the write paths only overwrite named ones, which is why
+a restore can put a configuration back but cannot take an entry away.

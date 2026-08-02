@@ -112,8 +112,9 @@ check: fmt-check clippy test build ## Everything CI runs
 images: build ## Build the QEMU boot and test disk images
 	./tools/mkimages.sh $(IMAGES) $(EFI) $(CORRUPTION)
 
-# SCRIPT names a menu walk in tools/run-qemu.sh: none, menu, check, repair,
-# repair-boot, repair-cancel, backup, restore, prevent.
+# SCRIPT names a menu walk in tools/run-qemu.sh: none, menu, overview, check,
+# repair, repair-boot, repair-cancel, backup, restore, prevent, and the
+# boot* walks over the NVRAM screens.
 SCRIPT ?= menu
 
 qemu: images ## Boot under OVMF and drive the menus (SCRIPT=...)

@@ -47,7 +47,7 @@ use fwcrc::FirmwareCrc32;
 use gptcore::backup::{self, Timestamp};
 use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan};
 use gptcore::style::{bad, dim, good, key, line, title, warn, Line, Style};
-use gptcore::{bootopt, layout, prevent, report};
+use gptcore::{bootcfg, bootopt, layout, prevent, report};
 use selfdev::BootDevice;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
 use uefi::prelude::*;
@@ -342,6 +342,142 @@ fn show_error(title: &str, message: String) {
 /// Not a failure: a refusal, or a choice the operator made.
 fn show_note(title: &str, message: String) {
     ui::message(title, &alloc::vec![warn(format!("  {message}"))]);
+}
+
+/// "1 entry" or "3 entries": the overview counts a great many things, and
+/// a screen someone reads while their machine is broken should not also be
+/// telling them it found 1 entries.
+fn count(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
+/// Everything the tool can find out without writing, on one page.
+///
+/// The question people actually arrive with is not "is my GPT valid" but
+/// "why will this thing not boot", and answering it used to mean knowing in
+/// advance which of the two halves of the tool to look in. Both halves had
+/// a diagnostic already; what was missing was one screen that runs both and
+/// then names the menu to go to.
+fn run_overview(boot_device: &BootDevice) {
+    let mut lines = Vec::new();
+    // Built alongside the findings, so the advice at the bottom can only
+    // say things this run actually observed.
+    let mut next: Vec<Line> = Vec::new();
+
+    let disks = scan(boot_device);
+    lines.push(title("  Disks"));
+    if disks.is_empty() {
+        lines.push(bad("    No fixed, writable, whole disk was found."));
+    }
+    for disk in &disks {
+        lines.push(key(format!("    {}", disk.label())));
+        match &disk.analysis {
+            Ok(analysis) => {
+                lines.push(Line::new(
+                    format!("      GPT: {}", report::verdict_line(analysis.verdict)),
+                    report::verdict_style(analysis.verdict),
+                ));
+                if plan(analysis, &CRC).is_some() {
+                    next.push(warn(format!(
+                        "  Disk {} has a defect this tool can fix.",
+                        disk.number
+                    )));
+                    next.push(dim("    Partition tables (GPT) -> Repair primary GPT"));
+                }
+            }
+            Err(e) => lines.push(bad(format!("      GPT: could not be read - {e}"))),
+        }
+    }
+
+    let state = nvram::read();
+    lines.push(Line::blank());
+    lines.push(title("  Boot entries in NVRAM"));
+    if let Some(e) = &state.truncated {
+        lines.push(bad(format!("    {e}")));
+    }
+    if state.entries.is_empty() {
+        lines.push(bad("    There are no boot entries at all."));
+    } else {
+        lines.push(line(format!(
+            "    {} in the store",
+            count(state.entries.len(), "entry", "entries")
+        )));
+    }
+    match &state.order {
+        Err(e) => lines.push(bad(format!("    BootOrder cannot be read - {e}"))),
+        Ok(order) if order.is_empty() => {
+            lines.push(bad("    The boot order is empty, so the firmware has no"));
+            lines.push(bad("    list to try."));
+            next.push(warn("  Nothing is in the boot order."));
+            next.push(dim("    Boot entries (NVRAM) -> Set the default boot entry"));
+        }
+        Ok(order) => {
+            lines.push(line(format!(
+                "    {} in the boot order",
+                count(order.len(), "entry", "entries")
+            )));
+            lines.push(dim(format!("      first: {}", slot_with_name(&state, order[0]))));
+        }
+    }
+    if let Some(slot) = state.current {
+        lines.push(dim(format!("      this boot used {}", slot_with_name(&state, slot))));
+    }
+    let unreadable = state.entries.iter().filter(|(_, e)| e.is_err()).count();
+    if unreadable > 0 {
+        lines.push(bad(format!("    {} will not decode", count(unreadable, "entry", "entries"))));
+    }
+    let orphans = state.orphans();
+    if !orphans.is_empty() {
+        lines.push(warn(format!(
+            "    {} not in the boot order, and will not be offered",
+            count(orphans.len(), "entry is", "entries are")
+        )));
+        next.push(warn("  An installed entry has fallen out of the boot order."));
+        next.push(dim("    Boot entries (NVRAM) -> Set the default boot entry"));
+    }
+
+    let esps = espscan::scan(boot_device, &known_paths(&state));
+    lines.push(Line::blank());
+    lines.push(title("  Bootloaders on the ESPs"));
+    if esps.volumes.is_empty() {
+        lines.push(bad("    No EFI System Partition was found on a fixed disk."));
+    } else {
+        lines.push(line(format!(
+            "    {} holding {}",
+            count(esps.volumes.len(), "ESP", "ESPs"),
+            count(esps.candidates.len(), "bootloader", "bootloaders")
+        )));
+        if !esps.unreadable.is_empty() {
+            lines.push(bad(format!(
+                "    {} could not be opened",
+                count(esps.unreadable.len(), "ESP", "ESPs")
+            )));
+        }
+        let unregistered = esps.candidates.iter().filter(|c| c.registered.is_none()).count();
+        if unregistered > 0 {
+            lines.push(warn(format!(
+                "    {} nothing in NVRAM points at",
+                count(unregistered, "loader", "loaders")
+            )));
+            next.push(warn("  A loader on an ESP has no boot entry pointing at it."));
+            next.push(dim("    Boot entries (NVRAM) -> Register a bootloader"));
+        }
+    }
+
+    lines.push(Line::blank());
+    if next.is_empty() {
+        lines.push(good("  Nothing here looks broken."));
+    } else {
+        lines.push(title("  What to do next"));
+        lines.extend(next);
+    }
+    lines.push(Line::blank());
+    lines.push(good("  Nothing was written. This screen never modifies anything."));
+    ui::page("Check this machine (read only)", &lines);
 }
 
 /// Read-only: say what is wrong, write nothing, offer nothing.
@@ -938,15 +1074,20 @@ fn run_boot_view() {
     ui::page("Boot entries in NVRAM (read only)", &lines);
 }
 
-/// What is actually installed on the ESPs, and whether NVRAM knows about it.
-fn run_boot_scan(boot_device: &BootDevice) {
-    let state = nvram::read();
-    let known: Vec<(u16, Vec<u8>)> = state
+/// The device path of every entry that decoded, for `espscan` to match a
+/// file on an ESP against.
+fn known_paths(state: &nvram::BootState) -> Vec<(u16, Vec<u8>)> {
+    state
         .entries
         .iter()
         .filter_map(|(slot, e)| e.as_ref().ok().map(|o| (*slot, o.device_path.clone())))
-        .collect();
-    let scan = espscan::scan(boot_device, &known);
+        .collect()
+}
+
+/// What is actually installed on the ESPs, and whether NVRAM knows about it.
+fn run_boot_scan(boot_device: &BootDevice) {
+    let state = nvram::read();
+    let scan = espscan::scan(boot_device, &known_paths(&state));
 
     let mut lines = Vec::new();
     if scan.volumes.is_empty() {
@@ -1031,14 +1172,10 @@ fn take_boot_snapshot() -> Result<String, String> {
         meta.push((String::from("unread"), missed.join(" ")));
     }
 
-    let snap = gptcore::bootcfg::Snapshot { time: now(), vars, meta };
-    let bytes = gptcore::bootcfg::encode(&snap, &CRC);
-    let name = gptcore::bootcfg::next_name(&esp::names()?).ok_or_else(|| {
-        format!(
-            "\\{}\\ already holds boot.{}; delete some first",
-            esp::DIR,
-            gptcore::bootcfg::MAX_SEQUENCE
-        )
+    let snap = bootcfg::Snapshot { time: now(), vars, meta };
+    let bytes = bootcfg::encode(&snap, &CRC);
+    let name = bootcfg::next_name(&esp::names()?).ok_or_else(|| {
+        format!("\\{}\\ already holds boot.{}; delete some first", esp::DIR, bootcfg::MAX_SEQUENCE)
     })?;
     esp::save(&name, &bytes)
 }
@@ -1199,12 +1336,7 @@ fn pick_boot_entry(title: &str, intro: &[Line], state: &nvram::BootState) -> Opt
 /// Put a loader found on an ESP into NVRAM.
 fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool) {
     let state = nvram::read();
-    let known: Vec<(u16, Vec<u8>)> = state
-        .entries
-        .iter()
-        .filter_map(|(slot, e)| e.as_ref().ok().map(|o| (*slot, o.device_path.clone())))
-        .collect();
-    let scan = espscan::scan(boot_device, &known);
+    let scan = espscan::scan(boot_device, &known_paths(&state));
 
     let new: Vec<&espscan::Candidate> =
         scan.candidates.iter().filter(|c| c.registered.is_none()).collect();
@@ -1379,60 +1511,288 @@ fn run_boot_once(snapshot: &mut bool, esp_lost: bool) {
     authorise_and_write("Boot something once", review, warning, &writes, snapshot, esp_lost);
 }
 
-fn run_boot_entries(boot_device: &BootDevice, esp_lost: bool) {
-    let items = alloc::vec![
-        ui::Item::with_detail(
-            "View the boot entries in NVRAM",
-            alloc::vec![
-                dim("  What the firmware will try, in order, plus any"),
-                dim("  entry that has fallen out of the list."),
-            ],
-        ),
-        ui::Item::with_detail(
-            "Scan the ESPs for bootloaders",
-            alloc::vec![
-                dim("  Which loaders are installed on disk, and whether"),
-                dim("  NVRAM has an entry pointing at each one."),
-            ],
-        ),
-        ui::Item::with_detail(
-            "Register a bootloader in NVRAM",
-            alloc::vec![
-                dim("  Add a boot entry for a loader that is on an ESP"),
-                dim("  but that nothing in NVRAM points at."),
-            ],
-        ),
-        ui::Item::with_detail(
-            "Set the default boot entry",
-            alloc::vec![
-                dim("  Move an entry to the front of the boot order."),
-                dim("  Changes the order only; no entry is rewritten."),
-            ],
-        ),
-        ui::Item::with_detail(
-            "Boot something once (next boot only)",
-            alloc::vec![
-                dim("  Try an entry without committing to it. The"),
-                dim("  firmware clears this as it uses it."),
-            ],
-        ),
+/// Put a saved boot configuration back into NVRAM.
+///
+/// The counterpart to the snapshot [`ensure_boot_snapshot`] takes before the
+/// session's first change. Until this existed the tool wrote those files and
+/// offered no way to use one, which made the promise they represent — that
+/// an NVRAM edit made from a screen with no keyboard has something behind
+/// it — true only for someone with a second machine and a hex editor.
+fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
+    const TITLE: &str = "Restore the boot configuration";
+    if esp_lost && !warn_esp_may_be_gone() {
+        return;
+    }
+    let files = match esp::list_boot() {
+        Ok(files) => files,
+        Err(e) => return show_error(TITLE, e),
+    };
+
+    let mut usable: Vec<(String, bootcfg::Snapshot)> = Vec::new();
+    let mut rejected: Vec<Line> = Vec::new();
+    for file in files {
+        match file.data.and_then(|d| bootcfg::decode(&d, &CRC).map_err(|e| e.to_string())) {
+            Ok(snap) => usable.push((file.name, snap)),
+            Err(e) => rejected.push(bad(format!("  {} - {e}", file.name))),
+        }
+    }
+
+    if usable.is_empty() {
+        let mut lines = alloc::vec![
+            warn(format!("  No usable boot snapshots in \\{}\\ on the ESP.", esp::DIR)),
+            Line::blank(),
+            dim("  One is taken automatically before the first change"),
+            dim("  of a session, so there is nothing here until then."),
+        ];
+        if !rejected.is_empty() {
+            lines.push(Line::blank());
+            lines.push(warn("  Rejected:"));
+            lines.extend(rejected);
+        }
+        return ui::message(TITLE, &lines);
+    }
+    if !rejected.is_empty() {
+        let mut lines = alloc::vec![
+            warn("  Some files could not be read and are not offered"),
+            warn("  below:"),
+            Line::blank(),
+        ];
+        lines.extend(rejected);
+        ui::message(TITLE, &lines);
+    }
+
+    let items: Vec<ui::Item> = usable
+        .iter()
+        .map(|(name, snap)| {
+            ui::Item::with_detail(
+                format!("{:<9} {}", name, bootcfg::summary(snap)),
+                alloc::vec![
+                    dim(match snap.meta_get("tool") {
+                        Some(t) => format!("  written by {t}"),
+                        None => String::from("  written by an older build"),
+                    }),
+                    // The one thing that makes a snapshot the wrong one to
+                    // put back: it was taken on a different machine.
+                    dim(match snap.meta_get("firmware") {
+                        Some(f) => format!("  on {f}"),
+                        None => String::from("  firmware not recorded"),
+                    }),
+                ],
+            )
+        })
+        .collect();
+    let intro = alloc::vec![
+        dim("  Saved copies of the boot entries and the boot order."),
+        dim("  Restoring one writes those variables back as they were."),
     ];
+    let Some(chosen) = ui::menu(TITLE, &intro, &items, "B = back") else {
+        return;
+    };
+    let (name, snap) = &usable[chosen];
+
+    let writes = bootcfg::plan_restore(snap);
+    if writes.is_empty() {
+        return show_note(TITLE, format!("{name} holds no variables to write."));
+    }
+
+    let mut review = alloc::vec![key(format!("  {name}")), Line::blank()];
+    review.extend(bootcfg::describe(snap));
+    review.push(Line::blank());
+    review.push(warn("  Only the variables listed above are written. An entry"));
+    review.push(warn("  added since this was taken is left alone, not removed:"));
+    review.push(warn("  this puts back what was saved, it does not put NVRAM"));
+    review.push(warn("  back exactly as it was."));
+
+    let warning = alloc::vec![
+        key(format!("  {name}   taken {}", snap.time)),
+        Line::blank(),
+        bad("  This OVERWRITES the boot entries and the boot order"),
+        bad("  named on the previous screen."),
+        line("  No disk is written to."),
+    ];
+    authorise_and_write(TITLE, review, warning, &writes, snapshot, esp_lost);
+}
+
+// ---------------------------------------------------------- the menus
+
+/// A menu's rows, each carrying what choosing it does.
+///
+/// Every menu here used to be a list of labels and a `match` on the index it
+/// returned, with a comment explaining which number was Exit. That is two
+/// lists nothing checks against each other, and inserting a row silently
+/// wires it to its neighbour's action. An action carried on the row cannot
+/// drift from it, which is what makes reordering a menu a safe edit.
+struct Menu<A> {
+    actions: Vec<A>,
+    items: Vec<ui::Item>,
+}
+
+impl<A: Copy> Menu<A> {
+    fn new(rows: Vec<(A, ui::Item)>) -> Self {
+        let (actions, items) = rows.into_iter().unzip();
+        Menu { actions, items }
+    }
+
+    /// Show it, and say what was chosen. `None` if the operator backed out.
+    fn show(&self, title: &str, intro: &[Line], hint: &str) -> Option<A> {
+        ui::menu(title, intro, &self.items, hint).map(|i| self.actions[i])
+    }
+}
+
+/// One row: what it does, what it is called, and the help shown under the
+/// list while it is selected.
+fn row<A>(action: A, label: &str, detail: &[&str]) -> (A, ui::Item) {
+    (action, ui::Item::with_detail(label, detail.iter().map(|t| dim(format!("  {t}"))).collect()))
+}
+
+/// Marks a row that opens another menu rather than doing something.
+///
+/// Cheap, and it is the whole difference between a list of five operations
+/// and a list of three operations and two doors.
+const SUBMENU: &str = "  >";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gpt {
+    Check,
+    Backup,
+    Restore,
+    Repair,
+    Prevent,
+}
+
+/// Everything that reads or writes a partition table.
+///
+/// Ordered by what it costs to be wrong: the check writes nothing, the
+/// backup writes a file, and the last three rewrite a table. Backing up
+/// sits above the three that overwrite because that is the order the
+/// operations should be done in, and a menu is the cheapest place to say so.
+fn run_gpt_menu(boot_device: &BootDevice, esp_lost: &mut bool) {
+    let menu = Menu::new(alloc::vec![
+        row(
+            Gpt::Check,
+            "Check a disk's GPT",
+            &["Read both tables and report what is wrong.", "Writes nothing."]
+        ),
+        row(
+            Gpt::Backup,
+            "Back up both GPTs to the ESP",
+            &[
+                "Save the tables to a file on this volume, so they",
+                "can be put back exactly as they are now."
+            ]
+        ),
+        row(
+            Gpt::Restore,
+            "Restore GPTs from a saved backup",
+            &["Write a previously saved snapshot back onto the", "disk it was taken from."]
+        ),
+        row(
+            Gpt::Repair,
+            "Repair primary GPT from the backup",
+            &["Rebuild a corrupt primary table from the backup", "at the end of the disk."]
+        ),
+        row(
+            Gpt::Prevent,
+            "Prevent recurrence (experimental)",
+            &[
+                "Lower FirstUsableLBA so the Windows arithmetic that caused",
+                "the corruption produces the right answer for this GPT.",
+                "This is unproven. Read docs/corruption.md first."
+            ]
+        ),
+    ]);
+
+    let intro = alloc::vec![
+        dim("  Checking reads only; backing up writes one file."),
+        dim("  The rest rewrite a table, and show what first."),
+    ];
+    loop {
+        match menu.show("Partition tables (GPT)", &intro, "B = back") {
+            Some(Gpt::Check) => run_check(boot_device),
+            Some(Gpt::Backup) => run_backup(boot_device, *esp_lost),
+            Some(Gpt::Restore) => run_restore(boot_device, esp_lost),
+            Some(Gpt::Repair) => run_repair(boot_device, esp_lost),
+            Some(Gpt::Prevent) => run_prevent(boot_device, esp_lost),
+            None => return,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nvram {
+    View,
+    Scan,
+    Register,
+    Default,
+    Once,
+    Restore,
+}
+
+/// Everything that reads or writes the firmware's boot configuration.
+///
+/// `snapshot` is the session's "a copy of NVRAM has been saved" flag, and it
+/// belongs to `main` rather than to this function: it used to be declared
+/// here, which meant leaving this menu and coming back took a second
+/// snapshot of a configuration this session had already changed.
+fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool) {
+    let menu = Menu::new(alloc::vec![
+        row(
+            Nvram::View,
+            "View the boot entries",
+            &["What the firmware will try, in order, plus any", "entry that has fallen out of it."]
+        ),
+        row(
+            Nvram::Scan,
+            "Scan the ESPs for bootloaders",
+            &[
+                "Which loaders are installed on disk, and whether",
+                "NVRAM has an entry pointing at each one."
+            ]
+        ),
+        row(
+            Nvram::Register,
+            "Register a bootloader",
+            &[
+                "Add a boot entry for a loader that is on an ESP",
+                "but that nothing in NVRAM points at."
+            ]
+        ),
+        row(
+            Nvram::Default,
+            "Set the default boot entry",
+            &[
+                "Move an entry to the front of the boot order.",
+                "Changes the order only; no entry is rewritten."
+            ]
+        ),
+        row(
+            Nvram::Once,
+            "Boot something once (next boot only)",
+            &["Try an entry without committing to it. The", "firmware clears this as it uses it."]
+        ),
+        row(
+            Nvram::Restore,
+            "Restore the boot configuration",
+            &[
+                "Write back a saved copy of the entries and the",
+                "boot order, from a snapshot on the ESP."
+            ]
+        ),
+    ]);
 
     let intro = alloc::vec![
         dim("  The first two screens read only."),
         dim("  The rest change NVRAM, and say so before they do."),
     ];
-    // Saved once per session, before the first change, by whichever
-    // operation gets there first.
-    let mut snapshot = false;
     loop {
-        match ui::menu("Boot entries (NVRAM)", &intro, &items, "B = back") {
-            Some(0) => run_boot_view(),
-            Some(1) => run_boot_scan(boot_device),
-            Some(2) => run_boot_register(boot_device, &mut snapshot, esp_lost),
-            Some(3) => run_boot_default(&mut snapshot, esp_lost),
-            Some(4) => run_boot_once(&mut snapshot, esp_lost),
-            _ => return,
+        match menu.show("Boot entries (NVRAM)", &intro, "B = back") {
+            Some(Nvram::View) => run_boot_view(),
+            Some(Nvram::Scan) => run_boot_scan(boot_device),
+            Some(Nvram::Register) => run_boot_register(boot_device, snapshot, esp_lost),
+            Some(Nvram::Default) => run_boot_default(snapshot, esp_lost),
+            Some(Nvram::Once) => run_boot_once(snapshot, esp_lost),
+            Some(Nvram::Restore) => run_boot_restore(snapshot, esp_lost),
+            None => return,
         }
     }
 }
@@ -1461,60 +1821,53 @@ fn run_reboot() {
     uefi::runtime::reset(uefi::runtime::ResetType::COLD, Status::SUCCESS, None);
 }
 
-fn main_menu_items() -> Vec<ui::Item> {
-    alloc::vec![
-        ui::Item::with_detail(
-            "Check GPT",
-            alloc::vec![
-                dim("  Read both tables and report what is wrong."),
-                dim("  Writes nothing.")
-            ],
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Main {
+    Overview,
+    Gpt,
+    Nvram,
+    Reboot,
+    Exit,
+}
+
+/// The top level: one diagnostic, two doors, and the way out.
+///
+/// Grouped by what an operation acts on rather than by the order the
+/// features were built in. The version before this had five GPT operations
+/// flat and five NVRAM operations behind a submenu, so two halves of the
+/// same tool sat at different depths for no reason anyone reading the menu
+/// could see. The overview is first because it is what answers the question
+/// someone arrives with, and it ends by naming the door to go through.
+fn main_menu() -> Menu<Main> {
+    Menu::new(alloc::vec![
+        row(
+            Main::Overview,
+            "Check this machine (read only)",
+            &[
+                "Every disk's partition table, the firmware's boot",
+                "list, and what is on the ESPs."
+            ]
         ),
-        ui::Item::with_detail(
-            "Repair primary GPT from the backup",
-            alloc::vec![
-                dim("  Rebuild a corrupt primary table from the backup"),
-                dim("  at the end of the disk.")
-            ],
+        row(
+            Main::Gpt,
+            &format!("Partition tables (GPT){SUBMENU}"),
+            &["Check, back up, restore or repair the partition", "tables on a disk."]
         ),
-        ui::Item::with_detail(
-            "Back up both GPTs to the ESP",
-            alloc::vec![
-                dim("  Save the tables to a file on this volume, so they"),
-                dim("  can be put back exactly as they are now.")
-            ],
+        row(
+            Main::Nvram,
+            &format!("Boot entries (NVRAM){SUBMENU}"),
+            &[
+                "What the firmware will try to boot, and the",
+                "loaders on the ESPs it could point at."
+            ]
         ),
-        ui::Item::with_detail(
-            "Restore GPTs from a saved backup",
-            alloc::vec![
-                dim("  Write a previously saved snapshot back onto the"),
-                dim("  disk it was taken from.")
-            ],
-        ),
-        ui::Item::with_detail(
-            "Prevent recurrence",
-            alloc::vec![
-                dim("  Lower FirstUsableLBA so the Windows arithmetic that caused"),
-                dim("  the corruption produces the right answer for this GPT."),
-                dim("  This is unproven. Read docs/corruption.md first.")
-            ],
-        ),
-        ui::Item::with_detail(
-            "Boot entries (NVRAM)",
-            alloc::vec![
-                dim("  View the firmware's boot list, and find the"),
-                dim("  bootloaders installed on the ESPs.")
-            ],
-        ),
-        ui::Item::with_detail("Exit", alloc::vec![dim("  Return to the firmware.")]),
-        ui::Item::with_detail(
+        row(
+            Main::Reboot,
             "Reboot",
-            alloc::vec![
-                dim("  Restart the machine, so the firmware reads the"),
-                dim("  disks and the boot list again.")
-            ],
+            &["Restart the machine, so the firmware reads the", "disks and the boot list again."]
         ),
-    ]
+        row(Main::Exit, "Exit", &["Return to the firmware."]),
+    ])
 }
 
 #[entry]
@@ -1531,8 +1884,13 @@ fn main() -> Status {
     ui::init();
 
     let boot_device = BootDevice::resolve();
-    let items = main_menu_items();
+    let menu = main_menu();
     let mut esp_lost = false;
+    // Saved once per session, before the first NVRAM change, by whichever
+    // operation gets there first. Held here so that leaving the boot menu
+    // and coming back does not take a second copy of a configuration this
+    // session has already changed.
+    let mut boot_snapshot = false;
 
     loop {
         // Rebuilt every time round rather than once: the device path is
@@ -1553,16 +1911,13 @@ fn main() -> Status {
             intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
         }
 
-        match ui::menu(APP_NAME, &intro, &items, "B = exit") {
-            Some(0) => run_check(&boot_device),
-            Some(1) => run_repair(&boot_device, &mut esp_lost),
-            Some(2) => run_backup(&boot_device, esp_lost),
-            Some(3) => run_restore(&boot_device, &mut esp_lost),
-            Some(4) => run_prevent(&boot_device, &mut esp_lost),
-            Some(5) => run_boot_entries(&boot_device, esp_lost),
-            // 6 is Exit; 7 only comes back if the reboot was not confirmed.
-            Some(7) => run_reboot(),
-            _ => break,
+        match menu.show(APP_NAME, &intro, "B = exit") {
+            Some(Main::Overview) => run_overview(&boot_device),
+            Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
+            Some(Main::Nvram) => run_nvram_menu(&boot_device, &mut boot_snapshot, esp_lost),
+            // Only comes back if the reboot was not confirmed.
+            Some(Main::Reboot) => run_reboot(),
+            Some(Main::Exit) | None => break,
         }
     }
 

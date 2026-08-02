@@ -136,13 +136,30 @@ pub fn names() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Read every snapshot in the backup directory, sorted by name.
+/// Read every GPT snapshot in the backup directory, sorted by name.
 ///
 /// The files are a few tens of KiB each, so reading them all up front is
 /// cheaper than the alternative: the picker has to show what is *inside*
 /// each one — when it was taken, from what geometry, whether the table was
 /// healthy — and a filename cannot say that.
 pub fn list() -> Result<Vec<Saved>, String> {
+    // `gpt.NNN` is what this build writes; `*.bin` is what earlier builds
+    // and tools/deck-corrupt.py write, and a snapshot must not become
+    // invisible because the naming scheme moved on.
+    list_matching(|name| name.starts_with("gpt.") || name.ends_with(".bin"))
+}
+
+/// Read every boot configuration snapshot, sorted by name.
+///
+/// Separate from [`list`] because the two kinds share a directory and
+/// nothing else: a picker offering to write a boot snapshot onto a disk, or
+/// a partition table into NVRAM, would be a picker with a bug in it.
+pub fn list_boot() -> Result<Vec<Saved>, String> {
+    list_matching(|name| name.starts_with("boot."))
+}
+
+/// The files in the backup directory whose lowercased name `wanted` accepts.
+fn list_matching(wanted: impl Fn(&str) -> bool) -> Result<Vec<Saved>, String> {
     // No directory means no backups, which is an answer, not a failure.
     // Anything else that went wrong is now an `Err` from `open_dir`.
     let Some(mut dir) = open_dir(false)? else {
@@ -156,13 +173,8 @@ pub fn list() -> Result<Vec<Saved>, String> {
                 if info.attribute().contains(FileAttribute::DIRECTORY) {
                     continue;
                 }
-                // `gpt.NNN` is what this build writes; `*.bin` is what
-                // earlier builds and tools/deck-corrupt.py write, and a
-                // snapshot must not become invisible because the naming
-                // scheme moved on.
                 let name = info.file_name().to_string();
-                let lower = name.to_ascii_lowercase();
-                if lower.starts_with("gpt.") || lower.ends_with(".bin") {
+                if wanted(&name.to_ascii_lowercase()) {
                     names.push(name);
                 }
             }

@@ -14,19 +14,48 @@ EFI Boot Fixer for Steam Deck
   version 0.1.0+3.g1a2b3c4
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
-  Check GPT                                          <- highlighted
-   Repair primary GPT from the backup
-   Back up both GPTs to the ESP
-   Restore GPTs from a saved backup
-   Prevent recurrence (close the FirstUsableLBA gap)
-   Boot entries (NVRAM)
-   Exit
+  Check this machine (read only)                     <- highlighted
+   Partition tables (GPT)  >
+   Boot entries (NVRAM)  >
    Reboot
+   Exit
 
-  Read both tables and report what is wrong.
-  Writes nothing.
+  Every disk's partition table, the firmware's boot
+  list, and what is on the ESPs.
   D-pad = move    A = choose    B = exit    View = display
 ```
+
+## The shape of the menus
+
+One diagnostic, two doors, and the way out. Operations are grouped by what
+they act on, and each group is ordered by what it costs to be wrong:
+
+```
+Check this machine (read only)
+Partition tables (GPT)          Boot entries (NVRAM)
+  Check a disk's GPT              View the boot entries
+  Back up both GPTs to the ESP    Scan the ESPs for bootloaders
+  Restore GPTs from a saved copy  Register a bootloader
+  Repair primary GPT              Set the default boot entry
+  Prevent recurrence              Boot something once
+                                  Restore the boot configuration
+Reboot / Exit
+```
+
+Read-only screens come first in both submenus, then anything that writes.
+On the GPT side, backing up sits above the three operations that overwrite a
+table because that is the order the two should be done in, and a menu is the
+cheapest place to say so.
+
+**Start with "Check this machine".** It reads every disk's partition table,
+the firmware's boot list and the loaders installed on the ESPs, writes
+nothing, and ends by naming the submenu that holds the fix for whatever it
+found. It exists because the question someone arrives with is not "is my GPT
+valid" but "why will this thing not boot", and answering that used to mean
+knowing in advance which half of the tool to look in.
+
+Nothing is more than two rows deep: the row that opens a submenu, then the
+operation. The rows ending in `>` are the doors; the rest do something.
 
 `View = display` is offered on every screen that waits for a press, and opens
 the screen that turns the picture and changes the text size — see

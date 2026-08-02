@@ -17,6 +17,7 @@
 //! taken.
 
 use crate::backup::Timestamp;
+use crate::bootopt::VarWrite;
 use crate::crc::Crc32;
 use crate::style::{dim, key, title, Line};
 use alloc::format;
@@ -51,6 +52,10 @@ impl Snapshot {
 
     pub fn get(&self, name: &str) -> Option<&[u8]> {
         self.vars.iter().find(|(n, _)| n == name).map(|(_, d)| d.as_slice())
+    }
+
+    pub fn meta_get(&self, key: &str) -> Option<&str> {
+        self.meta.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
 }
 
@@ -253,6 +258,85 @@ pub fn next_name(existing: &[String]) -> Option<String> {
     let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
     let next = highest + 1;
     (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}"))
+}
+
+/// One line for a picker: when it was taken, and how much is in it.
+pub fn summary(snap: &Snapshot) -> String {
+    format!(
+        "{}  {} entries, {} settings",
+        snap.time,
+        snap.entry_count(),
+        snap.vars.len() - snap.entry_count()
+    )
+}
+
+/// What one restored variable puts back, for the screen shown before it.
+///
+/// Decoded here rather than shown as a byte count, because "the saved boot
+/// order (4 entries)" is a thing an operator can check against the screen
+/// they just came from and a length in bytes is not. A variable this build
+/// cannot parse still gets written — that is the whole point of storing
+/// them opaquely — so a failure to decode describes it as such instead of
+/// removing it from the plan.
+fn what_it_restores(name: &str, data: &[u8]) -> String {
+    if crate::bootopt::parse_slot(name).is_some() {
+        return match crate::bootopt::decode(data) {
+            Ok(opt) => format!("the saved entry, \"{}\"", opt.description),
+            Err(_) => String::from("the saved entry, which this build cannot parse"),
+        };
+    }
+    match name {
+        "BootOrder" => match crate::bootopt::decode_order(data) {
+            Ok(order) => format!("the saved boot order ({} entries)", order.len()),
+            Err(_) => String::from("the saved boot order, which this build cannot parse"),
+        },
+        "BootNext" => match data {
+            [lo, hi] => format!(
+                "the saved one-shot override to {}",
+                crate::bootopt::slot_name(u16::from_le_bytes([*lo, *hi]))
+            ),
+            _ => String::from("the saved one-shot override"),
+        },
+        "Timeout" => match data {
+            [lo, hi] => format!("the saved menu timeout, {} s", u16::from_le_bytes([*lo, *hi])),
+            _ => String::from("the saved menu timeout"),
+        },
+        _ => String::from("as it was saved"),
+    }
+}
+
+/// Put a saved boot configuration back.
+///
+/// The ordering is the same rule [`crate::bootopt::plan_register`] follows,
+/// for the same reason: every `Boot####` is written before the `BootOrder`
+/// naming it, so a restore interrupted halfway leaves entries nothing points
+/// at — which the view screen explains — rather than an order pointing at
+/// entries that are not there, which nothing can. `BootNext` goes last
+/// because it is the only variable here that changes the very next boot, and
+/// arming it before the entry it names is back would be exactly backwards.
+///
+/// **Nothing is deleted.** A `Boot####` that exists now but is not in the
+/// snapshot is left alone, so this puts back what was saved rather than
+/// making NVRAM identical to the moment of the save. Callers must say so:
+/// the difference is visible to anyone who registered an entry in between.
+pub fn plan_restore(snap: &Snapshot) -> Vec<VarWrite> {
+    let mut entries = Vec::new();
+    let mut settings = Vec::new();
+    let mut order = Vec::new();
+    let mut next = Vec::new();
+
+    for (name, data) in &snap.vars {
+        let write =
+            VarWrite { name: name.clone(), data: data.clone(), what: what_it_restores(name, data) };
+        match name.as_str() {
+            "BootOrder" => order.push(write),
+            "BootNext" => next.push(write),
+            _ if crate::bootopt::parse_slot(name).is_some() => entries.push(write),
+            _ => settings.push(write),
+        }
+    }
+
+    entries.into_iter().chain(settings).chain(order).chain(next).collect()
 }
 
 /// What was saved, for the screen shown after saving it.
