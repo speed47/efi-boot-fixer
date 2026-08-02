@@ -4,7 +4,7 @@
     tools/reconstruct.py <dump-dir> <out.img> [--scrub]
 
 `<dump-dir>` holds head.bin (LBA 0..33), tail.bin (the last 33 LBAs) and
-sectors.txt, as produced by the dd recipe in the README. The output is a
+sectors.txt, as produced by the dd recipe in docs/testing.md. The output is a
 sparse file of the original size, so a 1 TB disk costs ~34 KB on disk and
 the GPT sits at exactly the offsets it had on the real hardware.
 

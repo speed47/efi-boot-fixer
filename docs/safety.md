@@ -1,0 +1,49 @@
+# What it will and will not touch
+
+Applied in order, before anything is written:
+
+- whole disks only (`Media->LogicalPartition == FALSE`)
+- never removable media, never read-only media — so the SD card and USB
+  sticks never appear as repair targets
+- never a disk with a hybrid MBR (some legacy OS depends on that view)
+- never a backup table that fails structural checks (overlaps, ranges outside
+  the usable area, inverted extents) or whose entry array would collide with
+  the first usable LBA
+- never a table without an `esp` and a `rootfs-A`, which is the stale-backup
+  guard
+- never a saved snapshot whose block size or disk size does not match
+- never without the operator entering the confirmation sequence
+
+## Not excluding the boot disk
+
+Earlier versions refused to write to the disk this image booted from, and
+refused to write anywhere at all if that disk could not be identified. That
+was backwards. The whole point is to live on the Deck's own ESP so a broken
+partition table can be fixed without a USB stick or a keyboard — which makes
+the boot disk the disk that needs repairing. It is now labelled `[boot]` in
+the picker and otherwise treated like any other.
+
+One real consequence: `OpenProtocolAttributes::Exclusive` on a whole disk
+disconnects the partition and filesystem drivers serving it, including the one
+serving the ESP this program was loaded from. The running image survives (it
+is already in memory), but ESP access afterwards may not, so file operations
+happen before block writes and a warning appears if you go back to the backup
+or restore screens afterwards. If the firmware refuses the exclusive open
+entirely, the write falls back to a shared open rather than failing — being
+unable to repair the machine's only drive would be the worse outcome — and the
+result screen says which happened. This path is exercised under OVMF by
+`run-qemu.sh build/images repair-boot`.
+
+## Write ordering and checksums
+
+The repair rewrites `MyLBA`, `AlternateLBA` and `PartitionEntryLBA` field by
+field rather than copying the backup block, and recomputes both CRCs. The
+entry array is written and flushed *before* the header that points at it, so a
+power cut cannot leave a valid header describing garbage.
+
+`gBS->CalculateCrc32` is used when available, so the checksums written are
+produced by the same code that validates them at boot; `gptcore`'s own
+implementation is the fallback, and the app says which one it used.
+
+Windows partitions alongside SteamOS are expected and are not treated as
+suspicious.
