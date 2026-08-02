@@ -120,8 +120,20 @@ struct Disk {
     block_size: u32,
     last_block: u64,
     steamos: bool,
-    /// `None` if the disk could not be read at all.
-    verdict: Option<gptcore::Verdict>,
+    /// The table as `scan` found it, or why it could not be read.
+    ///
+    /// Carried rather than re-read. Reading a GPT is four block reads and
+    /// two CRCs over the entry array, and every operation used to repeat
+    /// the whole thing on a disk the picker had just analysed to decide
+    /// what to say about it. Restore was the worst case: it analysed every
+    /// attached disk three times over before writing anything.
+    ///
+    /// This is a snapshot, and that is sound because a scan is never reused
+    /// across operations — each one picks a disk, which rescans — and
+    /// because nothing else in the firmware is touching the disk while the
+    /// operator reads a menu. The one thing that does invalidate it is our
+    /// own write, and no plan is built from an analysis taken after one.
+    analysis: Result<Analysis, String>,
 }
 
 impl Disk {
@@ -147,9 +159,11 @@ impl Disk {
     }
 
     fn detail(&self) -> Vec<Line> {
-        let (health, style) = match self.verdict {
-            Some(v) => (report::verdict_line(v).to_string(), report::verdict_style(v)),
-            None => ("could not be read".to_string(), Style::Bad),
+        let (health, style) = match &self.analysis {
+            Ok(a) => {
+                (report::verdict_line(a.verdict).to_string(), report::verdict_style(a.verdict))
+            }
+            Err(e) => (format!("could not be read - {e}"), Style::Bad),
         };
         alloc::vec![
             dim(format!("  {}", self.path)),
@@ -164,10 +178,9 @@ fn open_disk(handle: Handle) -> Result<UefiDisk, String> {
     UefiDisk::new(io).map_err(|e| e.to_string())
 }
 
-fn read_disk(handle: Handle) -> Result<(UefiDisk, Analysis), String> {
+fn read_disk(handle: Handle) -> Result<Analysis, String> {
     let mut disk = open_disk(handle)?;
-    let analysis = analyze(&mut disk, &CRC).map_err(|e| format!("cannot read the GPT ({e})"))?;
-    Ok((disk, analysis))
+    analyze(&mut disk, &CRC).map_err(|e| format!("cannot read the GPT ({e})"))
 }
 
 /// Every whole, fixed, writable disk the firmware knows about.
@@ -199,16 +212,12 @@ fn scan(boot_device: &BootDevice) -> Vec<Disk> {
         let path = get_protocol::<DevicePath>(handle).ok();
         let boot = path.as_deref().is_some_and(|p| boot_device.covers(p));
 
-        let (steamos, verdict) = match read_disk(handle) {
-            Ok((_, analysis)) => {
-                let hint = analysis
-                    .best_view()
-                    .map(|t| layout::steamos_hint(&t.entries))
-                    .unwrap_or_default();
-                (hint.likely(), Some(analysis.verdict))
-            }
-            Err(_) => (false, None),
-        };
+        let analysis = read_disk(handle);
+        // Precomputed rather than derived on demand: `label` is called for
+        // every row on every keypress, and this walks the entry array.
+        let steamos = analysis.as_ref().is_ok_and(|a| {
+            a.best_view().map(|t| layout::steamos_hint(&t.entries)).unwrap_or_default().likely()
+        });
 
         disks.push(Disk {
             handle,
@@ -219,7 +228,7 @@ fn scan(boot_device: &BootDevice) -> Vec<Disk> {
             block_size,
             last_block,
             steamos,
-            verdict,
+            analysis,
         });
     }
     disks
@@ -227,7 +236,16 @@ fn scan(boot_device: &BootDevice) -> Vec<Disk> {
 
 /// Choose a disk, or `None` if the operator backed out.
 fn pick_disk(title: &str, boot_device: &BootDevice) -> Option<Disk> {
-    let disks = scan(boot_device);
+    pick_from(title, scan(boot_device))
+}
+
+/// The same picker, over disks already scanned.
+///
+/// Restore needs the list before it can offer anything — it has to work out
+/// which disk each snapshot belongs to — so it scans once and picks from
+/// that, rather than throwing the analyses away and having `pick_disk`
+/// redo every one of them.
+fn pick_from(title: &str, disks: Vec<Disk>) -> Option<Disk> {
     if disks.is_empty() {
         ui::message(
             "Nothing to do",
@@ -330,9 +348,9 @@ fn run_check(boot_device: &BootDevice) {
     let Some(disk) = pick_disk("Check GPT", boot_device) else {
         return;
     };
-    let (_, analysis) = match read_disk(disk.handle) {
-        Ok(v) => v,
-        Err(e) => return show_error("Check GPT", e),
+    let analysis = match &disk.analysis {
+        Ok(a) => a,
+        Err(e) => return show_error("Check GPT", e.clone()),
     };
 
     let mut lines = alloc::vec![
@@ -340,7 +358,7 @@ fn run_check(boot_device: &BootDevice) {
         dim(format!("  {}", disk.path)),
         Line::blank()
     ];
-    lines.extend(report::render_analysis(&analysis));
+    lines.extend(report::render_analysis(analysis));
     if let Some(view) = analysis.best_view() {
         let caption =
             if view.is_valid() { "Current table:" } else { "Table as far as it could be read:" };
@@ -361,14 +379,14 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     let Some(disk) = pick_disk("Repair primary GPT", boot_device) else {
         return;
     };
-    let (_, analysis) = match read_disk(disk.handle) {
-        Ok(v) => v,
-        Err(e) => return show_error("Repair", e),
+    let analysis = match &disk.analysis {
+        Ok(a) => a,
+        Err(e) => return show_error("Repair", e.clone()),
     };
 
-    let repair = plan(&analysis, &CRC);
+    let repair = plan(analysis, &CRC);
     let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
-    lines.extend(report::render(&analysis, repair.as_ref()));
+    lines.extend(report::render(analysis, repair.as_ref()));
 
     if !ui::page("Repair primary GPT", &lines) {
         return;
@@ -410,13 +428,18 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     let Some(disk) = pick_disk("Back up GPT", boot_device) else {
         return;
     };
-    let (mut dev, analysis) = match read_disk(disk.handle) {
-        Ok(v) => v,
+    let analysis = match &disk.analysis {
+        Ok(a) => a,
+        Err(e) => return show_error("Back up GPT", e.clone()),
+    };
+    // The only operation that also needs the device: capture copies the
+    // MBR, both headers and both entry arrays out of it.
+    let mut dev = match open_disk(disk.handle) {
+        Ok(dev) => dev,
         Err(e) => return show_error("Back up GPT", e),
     };
 
-    let archive = match backup::capture(&mut dev, &analysis, now(), provenance(&disk, boot_device))
-    {
+    let archive = match backup::capture(&mut dev, analysis, now(), provenance(&disk, boot_device)) {
         Ok(a) => a,
         Err(e) => return show_error("Back up GPT", format!("could not read the tables ({e})")),
     };
@@ -556,15 +579,12 @@ impl Saved {
 /// drives, so this leans on the per-partition unique GUIDs; see
 /// `backup::Comparison`.
 fn attribute(archives: Vec<(String, backup::Archive)>, disks: &[Disk]) -> Vec<Saved> {
-    let analyses: Vec<Option<Analysis>> =
-        disks.iter().map(|d| read_disk(d.handle).ok().map(|(_, a)| a)).collect();
-
     archives
         .into_iter()
         .map(|(name, archive)| {
             let mut best: Option<(usize, backup::Comparison)> = None;
-            for (i, analysis) in analyses.iter().enumerate() {
-                let Some(analysis) = analysis else { continue };
+            for (i, disk) in disks.iter().enumerate() {
+                let Ok(analysis) = &disk.analysis else { continue };
                 let c = backup::compare(&archive, analysis);
                 if c.verdict() == backup::Match::DifferentDisk {
                     continue;
@@ -695,15 +715,17 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         }
     };
 
-    let Some(disk) = pick_disk("Restore onto which disk?", boot_device) else {
+    // `disks` is the scan attribution already did; picking from it saves
+    // analysing every attached disk a second time.
+    let Some(disk) = pick_from("Restore onto which disk?", disks) else {
         return;
     };
-    let (_, analysis) = match read_disk(disk.handle) {
-        Ok(v) => v,
-        Err(e) => return show_error("Restore GPT", e),
+    let analysis = match &disk.analysis {
+        Ok(a) => a,
+        Err(e) => return show_error("Restore GPT", e.clone()),
     };
 
-    let restore = match backup::restore_plan(archive, &analysis) {
+    let restore = match backup::restore_plan(archive, analysis) {
         Ok(p) => p,
         Err(mismatch) => {
             return show_error(
@@ -713,7 +735,7 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         }
     };
 
-    let comparison = backup::compare(archive, &analysis);
+    let comparison = backup::compare(archive, analysis);
     let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     let disk_name = format!("Disk {}", disk.number);
     lines.extend(backup::inspect(archive, Some((disk_name.as_str(), &comparison))));
@@ -749,12 +771,12 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     let Some(disk) = pick_disk("Prevent recurrence", boot_device) else {
         return;
     };
-    let (_, analysis) = match read_disk(disk.handle) {
-        Ok(v) => v,
-        Err(e) => return show_error("Prevent", e),
+    let analysis = match &disk.analysis {
+        Ok(a) => a,
+        Err(e) => return show_error("Prevent", e.clone()),
     };
 
-    let verdict = prevent::assess(&analysis);
+    let verdict = prevent::assess(analysis);
     let mut lines = alloc::vec![key(format!("  {}", disk.label())), Line::blank()];
     lines.extend(prevent::describe(verdict));
 
@@ -764,7 +786,7 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     if !verdict.will_write() {
         return;
     }
-    let Some(gap_plan) = prevent::plan(&analysis, &CRC) else {
+    let Some(gap_plan) = prevent::plan(analysis, &CRC) else {
         return;
     };
 
