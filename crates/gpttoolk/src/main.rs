@@ -32,8 +32,10 @@ extern crate alloc;
 mod blockdev;
 mod diskinfo;
 mod esp;
+mod espscan;
 mod fwcrc;
 mod gfx;
+mod nvram;
 mod selfdev;
 mod ui;
 
@@ -44,8 +46,8 @@ use blockdev::UefiDisk;
 use fwcrc::FirmwareCrc32;
 use gptcore::backup::{self, Timestamp};
 use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan};
-use gptcore::style::{bad, dim, good, key, line, warn, Line, Style};
-use gptcore::{layout, prevent, report};
+use gptcore::style::{bad, dim, good, key, line, title, warn, Line, Style};
+use gptcore::{bootopt, layout, prevent, report};
 use selfdev::BootDevice;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
 use uefi::prelude::*;
@@ -807,6 +809,234 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     report_write("Prevent", &disk, result, esp_lost);
 }
 
+// --------------------------------------------------- NVRAM boot entries
+
+/// Render the device path held in a boot entry.
+///
+/// Distinguishes "there is no path" from "there is one and it will not
+/// parse". The second is a finding — a truncated variable — and must not be
+/// shown as a blank line.
+fn boot_path_text(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    match <&DevicePath>::try_from(bytes) {
+        Ok(path) => path_text(Some(path)),
+        Err(_) => format!("<{} bytes that are not a device path>", bytes.len()),
+    }
+}
+
+/// One entry, as it appears on the boot entries page.
+fn render_boot_entry(slot: u16, entry: &Result<bootopt::LoadOption, String>) -> Vec<Line> {
+    let opt = match entry {
+        Ok(opt) => opt,
+        Err(e) => {
+            return alloc::vec![bad(format!(
+                "  {}  cannot be read - {e}",
+                bootopt::slot_name(slot)
+            ))]
+        }
+    };
+    let mut out = alloc::vec![Line::new(format!("  {}", bootopt::summary(slot, opt)), opt.style())];
+    let path = boot_path_text(&opt.device_path);
+    if !path.is_empty() {
+        out.extend(ui::wrapped(&format!("      {path}"), Style::Dim, "        "));
+    }
+    for line in bootopt::render_flags(opt) {
+        out.push(Line::new(format!("      {}", line.text.trim_start()), line.style));
+    }
+    out
+}
+
+fn slot_with_name(state: &nvram::BootState, slot: u16) -> String {
+    match state.get(slot) {
+        Some(Ok(opt)) => format!("{}  {}", bootopt::slot_name(slot), opt.description),
+        Some(Err(_)) => format!("{}  (unreadable)", bootopt::slot_name(slot)),
+        None => format!("{}  (no such entry)", bootopt::slot_name(slot)),
+    }
+}
+
+/// Everything NVRAM says about booting. Reads nothing else and writes
+/// nothing at all.
+fn run_boot_view() {
+    let state = nvram::read();
+    let mut lines = Vec::new();
+
+    if let Some(e) = &state.truncated {
+        lines.push(bad(format!("  {e}")));
+        lines.push(warn("  The list below may be incomplete."));
+        lines.push(Line::blank());
+    }
+
+    lines.push(key(format!(
+        "  Booted from: {}",
+        match state.current {
+            Some(s) => slot_with_name(&state, s),
+            None => String::from("the firmware did not say"),
+        }
+    )));
+    if let Some(next) = state.next {
+        lines.push(warn(format!("  Next boot:   {} (one shot)", slot_with_name(&state, next))));
+    }
+    if let Some(t) = state.timeout {
+        lines.push(dim(format!("  Menu timeout: {t} s")));
+    }
+    lines.push(Line::blank());
+
+    match &state.order {
+        Err(e) => {
+            lines.push(bad(format!("  BootOrder cannot be read - {e}")));
+        }
+        Ok(order) if order.is_empty() => {
+            lines.push(bad("  BootOrder is empty."));
+            lines.push(line("  The firmware has no list to try, and will fall back"));
+            lines.push(line("  to \\EFI\\BOOT\\BOOTX64.EFI if it is willing to."));
+        }
+        Ok(order) => {
+            lines.push(title(format!("  Boot order ({} entries):", order.len())));
+            for (i, slot) in order.iter().enumerate() {
+                match state.get(*slot) {
+                    Some(entry) => {
+                        let mut rendered = render_boot_entry(*slot, entry);
+                        // Number the position, so "third in the list" is
+                        // readable off the screen rather than counted.
+                        rendered[0].text = format!("  {:>2}. {}", i + 1, &rendered[0].text[2..]);
+                        lines.extend(rendered);
+                    }
+                    None => lines.push(bad(format!(
+                        "  {:>2}. {}  <- in the order, but no such entry",
+                        i + 1,
+                        bootopt::slot_name(*slot)
+                    ))),
+                }
+            }
+        }
+    }
+
+    // The reason this screen enumerates the store instead of walking
+    // BootOrder. An entry here is installed, bootable, and invisible to the
+    // firmware's own menu.
+    let orphans = state.orphans();
+    if !orphans.is_empty() {
+        lines.push(Line::blank());
+        lines.push(title("  Present, but not in the boot order:"));
+        lines.push(dim("  The firmware will not offer these."));
+        for slot in orphans {
+            if let Some(entry) = state.get(slot) {
+                lines.extend(render_boot_entry(slot, entry));
+            }
+        }
+    }
+
+    if state.entries.is_empty() {
+        lines.push(Line::blank());
+        lines.push(bad("  There are no boot entries in NVRAM at all."));
+    }
+
+    lines.push(Line::blank());
+    lines.push(good("  Nothing was written. This screen never modifies NVRAM."));
+    ui::page("Boot entries in NVRAM (read only)", &lines);
+}
+
+/// What is actually installed on the ESPs, and whether NVRAM knows about it.
+fn run_boot_scan(boot_device: &BootDevice) {
+    let state = nvram::read();
+    let known: Vec<(u16, Vec<u8>)> = state
+        .entries
+        .iter()
+        .filter_map(|(slot, e)| e.as_ref().ok().map(|o| (*slot, o.device_path.clone())))
+        .collect();
+    let scan = espscan::scan(boot_device, &known);
+
+    let mut lines = Vec::new();
+    if scan.volumes.is_empty() {
+        lines.push(bad("  No EFI System Partition was found on a fixed disk."));
+        lines.push(Line::blank());
+        lines.push(dim("  Removable media is not scanned: a boot entry pointing"));
+        lines.push(dim("  at a USB stick stops working when it is unplugged."));
+        ui::page("Bootloaders on the ESPs", &lines);
+        return;
+    }
+
+    for (i, volume) in scan.volumes.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::blank());
+        }
+        let mut heading = format!("  ESP {}", i + 1);
+        if volume.boot {
+            heading.push_str("  [boot]");
+        }
+        lines.push(key(heading));
+        lines.extend(ui::wrapped(&format!("    {}", volume.path), Style::Dim, "      "));
+        lines.push(dim(format!("    partition {}", volume.partition)));
+
+        if scan.unreadable.contains(&volume.path) {
+            lines.push(bad("    The filesystem on this ESP could not be opened."));
+            continue;
+        }
+
+        let found: Vec<&espscan::Candidate> =
+            scan.candidates.iter().filter(|c| c.esp == i).collect();
+        if found.is_empty() {
+            lines.push(warn("    No EFI binaries on this ESP."));
+            continue;
+        }
+        for c in found {
+            lines.extend(ui::wrapped(&format!("    {}", c.file), Style::Normal, "      "));
+            lines.push(dim(format!("      {}, {}", c.kind, report::human_size(c.size))));
+            match c.registered {
+                Some(slot) => {
+                    lines.push(good(format!("      registered as {}", bootopt::slot_name(slot))))
+                }
+                None => lines.push(warn(String::from("      not in NVRAM"))),
+            }
+        }
+    }
+
+    let unregistered = scan.candidates.iter().filter(|c| c.registered.is_none()).count();
+    lines.push(Line::blank());
+    if unregistered > 0 {
+        lines.push(line(format!(
+            "  {unregistered} of {} have no boot entry pointing at them.",
+            scan.candidates.len()
+        )));
+        lines.push(dim("  Registering them is not offered yet."));
+    }
+    lines.push(good("  Nothing was written. This screen never modifies NVRAM."));
+    ui::page("Bootloaders on the ESPs (read only)", &lines);
+}
+
+fn run_boot_entries(boot_device: &BootDevice) {
+    let items = alloc::vec![
+        ui::Item::with_detail(
+            "View the boot entries in NVRAM",
+            alloc::vec![
+                dim("  What the firmware will try, in order, plus any"),
+                dim("  entry that has fallen out of the list."),
+            ],
+        ),
+        ui::Item::with_detail(
+            "Scan the ESPs for bootloaders",
+            alloc::vec![
+                dim("  Which loaders are installed on disk, and whether"),
+                dim("  NVRAM has an entry pointing at each one."),
+            ],
+        ),
+    ];
+
+    let intro = alloc::vec![
+        dim("  Both screens are read only."),
+        dim("  Nothing here changes the boot configuration yet."),
+    ];
+    loop {
+        match ui::menu("Boot entries (NVRAM)", &intro, &items, "B = back") {
+            Some(0) => run_boot_view(),
+            Some(1) => run_boot_scan(boot_device),
+            _ => return,
+        }
+    }
+}
+
 fn main_menu_items() -> Vec<ui::Item> {
     alloc::vec![
         ui::Item::with_detail(
@@ -844,6 +1074,13 @@ fn main_menu_items() -> Vec<ui::Item> {
                 dim("  the corruption produces the right answer.")
             ],
         ),
+        ui::Item::with_detail(
+            "Boot entries (NVRAM)",
+            alloc::vec![
+                dim("  View the firmware's boot list, and find the"),
+                dim("  bootloaders installed on the ESPs.")
+            ],
+        ),
         ui::Item::with_detail("Exit", alloc::vec![dim("  Return to the firmware.")]),
     ]
 }
@@ -877,6 +1114,7 @@ fn main() -> Status {
             Some(2) => run_backup(&boot_device, esp_lost),
             Some(3) => run_restore(&boot_device, &mut esp_lost),
             Some(4) => run_prevent(&boot_device, &mut esp_lost),
+            Some(5) => run_boot_entries(&boot_device),
             _ => break,
         }
     }

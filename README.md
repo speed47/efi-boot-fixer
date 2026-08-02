@@ -26,6 +26,7 @@ Five operations, all driven with the D-pad:
 | Back up both GPTs | ESP file | snapshots both tables to `\GPTTOOLK\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
+| Boot entries (NVRAM) | never | shows the firmware's boot list, and the loaders installed on the ESPs |
 
 - **No keyboard needed.** The Deck's buttons are the only input; the menus,
   reports and prompts are built for a D-pad and two buttons.
@@ -45,6 +46,11 @@ Five operations, all driven with the D-pad:
 - **A theory about the cause, and a fix for it.** The damage is two bytes, and
   the arithmetic that produces them is reproducible.
   See [docs/corruption.md](docs/corruption.md).
+- **It can tell you the partition table was never the problem.** A machine
+  that boots to nothing may have an intact disk and an emptied `BootOrder`
+  instead, so the tool shows the firmware's boot entries — including the ones
+  that have fallen out of the list and gone invisible — alongside the loaders
+  actually present on the ESPs. See [docs/boot.md](docs/boot.md).
 
 ## Getting it running
 
@@ -119,6 +125,7 @@ See [docs/building.md](docs/building.md) for the details, and
 | [docs/safety.md](docs/safety.md) | every refusal, and how writes are ordered |
 | [docs/backups.md](docs/backups.md) | the snapshot format, restoring, choosing between snapshots |
 | [docs/corruption.md](docs/corruption.md) | what the damage is, why it recurs, how to reproduce it |
+| [docs/boot.md](docs/boot.md) | NVRAM boot entries, the load option format, finding loaders on the ESPs |
 | [docs/input.md](docs/input.md) | what a Steam Deck's controls actually report to firmware |
 | [docs/display.md](docs/display.md) | the rotated renderer, the baked font, the two backends |
 | [docs/internals.md](docs/internals.md) | crate layout, drive identification, the expected partition set |

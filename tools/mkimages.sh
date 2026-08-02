@@ -33,6 +33,19 @@ truncate -s $(( ESP_SECTORS * 512 )) "$ESP"
 mkfs.vfat -F 32 -n GPTTOOLK "$ESP" >/dev/null
 mmd -i "$ESP" ::/EFI ::/EFI/BOOT
 mcopy -i "$ESP" "$EFI" ::/EFI/BOOT/BOOTX64.EFI
+
+# Decoy bootloaders, so the ESP scan has something to find beyond the
+# application itself. One reached by the one-level sweep of \EFI, one
+# nested two levels down where only the explicit path reaches it, and one
+# the filename table does not know — that last is there to prove an
+# unrecognised binary is listed rather than quietly dropped.
+DECOY="$OUT/decoy.bin"
+head -c 4096 /dev/zero > "$DECOY"
+mmd -i "$ESP" ::/EFI/steamos ::/EFI/Microsoft ::/EFI/Microsoft/Boot ::/EFI/weird
+mcopy -i "$ESP" "$DECOY" ::/EFI/steamos/steamcl.efi
+mcopy -i "$ESP" "$DECOY" ::/EFI/Microsoft/Boot/bootmgfw.efi
+mcopy -i "$ESP" "$DECOY" ::/EFI/weird/mystery.efi
+rm -f "$DECOY"
 dd if="$ESP" of="$BOOT" bs=512 seek="$ESP_START" conv=notrunc status=none
 rm -f "$ESP"
 

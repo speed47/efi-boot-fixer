@@ -76,7 +76,7 @@ expected_effect() {
         # Read-only walks, the run that declines at the gate, and the two
         # backup runs — those write a file to the ESP on the boot disk,
         # never to the disk being backed up.
-        none|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice)
+        none|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice|bootentries)
             want=no-change ;;
         # Lowering FirstUsableLBA is what Prevent does to a *healthy*
         # table, and these images are built with FirstUsableLBA 2048 above
@@ -184,6 +184,14 @@ drive() {
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
             confirm
             keys "$A" "$B" ;;
+        bootentries)                                # item 6, both read-only screens
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$A"                               # View the boot entries
+            keys "$DOWN" "$DOWN"                    # scroll it
+            keys "$A"                               # dismiss, back to submenu
+            keys "$DOWN" "$A"                       # Scan the ESPs
+            keys "$DOWN" "$A"                       # scroll, dismiss
+            keys "$B" "$B" ;;
         menu)                                       # walk the menu, choose nothing
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;
         display)                                    # the startup display screen

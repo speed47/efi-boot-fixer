@@ -13,6 +13,8 @@ crates/gptcore/tests/  host tests; sgdisk is the independent oracle
 crates/gpttoolk/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
   src/ui/            menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
+  src/nvram.rs       reading Boot####/BootOrder out of the variable store
+  src/espscan.rs     finding bootloaders on the ESPs (not src/esp.rs)
 tools/               image builders, the QEMU harness, the font rasteriser
 docs/                the long-form reasoning that used to be in the README
 ```
@@ -68,6 +70,17 @@ only the header CRC calls the affected disk healthy. What catches it is the
 entry-array CRC plus an explicit check that a primary header points at LBA 2.
 `tests/deck_corrupt.rs` asserts the *absence* of a header-CRC defect
 specifically so this check cannot be "simplified" away.
+
+**Boot entries are enumerated, never read out of `BootOrder`.** Following
+the order would hide a `Boot####` that has fallen out of it — which is the
+exact failure the screen exists to show, and is invisible by every other
+means the machine offers. The name match is strict (`Boot` plus exactly four
+hex digits) because `BootOrder`, `BootNext` and `BootCurrent` would otherwise
+land in the entry list. See [docs/boot.md](docs/boot.md).
+
+**`GptPartitionEntry` is a packed struct.** Its fields must be copied out
+(`{ gpt.partition_type_guid }`) before being compared; taking a reference to
+one does not compile, and would be UB if it did.
 
 **`font_data.rs` is generated and committed.** Do not hand-edit it; `make
 font` re-bakes it from DejaVu Sans Mono. A normal build needs no font
