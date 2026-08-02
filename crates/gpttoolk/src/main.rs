@@ -165,11 +165,10 @@ impl Disk {
             }
             Err(e) => (format!("could not be read - {e}"), Style::Bad),
         };
-        alloc::vec![
-            dim(format!("  {}", self.path)),
-            dim(format!("  {} blocks x {} B", self.last_block + 1, self.block_size)),
-            Line::new(format!("  GPT: {health}"), style),
-        ]
+        let mut out = ui::wrapped(&format!("  {}", self.path), Style::Dim, "    ");
+        out.push(dim(format!("  {} blocks x {} B", self.last_block + 1, self.block_size)));
+        out.push(Line::new(format!("  GPT: {health}"), style));
+        out
     }
 }
 
@@ -353,11 +352,9 @@ fn run_check(boot_device: &BootDevice) {
         Err(e) => return show_error("Check GPT", e.clone()),
     };
 
-    let mut lines = alloc::vec![
-        key(format!("  {}", disk.label())),
-        dim(format!("  {}", disk.path)),
-        Line::blank()
-    ];
+    let mut lines = alloc::vec![key(format!("  {}", disk.label()))];
+    lines.extend(ui::wrapped(&format!("  {}", disk.path), Style::Dim, "    "));
+    lines.push(Line::blank());
     lines.extend(report::render_analysis(analysis));
     if let Some(view) = analysis.best_view() {
         let caption =
@@ -861,7 +858,11 @@ fn main() -> Status {
     let boot_device = BootDevice::resolve();
     let mut intro = alloc::vec![dim(format!("  version {}", env!("CARGO_PKG_VERSION")))];
     if boot_device.is_known() {
-        intro.push(dim(format!("  launched from {}", path_text(boot_device.path()))));
+        intro.extend(ui::wrapped(
+            &format!("  launched from {}", path_text(boot_device.path())),
+            Style::Dim,
+            "    ",
+        ));
     } else {
         intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
     }

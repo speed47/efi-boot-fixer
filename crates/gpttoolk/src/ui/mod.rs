@@ -175,8 +175,27 @@ pub fn finish() {
 /// A device path is routinely longer than 80 columns, and letting it wrap
 /// pushes everything below it off the bottom of a screen that cannot
 /// scroll back.
+/// The widest a line may be before [`fit`] starts cutting it.
+///
+/// One short of the screen, so a full-width line does not wrap the cursor
+/// onto the next row of its own accord. [`wrapped`] targets the same number
+/// — a wrap that produced lines `fit` then truncated would be worse than
+/// useless.
+fn text_width(columns: usize) -> usize {
+    columns.saturating_sub(1).max(8)
+}
+
+/// Break a long value across lines instead of cutting it off with a `~`.
+///
+/// The screen width is fixed once the menus start — the only place that
+/// changes the cell size is the startup Display screen — so callers may
+/// wrap when they build their lines rather than on every repaint.
+pub fn wrapped(text: &str, style: Style, hang: &str) -> Vec<Line> {
+    gptcore::style::wrap(text, text_width(size().0), style, hang)
+}
+
 fn fit(line: &str, columns: usize) -> String {
-    let limit = columns.saturating_sub(1).max(8);
+    let limit = text_width(columns);
     if line.chars().count() <= limit {
         return line.to_string();
     }
