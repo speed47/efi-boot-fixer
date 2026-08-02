@@ -1,15 +1,19 @@
 # EFI Boot Fixer for Steam Deck
 
 A UEFI application for inspecting, repairing, backing up and restoring GUID
-partition tables, targeting a Steam Deck that dual-boots Windows and SteamOS.
+partition tables (GPT), along with viewing and modifying the NVRAM boot entries
+that might get modified or deleted during a SteamOS or Windows upgrade in a
+dual-boot setup.
 
-It is meant for a machine that will no longer boot: it runs from the ESP under
+## The reason it was created
+
+It is meant for a machine that no longer boots: it runs from the ESP under
 the firmware's "boot from file" menu, needs no keyboard, no USB stick and no
 working operating system, and can repair the very disk it was launched from.
-That works even with the primary table destroyed, because the Deck firmware
+That works even with the primary table corrupted, because the Deck firmware
 falls back to the backup GPT for partition enumeration. The Linux kernel does
-not fall back without the `gpt` cmdline option, which is why `steamcl.efi`
-loads but ultimately fails to boot. Symptoms are either:
+not fall back however, which is why `steamcl.efi` loads but ultimately fails to boot.
+Symptoms are either:
 
 - Black screen when booting SteamOS, even manually through `steamcl.efi`
 - Dropping you to a `grub>` prompt after attempting to boot
@@ -31,9 +35,6 @@ Five operations, all driven with the D-pad:
 - **No keyboard needed.** The Deck's buttons are the only input; the menus,
   reports and prompts are built for a D-pad and two buttons.
   See [docs/input.md](docs/input.md).
-- **Right way up.** The Deck's panel is mounted sideways, so the application
-  carries its own framebuffer renderer and rotates every pixel on the way out.
-  See [docs/display.md](docs/display.md).
 - **Nothing is written by accident.** Every operation that touches a disk
   shows exactly which LBAs it will overwrite and then requires a five-press
   confirmation sequence. See [docs/using.md](docs/using.md).
@@ -43,8 +44,8 @@ Five operations, all driven with the D-pad:
 - **Snapshots you can still read years later.** Structured, checksummed,
   self-describing archives on the ESP, attributed back to the right disk by
   per-partition GUIDs. See [docs/backups.md](docs/backups.md).
-- **A theory about the cause, and a fix for it.** The damage is two bytes, and
-  the arithmetic that produces them is reproducible.
+- **A theory about the cause, and a fix for it.** The infamous Windows 24H2 upgrade
+  damage on the primary GPT is two bytes, and the arithmetic that produces them is reproducible.
   See [docs/corruption.md](docs/corruption.md).
 - **It can tell you the partition table was never the problem.** A machine
   that boots to nothing may have an intact disk and an emptied `BootOrder`
@@ -75,29 +76,27 @@ Mount the Deck's EFI system partition and drop the binary in:
 cp bootfixr.efi /esp/EFI/bootfixr.efi
 ```
 
-On SteamOS the ESP is normally already mounted at `/boot/efi`. If the Deck no
+On SteamOS the ESP is normally already mounted at `/esp`. If the Deck no
 longer boots, mount its ESP from another Linux machine or a live USB and copy
 the file there — installing to the internal ESP is what means no external
 media is needed *afterwards*, when you actually run it.
 
 This is deliberately **not** registered as an NVRAM boot entry, because
-SteamOS rewrites the boot order on update.
+SteamOS rewrites the boot order on update. Note that you can add it maually
+using the tool itself if you want it.
 
 ### 3. Boot it
 
 1. Shut the Deck down completely.
 2. Hold **Volume Up (+)** and tap **Power**, keeping Volume Up held until the
    Boot Manager appears.
-3. Choose **Boot From File**, then the EFI system partition, then `EFI`, then
-   `bootfixr.efi`.
-
-Secure Boot must be off, as the binary is unsigned. It is off by default on
-the Deck.
+3. Choose **Boot From File**, then the EFI system partition (usually it's the
+   one that is preselected), then `EFI`, then `bootfixr.efi`.
 
 ### 4. Use it
 
 - **D-pad** moves, **A** chooses, **B** goes back or cancels.
-- **View** (the two rectangles, left of the left stick) opens the Display
+- **View** (the two rectangles, left of the left stick) opens the Display config
   screen from anywhere: LEFT and RIGHT turn the picture, UP and DOWN change
   the text size. It starts up the right way round on a Deck, so this is only
   there if it comes out wrong or you want the text bigger.
