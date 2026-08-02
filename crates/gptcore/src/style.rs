@@ -53,18 +53,6 @@ impl Line {
     }
 }
 
-impl From<String> for Line {
-    fn from(text: String) -> Self {
-        Line { text, style: Style::Normal }
-    }
-}
-
-impl From<&str> for Line {
-    fn from(text: &str) -> Self {
-        Line { text: text.into(), style: Style::Normal }
-    }
-}
-
 pub fn line(text: impl Into<String>) -> Line {
     Line::new(text, Style::Normal)
 }

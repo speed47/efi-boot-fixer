@@ -69,16 +69,6 @@ impl core::fmt::Display for Timestamp {
     }
 }
 
-impl Timestamp {
-    /// A filename-safe rendering: `20260801-121314`.
-    pub fn stamp(&self) -> String {
-        format!(
-            "{:04}{:02}{:02}-{:02}{:02}{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
-    }
-}
-
 /// What a chunk is, which is what decides where it goes back and when.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
@@ -812,7 +802,6 @@ pub struct Comparison {
     pub disk_guid: bool,
     pub shared_partitions: usize,
     pub archive_partitions: usize,
-    pub disk_partitions: usize,
 }
 
 impl Comparison {
@@ -871,7 +860,6 @@ pub fn compare(archive: &Archive, analysis: &Analysis) -> Comparison {
             && analysis.best_view().map(|t| t.header.disk_guid) == Some(archive.disk_guid),
         shared_partitions: archive_used.iter().filter(|g| disk_used.contains(g)).count(),
         archive_partitions: archive_used.len(),
-        disk_partitions: disk_used.len(),
     }
 }
 
@@ -1021,11 +1009,6 @@ mod tests {
     fn foreign_files_are_rejected() {
         assert!(matches!(decode(&alloc::vec![0u8; 4096], &SoftCrc32), Err(DecodeError::BadMagic)));
         assert!(matches!(decode(b"EFIGPTBK", &SoftCrc32), Err(DecodeError::TooShort)));
-    }
-
-    #[test]
-    fn stamp_is_filename_safe() {
-        assert_eq!(sample().time.stamp(), "20260801-121314");
     }
 
     #[test]

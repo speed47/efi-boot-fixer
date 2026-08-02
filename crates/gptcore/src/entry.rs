@@ -4,10 +4,6 @@ use crate::guid::Guid;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// The conventional entry size. Headers may declare larger; we handle that
-/// by striding, never by assuming.
-pub const ENTRY_SIZE_DEFAULT: u32 = 128;
-
 /// Number of UTF-16 code units in the name field.
 pub const NAME_LEN: usize = 36;
 

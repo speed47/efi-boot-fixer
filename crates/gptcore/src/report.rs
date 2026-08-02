@@ -12,7 +12,6 @@
 
 use crate::entry::PartitionEntry;
 use crate::guid::Guid;
-use crate::header::Defect;
 use crate::layout::{self, Confidence};
 use crate::mbr::MbrStatus;
 use crate::repair::{Analysis, Implausible, RepairPlan, Step, TableView, Verdict};
@@ -239,11 +238,6 @@ pub fn render(analysis: &Analysis, plan: Option<&RepairPlan>) -> Vec<Line> {
         out.extend(render_plan(plan));
     }
     out
-}
-
-/// Used by the application when a defect list needs printing on its own.
-pub fn render_defects(defects: &[Defect]) -> Vec<Line> {
-    defects.iter().map(|d| bad(format!("      - {d}"))).collect()
 }
 
 #[cfg(test)]

@@ -12,10 +12,6 @@ pub struct Guid(pub [u8; 16]);
 impl Guid {
     pub const ZERO: Guid = Guid([0u8; 16]);
 
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Guid(bytes)
-    }
-
     /// Build from the canonical textual grouping, e.g.
     /// `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` becomes
     /// `from_fields(0xC12A7328, 0xF81F, 0x11D2, [0xBA, 0x4B, ...])`.
