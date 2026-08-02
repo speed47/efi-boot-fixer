@@ -452,8 +452,12 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
 }
 
 /// The next free snapshot name on the ESP.
+///
+/// A listing that failed is propagated, never treated as an empty ESP: the
+/// name is chosen by counting from the highest sequence present, so a
+/// snapshot this does not see is a snapshot the new name could collide with.
 fn next_name() -> Result<String, String> {
-    let taken: Vec<String> = esp::list().unwrap_or_default().into_iter().map(|s| s.name).collect();
+    let taken: Vec<String> = esp::list()?.into_iter().map(|s| s.name).collect();
     backup::next_name(&taken).ok_or_else(|| {
         format!(
             "\\{}\\ already holds gpt.{}; delete some snapshots first",
@@ -582,7 +586,14 @@ struct Found {
 fn load_saved() -> Result<Found, String> {
     let mut found = Found { usable: Vec::new(), rejected: Vec::new() };
     for file in esp::list()? {
-        match backup::decode(&file.data, &CRC) {
+        let data = match file.data {
+            Ok(data) => data,
+            Err(e) => {
+                found.rejected.push(bad(format!("  {} - {e}", file.name)));
+                continue;
+            }
+        };
+        match backup::decode(&data, &CRC) {
             Ok(a) => found.usable.push((file.name, a)),
             Err(e) => found.rejected.push(bad(format!("  {} - {e}", file.name))),
         }
