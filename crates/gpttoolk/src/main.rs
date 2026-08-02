@@ -1437,6 +1437,30 @@ fn run_boot_entries(boot_device: &BootDevice, esp_lost: bool) {
     }
 }
 
+/// Restart the machine, after one confirmation.
+///
+/// A cold reset rather than a warm one. What is usually wanted here is for
+/// the firmware to look at a disk or a variable store that this session has
+/// just changed, and a warm reset is permitted to skip the initialisation
+/// that re-reads them. Nothing is written on the way out, so this is gated
+/// by an acknowledgement and not by the confirmation sequence — that is for
+/// writes.
+fn run_reboot() {
+    let lines = alloc::vec![
+        warn("  The machine restarts now."),
+        Line::blank(),
+        line("  Nothing is written by this. Anything this session"),
+        line("  changed has already been written and flushed."),
+    ];
+    if !ui::page("Reboot", &lines) {
+        return;
+    }
+    // The reset does not return, so this is the last chance to leave the
+    // console the way the firmware handed it over.
+    ui::finish();
+    uefi::runtime::reset(uefi::runtime::ResetType::COLD, Status::SUCCESS, None);
+}
+
 fn main_menu_items() -> Vec<ui::Item> {
     alloc::vec![
         ui::Item::with_detail(
@@ -1482,6 +1506,13 @@ fn main_menu_items() -> Vec<ui::Item> {
             ],
         ),
         ui::Item::with_detail("Exit", alloc::vec![dim("  Return to the firmware.")]),
+        ui::Item::with_detail(
+            "Reboot",
+            alloc::vec![
+                dim("  Restart the machine, so the firmware reads the"),
+                dim("  disks and the boot list again.")
+            ],
+        ),
     ]
 }
 
@@ -1528,6 +1559,8 @@ fn main() -> Status {
             Some(3) => run_restore(&boot_device, &mut esp_lost),
             Some(4) => run_prevent(&boot_device, &mut esp_lost),
             Some(5) => run_boot_entries(&boot_device, esp_lost),
+            // 6 is Exit; 7 only comes back if the reboot was not confirmed.
+            Some(7) => run_reboot(),
             _ => break,
         }
     }

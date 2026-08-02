@@ -19,7 +19,9 @@ EFI GPT Toolkit for Steam Deck
    Back up both GPTs to the ESP
    Restore GPTs from a saved backup
    Prevent recurrence (close the FirstUsableLBA gap)
+   Boot entries (NVRAM)
    Exit
+   Reboot
 
   Read both tables and report what is wrong.
   Writes nothing.

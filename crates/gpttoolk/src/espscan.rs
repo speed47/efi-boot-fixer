@@ -46,6 +46,11 @@ const KNOWN: &[(&str, &str)] = &[
     ("refind_x64.efi", "rEFInd"),
     ("cloverx64.efi", "Clover"),
     ("bootmgfw.efi", "Windows Boot Manager"),
+    // This tool. Named here because the operator most likely to be reading
+    // this list is the one deciding where to install it, or looking for the
+    // copy they installed last time.
+    ("gpttoolk.efi", "EFI GPT Toolkit (this program)"),
+    ("efiprobe.efi", "EFI GPT Toolkit input probe"),
 ];
 
 fn describe_file(name: &str) -> &'static str {
