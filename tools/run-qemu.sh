@@ -58,7 +58,14 @@ EXPECT=${EXPECT:-auto}
 CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 VARS="$DIR/vars.fd"
-cp -f "$VARS_SRC" "$VARS"
+# Each run normally starts from the firmware's pristine NVRAM, so a walk
+# never inherits variables an earlier one wrote. KEEP_VARS=1 keeps the
+# store from the previous run instead, which is how a boot entry written
+# by one run is shown being read back by the next -- the only way to
+# demonstrate that a variable really did survive a reboot.
+if [ "${KEEP_VARS:-0}" != 1 ] || [ ! -f "$VARS" ]; then
+    cp -f "$VARS_SRC" "$VARS"
+fi
 
 # What mkimages did to test.img, if it left a note.
 CORRUPTION=$(cat "$DIR/corruption" 2>/dev/null || true)
@@ -191,6 +198,32 @@ drive() {
             keys "$A"                               # dismiss, back to submenu
             keys "$DOWN" "$A"                       # Scan the ESPs
             keys "$DOWN" "$A"                       # scroll, dismiss
+            keys "$B" "$B" ;;
+        bootnext)                                   # set BootNext, the one-shot
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"   # Boot something once
+            keys "$A"                               # the first entry
+            keys "$A"                               # review page, continue
+            keys "$A"                               # the saved-configuration note
+            confirm
+            keys "$A"                               # the result
+            keys "$B" "$B" ;;
+        bootdefault)                                # move an entry to the front
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$DOWN" "$DOWN" "$DOWN" "$A"       # Set the default boot entry
+            keys "$DOWN" "$A"                       # the second entry, not the first
+            keys "$A" "$A"                          # review, then the saved note
+            confirm
+            keys "$A"
+            keys "$B" "$B" ;;
+        bootregister)                               # add an entry for a loader
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$DOWN" "$DOWN" "$A"               # Register a bootloader
+            keys "$A"                               # the first candidate
+            keys "$DOWN" "$A"                       # add at the end, not as default
+            keys "$A" "$A"                          # review, then the saved note
+            confirm
+            keys "$A"
             keys "$B" "$B" ;;
         menu)                                       # walk the menu, choose nothing
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;

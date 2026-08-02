@@ -130,18 +130,100 @@ to answer "no" for.
 gives each run a fresh copy of the varstore, so `Boot0000`, `Boot0001` and a
 two-entry `BootOrder` are always there to render.
 
-## What writing will involve
+## Changing the boot configuration
 
-Not in this build. When it lands:
+Three operations write to NVRAM. None of them touches a disk.
 
-- The whole boot configuration gets saved to `\GPTTOOLK\boot.NNN` on the ESP
-  before the session's first NVRAM write, automatically. A mangled
-  `BootOrder` on a machine with no keyboard is the situation this tool is
-  for, and it should not be able to create one it cannot undo.
-- Every write goes behind the same five-press confirmation gate as a block
-  write, showing the decoded variable first.
-- New entries take the **lowest free** slot. That is deliberately unlike
-  `backup::next_name`, which counts up from the highest and never fills a
-  gap: reusing a snapshot *filename* would destroy a backup nobody can get
-  back, whereas a freed boot slot holds nothing at all. Firmware and
-  `efibootmgr` both reuse the lowest.
+| Operation | Writes | Reversible by |
+| --- | --- | --- |
+| Register a bootloader | `Boot####` then `BootOrder` | the firmware's own boot menu |
+| Set the default | `BootOrder` | the same screen |
+| Boot something once | `BootNext` | itself, as the firmware consumes it |
+
+### The snapshot that comes first
+
+There is no backup `BootOrder` at the far end of NVRAM the way there is a
+backup GPT at the far end of a disk. The boot configuration is the only
+copy of itself. So before this session's first NVRAM write — whichever
+operation gets there first — the whole thing is saved to `\GPTTOOLK\boot.NNN`
+on the ESP, next to the GPT snapshots.
+
+Variables go in as opaque name/bytes pairs and are never re-encoded. A
+`Boot####` this build cannot parse is exactly the one worth having an exact
+copy of, and a format that could only store what it understood would drop it.
+
+The save is mandatory but is not a hard refusal when it fails. On a machine
+whose ESP has become unreachable, changing a boot entry may be the only
+remedy left, and refusing outright would disable the tool precisely when it
+is needed. A failure becomes a question with the consequence written out,
+and the snapshot is retried before the next write rather than marked done.
+
+### Write ordering
+
+`plan_register` writes the `Boot####` **before** the `BootOrder` that names
+it. This is the same rule the GPT side follows when it writes an entry array
+before the header pointing at it, and it is asserted in
+`tests/bootwrite.rs`, not left to the order the code happens to run in.
+
+Interrupted after the first write, NVRAM holds an entry that is not in the
+boot order: the firmware ignores it, and the view screen shows it under
+"Present, but not in the boot order". Interrupted the other way round,
+`BootOrder` would name a slot with nothing behind it — a position the
+firmware silently skips and no screen can explain. One of those states is
+legible and the other is not.
+
+### Slot numbering
+
+New entries take the **lowest free** slot, which is what firmware and
+`efibootmgr` both do. That is deliberately the opposite of
+`bootcfg::next_name` and `backup::next_name`, which count up from the
+highest and never fill a gap. The two rules differ because the things they
+name differ: reusing a snapshot *filename* would destroy a backup nobody
+can get back, whereas a freed boot slot holds nothing at all.
+
+### Why `BootNext` is gated like the others
+
+Setting `BootNext` reverts itself and cannot lose anything, so the five-press
+confirmation could arguably be skipped for it. It is not, because "nothing is
+written by accident" is a promise the tool makes everywhere else, and a
+single exception is worth less than the rule is. The screen says plainly
+that the override is one-shot, and recommends it as the way to test an entry
+before making it the default.
+
+### When the firmware says no
+
+`WRITE_PROTECTED`, `SECURITY_VIOLATION` and `OUT_OF_RESOURCES` are not bugs;
+they are the firmware refusing for a nameable reason. Each is translated into
+what the operator can actually do about it — boot variables sealed by the
+vendor, Secure Boot policy, or an NVRAM that is full — because
+`SetVariable failed (WRITE_PROTECTED)` tells someone with an unbootable
+machine nothing.
+
+A plan that stops halfway reports how many writes landed and names them, so
+the resulting state is described rather than guessed at.
+
+### Exercising the writes
+
+```sh
+make qemu SCRIPT=bootnext      # sets BootNext
+make qemu SCRIPT=bootdefault   # moves an entry to the front
+make qemu SCRIPT=bootregister  # adds an entry for a loader on the ESP
+```
+
+Each run starts from a pristine OVMF varstore. Afterwards the write can be
+read back from the host, which is the assertion that matters:
+
+```sh
+tools/dump-efivars.py build/images/vars.fd BootNext | xxd
+```
+
+`KEEP_VARS=1` carries the store over to the next run instead of resetting
+it, so the tool can be seen reading back a variable it wrote before a
+reboot.
+
+## Not yet done
+
+Restoring a `boot.NNN` snapshot has no screen. The files are written,
+checksummed and documented, and `bootcfg::decode` reads them back with host
+tests behind it, but putting one back is still a manual job. Deleting a boot
+entry is likewise left to the firmware's own menu.

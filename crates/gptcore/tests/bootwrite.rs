@@ -219,6 +219,42 @@ fn the_snapshot_space_can_run_out_rather_than_wrap() {
     assert_eq!(bootcfg::next_name(&taken), None);
 }
 
+/// A snapshot the running tool wrote to an ESP under OVMF, recovered from
+/// the FAT image afterwards.
+///
+/// Worth more than the hand-built one above for the same reason the OVMF
+/// variables are worth more than hand-built entries: nothing in this test
+/// process produced it. It also pins the thing most easily broken by a
+/// later edit — that the copy is taken *before* the change, not after. The
+/// run that wrote this went on to add `Boot0004`, and the `BootOrder`
+/// preserved here has four slots, not five.
+#[test]
+fn decodes_a_snapshot_written_by_the_tool_under_firmware() {
+    let bytes = include_bytes!("data/boot/esp-boot-snapshot.bin");
+    let snap = bootcfg::decode(bytes, &CRC).expect("the tool writes readable snapshots");
+
+    assert_eq!(snap.time.year, 2026);
+    assert_eq!(snap.entry_count(), 4);
+    assert_eq!(
+        snap.get("BootOrder"),
+        Some([0u16, 1, 2, 3].map(u16::to_le_bytes).concat().as_slice())
+    );
+
+    // Entries are stored verbatim: this is OVMF's UiApp, byte for byte the
+    // same as the copy captured straight out of the variable store.
+    assert_eq!(
+        snap.get("Boot0000"),
+        Some(include_bytes!("data/boot/ovmf-boot0000.bin").as_slice())
+    );
+
+    // Provenance survived, including which firmware it came off.
+    let meta: Vec<&str> = snap.meta.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(meta.contains(&"tool"), "{meta:?}");
+    assert!(meta.contains(&"firmware"), "{meta:?}");
+
+    assert_eq!(bootcfg::encode(&snap, &CRC), bytes);
+}
+
 #[test]
 fn describing_a_snapshot_names_every_variable_in_it() {
     let snap = snapshot();

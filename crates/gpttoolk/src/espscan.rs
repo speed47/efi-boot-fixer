@@ -23,13 +23,14 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use gptcore::Guid;
 use uefi::boot::{self, SearchType};
+use uefi::proto::device_path::build::{self, DevicePathBuilder};
 use uefi::proto::device_path::media::{FilePath, HardDrive, PartitionSignature};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::file::{Directory, File, FileAttribute, FileInfo, FileMode};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::media::partition::{GptPartitionType, PartitionInfo};
-use uefi::{CString16, Identify};
+use uefi::{CString16, Handle, Identify};
 
 /// Paths a one-level sweep of `\EFI` cannot reach.
 const NESTED: &[&str] = &["\\EFI\\Microsoft\\Boot\\bootmgfw.efi"];
@@ -54,6 +55,10 @@ fn describe_file(name: &str) -> &'static str {
 
 /// One EFI System Partition, on a fixed disk.
 pub struct EspVolume {
+    /// The partition handle, kept so a boot entry's device path can be
+    /// built from the firmware's own path to this volume rather than from
+    /// one this tool assembled out of guesses.
+    pub handle: Handle,
     /// The partition's device path, rendered.
     pub path: String,
     /// Its unique partition GUID, which is how a boot entry names it.
@@ -128,6 +133,38 @@ pub fn target_of_bytes(bytes: &[u8]) -> Option<(Guid, String)> {
 
 fn name16(name: &str) -> Option<CString16> {
     CString16::try_from(name).ok()
+}
+
+/// The device path a boot entry for `file` on `volume` should hold.
+///
+/// Built by taking the firmware's *own* path to the partition and adding a
+/// file node, rather than assembling one from a partition GUID. The
+/// firmware knows how it reaches that disk — which controller, which
+/// namespace — and a path this tool invented would have to guess that
+/// topology and would be wrong on the first machine that differed.
+///
+/// The end-of-path marker is dropped before appending, since it is what
+/// says the path stops at the partition.
+pub fn boot_path(volume: Handle, file: &str) -> Result<Vec<u8>, String> {
+    let file16 = name16(file).ok_or_else(|| format!("{file} is not a usable path"))?;
+    let path = crate::get_protocol::<DevicePath>(volume)
+        .map_err(|_| String::from("the firmware has no device path for this ESP"))?;
+
+    let mut buf = Vec::new();
+    let mut builder = DevicePathBuilder::with_vec(&mut buf);
+    for node in path.node_iter() {
+        if node.is_end_entire() {
+            continue;
+        }
+        builder = builder.push(&node).map_err(|_| String::from("device path is too long"))?;
+    }
+    let built = builder
+        .push(&build::media::FilePath { path_name: &file16 })
+        .map_err(|_| String::from("device path is too long"))?
+        .finalize()
+        .map_err(|_| String::from("the device path could not be assembled"))?;
+
+    Ok(built.as_bytes().to_vec())
 }
 
 /// Size of a file, or `None` if it is not a readable regular file.
@@ -253,6 +290,7 @@ pub fn scan(boot: &crate::selfdev::BootDevice, entries: &[(u16, Vec<u8>)]) -> Sc
 
         let device_path = crate::get_protocol::<DevicePath>(handle).ok();
         let volume = EspVolume {
+            handle,
             path: crate::path_text(device_path.as_deref()),
             partition,
             boot: device_path.as_deref().is_some_and(|p| boot.covers(p)),

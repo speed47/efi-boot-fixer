@@ -95,7 +95,15 @@ queued input first. See [docs/input.md](docs/input.md).
 
 - Entry arrays are written and flushed **before** the header that points at
   them, in both repair and restore. A power cut must not leave a valid header
-  describing garbage.
+  describing garbage. The NVRAM side follows the same rule: `Boot####` is
+  written before the `BootOrder` naming it, asserted in `tests/bootwrite.rs`.
+- The boot configuration is saved to `\GPTTOOLK\boot.NNN` before the
+  session's first NVRAM write. Its variables are stored as opaque bytes and
+  never re-encoded — an entry this build cannot parse is the one most worth
+  copying exactly.
+- Boot slots are allocated **lowest free**; snapshot filenames count up and
+  never fill a gap. The rules are opposite on purpose: a filename holds the
+  only copy of something, a boot slot holds nothing.
 - Nothing writes without the five-press confirmation sequence, and the exact
   LBAs to be written are shown first.
 - The refusal list in [docs/safety.md](docs/safety.md) is a feature list, not

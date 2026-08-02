@@ -14,6 +14,19 @@ Applied in order, before anything is written:
 - never a saved snapshot whose block size or disk size does not match
 - never without the operator entering the confirmation sequence
 
+The NVRAM screens add their own, and touch no disk at all:
+
+- only ESPs on fixed disks are scanned, so a loader on a USB stick never
+  becomes a boot entry that breaks when the stick is pulled
+- the whole boot configuration is saved to the ESP before the first change
+  of a session, and a failure to save it is a question rather than a silent
+  skip — see [boot.md](boot.md)
+- a new entry is written before the `BootOrder` that names it, never after
+- no boot entry is ever deleted; removing one is left to the firmware's own
+  menu
+- the same confirmation sequence applies, including to `BootNext`, which
+  reverts itself and could have been exempted
+
 ## Not excluding the boot disk
 
 Earlier versions refused to write to the disk this image booted from, and

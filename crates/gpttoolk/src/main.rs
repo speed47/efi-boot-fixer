@@ -1006,7 +1006,380 @@ fn run_boot_scan(boot_device: &BootDevice) {
     ui::page("Bootloaders on the ESPs (read only)", &lines);
 }
 
-fn run_boot_entries(boot_device: &BootDevice) {
+// ------------------------------------------------- NVRAM writes (phase 2)
+
+/// Save the whole boot configuration to the ESP.
+fn take_boot_snapshot() -> Result<String, String> {
+    let (vars, missed) = nvram::capture();
+    if vars.is_empty() {
+        return Err(String::from("there is nothing in NVRAM to save"));
+    }
+    let mut meta = alloc::vec![(
+        String::from("tool"),
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+    )];
+    let vendor = uefi::system::firmware_vendor().to_string();
+    if !vendor.is_empty() {
+        meta.push((
+            String::from("firmware"),
+            format!("{} rev {:#x}", vendor, uefi::system::firmware_revision()),
+        ));
+    }
+    // A partial copy that says so is worth having; one that pretends to be
+    // complete is not.
+    if !missed.is_empty() {
+        meta.push((String::from("unread"), missed.join(" ")));
+    }
+
+    let snap = gptcore::bootcfg::Snapshot { time: now(), vars, meta };
+    let bytes = gptcore::bootcfg::encode(&snap, &CRC);
+    let name = gptcore::bootcfg::next_name(&esp::names()?).ok_or_else(|| {
+        format!(
+            "\\{}\\ already holds boot.{}; delete some first",
+            esp::DIR,
+            gptcore::bootcfg::MAX_SEQUENCE
+        )
+    })?;
+    esp::save(&name, &bytes)
+}
+
+/// Save the boot configuration before this session's first NVRAM write.
+///
+/// Mandatory, but not a hard refusal when it fails. On a machine whose ESP
+/// has gone unreachable, changing a boot entry may be the only remedy
+/// left, and refusing outright would make the tool useless exactly when it
+/// is needed. So a failure becomes a question with the consequence spelled
+/// out, and `taken` stays false so the next write tries again.
+fn ensure_boot_snapshot(taken: &mut bool, esp_lost: bool) -> bool {
+    if *taken {
+        return true;
+    }
+    if esp_lost && !warn_esp_may_be_gone() {
+        return false;
+    }
+    match take_boot_snapshot() {
+        Ok(path) => {
+            *taken = true;
+            ui::message(
+                "Boot configuration saved",
+                &alloc::vec![
+                    good("  The boot configuration as it is now was saved to:"),
+                    key(format!("    {path}")),
+                    Line::blank(),
+                    dim("  Taken automatically before the first change of"),
+                    dim("  this session, so there is a record to go back to."),
+                ],
+            );
+            true
+        }
+        Err(e) => ui::page(
+            "Could not save the boot configuration",
+            &alloc::vec![
+                bad(format!("  {e}")),
+                Line::blank(),
+                warn("  Nothing has been changed yet. Continuing means"),
+                warn("  making the change with no saved copy of what the"),
+                warn("  boot configuration looks like right now."),
+                Line::blank(),
+                key("  Continue without a saved copy?"),
+            ],
+        ),
+    }
+}
+
+/// Show the plan, take the snapshot, take the confirmation, write.
+///
+/// One funnel for all three operations so the order of those four steps is
+/// decided once. The snapshot comes after the review page and before the
+/// gate: no file is written for a plan the operator walked away from, and
+/// the gate stays the last thing between them and NVRAM.
+fn authorise_and_write(
+    title: &str,
+    review: Vec<Line>,
+    warning: Vec<Line>,
+    writes: &[bootopt::VarWrite],
+    snapshot: &mut bool,
+    esp_lost: bool,
+) {
+    let mut lines = review;
+    lines.push(Line::blank());
+    lines.extend(bootopt::render_plan(writes));
+    if !ui::page(title, &lines) {
+        return;
+    }
+    if !ensure_boot_snapshot(snapshot, esp_lost) {
+        return show_note(title, "Cancelled. Nothing was written.".to_string());
+    }
+    if !ui::confirm_sequence("Authorise NVRAM write", &warning) {
+        return show_note(title, "Cancelled. Nothing was written.".to_string());
+    }
+
+    match nvram::apply(writes) {
+        Ok(()) => ui::message(
+            title,
+            &alloc::vec![
+                good("  Written to NVRAM."),
+                Line::blank(),
+                key("  Reboot for this to take effect."),
+            ],
+        ),
+        Err((done, e)) => {
+            let mut lines = alloc::vec![bad(format!("  {e}")), Line::blank()];
+            if done == 0 {
+                lines.push(good("  Nothing was written; NVRAM is as it was."));
+            } else {
+                lines
+                    .push(warn(format!("  {done} of {} writes had already landed:", writes.len())));
+                for w in writes.iter().take(done) {
+                    lines.push(key(format!("    {}", w.name)));
+                }
+                lines.push(Line::blank());
+                lines.push(line("  \"View the boot entries\" shows the result. An"));
+                lines.push(line("  entry that is not in the boot order is harmless;"));
+                lines.push(line("  the firmware ignores it."));
+            }
+            ui::message(&format!("{title} FAILED"), &lines);
+        }
+    }
+}
+
+/// What to call a newly registered loader.
+///
+/// Generated rather than typed: there is no keyboard. The kind is what a
+/// person would call it, and an unrecognised binary gets its filename,
+/// which is the only true thing available.
+fn suggested_description(c: &espscan::Candidate, esps: usize) -> String {
+    let file = c.file.rsplit('\\').next().unwrap_or(&c.file);
+    let mut name =
+        if c.kind.starts_with("unrecognised") { String::from(file) } else { String::from(c.kind) };
+    // Two disks can hold the same loader; without this they would be two
+    // entries reading identically in the firmware's menu.
+    if esps > 1 {
+        name.push_str(&format!(" (ESP {})", c.esp + 1));
+    }
+    name
+}
+
+/// Choose one of the entries in NVRAM.
+fn pick_boot_entry(title: &str, intro: &[Line], state: &nvram::BootState) -> Option<u16> {
+    let order = state.order.as_deref().unwrap_or(&[]);
+    // Boot order first, then the orphans: the list reads the way the
+    // firmware will act, and making an orphan the default is a real repair.
+    let mut slots: Vec<u16> = order.iter().copied().filter(|s| state.get(*s).is_some()).collect();
+    slots.extend(state.orphans());
+
+    let items: Vec<ui::Item> = slots
+        .iter()
+        .map(|slot| {
+            let (label, detail) = match state.get(*slot) {
+                Some(Ok(opt)) => (
+                    bootopt::summary(*slot, opt),
+                    alloc::vec![dim(format!("  {}", boot_path_text(&opt.device_path)))],
+                ),
+                _ => (
+                    format!("{}  (cannot be read)", bootopt::slot_name(*slot)),
+                    alloc::vec![bad("  This entry will not decode.")],
+                ),
+            };
+            let mut detail = detail;
+            if !order.contains(slot) {
+                detail.push(warn("  Not in the boot order."));
+            }
+            ui::Item::with_detail(label, detail)
+        })
+        .collect();
+
+    if items.is_empty() {
+        ui::message(title, &alloc::vec![warn("  There are no boot entries in NVRAM.")]);
+        return None;
+    }
+    ui::menu(title, intro, &items, "B = back").map(|i| slots[i])
+}
+
+/// Put a loader found on an ESP into NVRAM.
+fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool) {
+    let state = nvram::read();
+    let known: Vec<(u16, Vec<u8>)> = state
+        .entries
+        .iter()
+        .filter_map(|(slot, e)| e.as_ref().ok().map(|o| (*slot, o.device_path.clone())))
+        .collect();
+    let scan = espscan::scan(boot_device, &known);
+
+    let new: Vec<&espscan::Candidate> =
+        scan.candidates.iter().filter(|c| c.registered.is_none()).collect();
+    if new.is_empty() {
+        return ui::message(
+            "Register a bootloader",
+            &alloc::vec![
+                good("  Every loader found on the ESPs already has a boot"),
+                good("  entry pointing at it."),
+                Line::blank(),
+                dim("  \"Scan the ESPs\" lists them and says which is which."),
+            ],
+        );
+    }
+
+    let items: Vec<ui::Item> = new
+        .iter()
+        .map(|c| {
+            ui::Item::with_detail(
+                format!("{}  {}", c.kind, c.file),
+                alloc::vec![
+                    dim(format!("  on ESP {}, {}", c.esp + 1, report::human_size(c.size))),
+                    dim(format!(
+                        "  will be called \"{}\"",
+                        suggested_description(c, scan.volumes.len())
+                    )),
+                ],
+            )
+        })
+        .collect();
+    let intro = alloc::vec![
+        dim("  Loaders on the ESPs that nothing in NVRAM points at."),
+        dim("  Registering one adds a boot entry for it."),
+    ];
+    let Some(chosen) = ui::menu("Register a bootloader", &intro, &items, "B = back") else {
+        return;
+    };
+    let candidate = new[chosen];
+
+    let where_items = alloc::vec![
+        ui::Item::with_detail(
+            "Add it, and make it the default",
+            alloc::vec![dim("  Goes to the front of the boot order.")],
+        ),
+        ui::Item::with_detail(
+            "Add it at the end of the boot order",
+            alloc::vec![
+                dim("  Tried only if everything before it fails."),
+                dim("  The safer choice if you are unsure."),
+            ],
+        ),
+    ];
+    let Some(placement) = ui::menu("Where in the boot order?", &[], &where_items, "B = back")
+    else {
+        return;
+    };
+    let first = placement == 0;
+
+    let volume = &scan.volumes[candidate.esp];
+    let device_path = match espscan::boot_path(volume.handle, &candidate.file) {
+        Ok(p) => p,
+        Err(e) => return show_error("Register a bootloader", e),
+    };
+    let taken: Vec<u16> = state.entries.iter().map(|(s, _)| *s).collect();
+    let Some(slot) = bootopt::next_free_slot(&taken) else {
+        return show_error(
+            "Register a bootloader",
+            String::from("every boot slot from Boot0000 to BootFFFF is taken"),
+        );
+    };
+
+    let opt = bootopt::LoadOption {
+        attributes: bootopt::LOAD_OPTION_ACTIVE,
+        description: suggested_description(candidate, scan.volumes.len()),
+        device_path,
+        optional_data: Vec::new(),
+    };
+    let writes = bootopt::plan_register(slot, &opt, state.order.as_deref().unwrap_or(&[]), first);
+
+    let mut review = alloc::vec![
+        key(format!("  {}  as  {}", bootopt::slot_name(slot), opt.description)),
+        Line::blank(),
+    ];
+    review.extend(ui::wrapped(
+        &format!("  {}", boot_path_text(&opt.device_path)),
+        Style::Dim,
+        "    ",
+    ));
+    let warning = alloc::vec![
+        key(format!("  {}  {}", bootopt::slot_name(slot), opt.description)),
+        Line::blank(),
+        warn("  This adds a boot entry to the firmware's NVRAM."),
+        line("  No disk is written to, and the entry can be removed"),
+        line("  from the firmware's own boot menu afterwards."),
+    ];
+    authorise_and_write("Register a bootloader", review, warning, &writes, snapshot, esp_lost);
+}
+
+/// Move an entry to the front of the boot order.
+fn run_boot_default(snapshot: &mut bool, esp_lost: bool) {
+    let state = nvram::read();
+    let order = match &state.order {
+        Ok(o) => o.clone(),
+        Err(e) => return show_error("Set the default", format!("BootOrder cannot be read - {e}")),
+    };
+
+    let intro = alloc::vec![
+        dim("  The firmware tries the boot order from the top."),
+        dim("  The one you choose is moved to the front."),
+    ];
+    let Some(slot) = pick_boot_entry("Set the default boot entry", &intro, &state) else {
+        return;
+    };
+    if order.first() == Some(&slot) {
+        return show_note(
+            "Set the default",
+            format!("{} is already first in the boot order.", bootopt::slot_name(slot)),
+        );
+    }
+
+    let after = bootopt::reorder(slot, &order);
+    let name = |s: u16| match state.get(s) {
+        Some(Ok(opt)) => format!("{}  {}", bootopt::slot_name(s), opt.description),
+        Some(Err(_)) => format!("{}  (unreadable)", bootopt::slot_name(s)),
+        None => format!("{}  (no such entry)", bootopt::slot_name(s)),
+    };
+    let review = bootopt::render_order_change(&order, &after, name);
+    let writes = bootopt::plan_set_default(slot, &order);
+
+    let warning = alloc::vec![
+        key(format!("  {}", name(slot))),
+        Line::blank(),
+        warn("  This becomes what the machine boots by default."),
+        line("  Only the order is changed; no entry is rewritten."),
+        line("  To try it once without committing, use \"Boot"),
+        line("  something once\" instead."),
+    ];
+    authorise_and_write("Set the default", review, warning, &writes, snapshot, esp_lost);
+}
+
+/// Set `BootNext`: one boot, then back to normal.
+fn run_boot_once(snapshot: &mut bool, esp_lost: bool) {
+    let state = nvram::read();
+    let intro = alloc::vec![
+        dim("  The next boot only. The firmware clears this as it"),
+        dim("  uses it, so the boot after that is normal again."),
+    ];
+    let Some(slot) = pick_boot_entry("Boot something once", &intro, &state) else {
+        return;
+    };
+
+    let label = match state.get(slot) {
+        Some(Ok(opt)) => format!("{}  {}", bootopt::slot_name(slot), opt.description),
+        _ => bootopt::slot_name(slot),
+    };
+    let writes = bootopt::plan_boot_next(slot);
+    let review = alloc::vec![
+        key(format!("  {label}")),
+        Line::blank(),
+        line("  The next boot will use this entry. Nothing else"),
+        line("  changes, and the firmware removes the override as"),
+        line("  soon as it has used it."),
+        Line::blank(),
+        good("  This is the safe way to test an entry: if it does"),
+        good("  not work, the boot after it is the old default."),
+    ];
+    let warning = alloc::vec![
+        key(format!("  {label}")),
+        Line::blank(),
+        warn("  This sets the next boot only. It reverts itself."),
+    ];
+    authorise_and_write("Boot something once", review, warning, &writes, snapshot, esp_lost);
+}
+
+fn run_boot_entries(boot_device: &BootDevice, esp_lost: bool) {
     let items = alloc::vec![
         ui::Item::with_detail(
             "View the boot entries in NVRAM",
@@ -1022,16 +1395,43 @@ fn run_boot_entries(boot_device: &BootDevice) {
                 dim("  NVRAM has an entry pointing at each one."),
             ],
         ),
+        ui::Item::with_detail(
+            "Register a bootloader in NVRAM",
+            alloc::vec![
+                dim("  Add a boot entry for a loader that is on an ESP"),
+                dim("  but that nothing in NVRAM points at."),
+            ],
+        ),
+        ui::Item::with_detail(
+            "Set the default boot entry",
+            alloc::vec![
+                dim("  Move an entry to the front of the boot order."),
+                dim("  Changes the order only; no entry is rewritten."),
+            ],
+        ),
+        ui::Item::with_detail(
+            "Boot something once (next boot only)",
+            alloc::vec![
+                dim("  Try an entry without committing to it. The"),
+                dim("  firmware clears this as it uses it."),
+            ],
+        ),
     ];
 
     let intro = alloc::vec![
-        dim("  Both screens are read only."),
-        dim("  Nothing here changes the boot configuration yet."),
+        dim("  The first two screens read only."),
+        dim("  The rest change NVRAM, and say so before they do."),
     ];
+    // Saved once per session, before the first change, by whichever
+    // operation gets there first.
+    let mut snapshot = false;
     loop {
         match ui::menu("Boot entries (NVRAM)", &intro, &items, "B = back") {
             Some(0) => run_boot_view(),
             Some(1) => run_boot_scan(boot_device),
+            Some(2) => run_boot_register(boot_device, &mut snapshot, esp_lost),
+            Some(3) => run_boot_default(&mut snapshot, esp_lost),
+            Some(4) => run_boot_once(&mut snapshot, esp_lost),
             _ => return,
         }
     }
@@ -1114,7 +1514,7 @@ fn main() -> Status {
             Some(2) => run_backup(&boot_device, esp_lost),
             Some(3) => run_restore(&boot_device, &mut esp_lost),
             Some(4) => run_prevent(&boot_device, &mut esp_lost),
-            Some(5) => run_boot_entries(&boot_device),
+            Some(5) => run_boot_entries(&boot_device, esp_lost),
             _ => break,
         }
     }

@@ -109,6 +109,33 @@ pub fn save(name: &str, data: &[u8]) -> Result<String, String> {
     Ok(format!("\\{DIR}\\{name}"))
 }
 
+/// Every filename in the backup directory, sorted.
+///
+/// Names only. [`list`] reads each file because the GPT picker has to show
+/// what is inside one; choosing the next snapshot number does not, and the
+/// boot snapshots share this directory with the GPT ones. A name that is
+/// present but unreadable still counts as taken, which is the whole point
+/// of numbering from a directory listing rather than from a counter.
+pub fn names() -> Result<Vec<String>, String> {
+    let Some(mut dir) = open_dir(false)? else {
+        return Ok(Vec::new());
+    };
+    let mut names = Vec::new();
+    loop {
+        match dir.read_entry_boxed() {
+            Ok(Some(info)) => {
+                if !info.attribute().contains(FileAttribute::DIRECTORY) {
+                    names.push(info.file_name().to_string());
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return Err(err(&format!("cannot read \\{DIR}"), e.status())),
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
 /// Read every snapshot in the backup directory, sorted by name.
 ///
 /// The files are a few tens of KiB each, so reading them all up front is

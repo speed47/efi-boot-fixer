@@ -26,7 +26,7 @@ Five operations, all driven with the D-pad:
 | Back up both GPTs | ESP file | snapshots both tables to `\GPTTOOLK\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
-| Boot entries (NVRAM) | never | shows the firmware's boot list, and the loaders installed on the ESPs |
+| Boot entries (NVRAM) | NVRAM | shows the firmware's boot list and the loaders on the ESPs; registers one, sets the default, or boots one once |
 
 - **No keyboard needed.** The Deck's buttons are the only input; the menus,
   reports and prompts are built for a D-pad and two buttons.
@@ -50,7 +50,9 @@ Five operations, all driven with the D-pad:
   that boots to nothing may have an intact disk and an emptied `BootOrder`
   instead, so the tool shows the firmware's boot entries — including the ones
   that have fallen out of the list and gone invisible — alongside the loaders
-  actually present on the ESPs. See [docs/boot.md](docs/boot.md).
+  actually present on the ESPs, and can put a missing one back. The whole
+  boot configuration is saved to the ESP before the first change.
+  See [docs/boot.md](docs/boot.md).
 
 ## Getting it running
 

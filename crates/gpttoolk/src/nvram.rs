@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use gptcore::bootopt::{self, LoadOption};
-use uefi::runtime::{self, VariableVendor};
+use uefi::runtime::{self, VariableAttributes, VariableVendor};
 use uefi::{cstr16, CStr16, Status};
 
 /// What NVRAM says about booting, as far as it could be read.
@@ -109,6 +109,98 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
     slots.sort_unstable();
     slots.dedup();
     (slots, truncated)
+}
+
+/// The settings worth saving alongside the entries.
+///
+/// `BootCurrent` is deliberately absent: it is volatile and set by the
+/// firmware to describe the boot in progress, so a saved copy would be a
+/// statement about a boot that already happened.
+const SETTINGS: &[&str] = &["BootOrder", "BootNext", "Timeout"];
+
+/// Every variable the boot process depends on, verbatim.
+///
+/// Raw bytes, not decoded entries: this feeds a snapshot whose whole
+/// purpose is to survive a `Boot####` this build cannot parse. Variables
+/// that are absent are skipped, and one that cannot be read is skipped
+/// too, with its name returned so the caller can say the copy is partial
+/// rather than quietly presenting it as complete.
+pub fn capture() -> (Vec<(String, Vec<u8>)>, Vec<String>) {
+    let (slots, truncated) = enumerate();
+    let mut vars = Vec::new();
+    let mut missed: Vec<String> = truncated.into_iter().collect();
+
+    for name in SETTINGS {
+        match uefi::CString16::try_from(*name).ok().map(|n| get(&n)) {
+            Some(Ok(Some(data))) => vars.push((String::from(*name), data)),
+            Some(Ok(None)) => {}
+            _ => missed.push(String::from(*name)),
+        }
+    }
+    for slot in slots {
+        let name = bootopt::slot_name(slot);
+        match uefi::CString16::try_from(name.as_str()).ok().map(|n| get(&n)) {
+            Some(Ok(Some(data))) => vars.push((name, data)),
+            Some(Ok(None)) => {}
+            _ => missed.push(name),
+        }
+    }
+    (vars, missed)
+}
+
+/// How a variable this tool writes is stored.
+///
+/// Non-volatile or the change is forgotten at the next power cycle, which
+/// would make the whole exercise pointless. Both access bits because that
+/// is what the firmware's own boot manager sets, and a variable the
+/// firmware cannot read during boot service is not a boot entry.
+const ATTRS: VariableAttributes = VariableAttributes::NON_VOLATILE
+    .union(VariableAttributes::BOOTSERVICE_ACCESS)
+    .union(VariableAttributes::RUNTIME_ACCESS);
+
+/// Turn a refusal into something the operator can act on.
+///
+/// These three statuses are not bugs and not hardware faults; they are the
+/// firmware saying no for a reason worth naming, and "SET_VARIABLE failed
+/// (WRITE_PROTECTED)" tells someone with a machine that will not boot
+/// nothing at all.
+fn write_error(name: &str, status: Status) -> String {
+    match status {
+        Status::WRITE_PROTECTED => format!(
+            "{name} is locked by the firmware. Some vendors seal the boot \
+             variables; look for a setting to unlock them."
+        ),
+        Status::SECURITY_VIOLATION => format!(
+            "{name} was refused by Secure Boot policy. Boot variables cannot \
+             be changed from here while the firmware is in user mode."
+        ),
+        Status::OUT_OF_RESOURCES => format!(
+            "there is no room left in NVRAM for {name}. Delete some boot \
+             entries from the firmware's own menu first."
+        ),
+        other => err(&format!("{name} could not be written"), other),
+    }
+}
+
+/// Write one variable.
+pub fn write(w: &bootopt::VarWrite) -> Result<(), String> {
+    let name = uefi::CString16::try_from(w.name.as_str())
+        .map_err(|_| format!("{} is not a usable variable name", w.name))?;
+    runtime::set_variable(&name, &VariableVendor::GLOBAL_VARIABLE, ATTRS, &w.data)
+        .map_err(|e| write_error(&w.name, e.status()))
+}
+
+/// Apply a plan in order, stopping at the first refusal.
+///
+/// The error names how many writes had already landed, because a plan that
+/// stopped halfway leaves NVRAM in a state the operator needs described:
+/// after one write of a registration the entry exists but nothing points
+/// at it, which is recoverable and worth saying out loud.
+pub fn apply(writes: &[bootopt::VarWrite]) -> Result<(), (usize, String)> {
+    for (done, w) in writes.iter().enumerate() {
+        write(w).map_err(|e| (done, e))?;
+    }
+    Ok(())
 }
 
 /// Read the whole boot configuration.
