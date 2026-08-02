@@ -9,7 +9,11 @@ working operating system, and can repair the very disk it was launched from.
 That works even with the primary table destroyed, because the Deck firmware
 falls back to the backup GPT for partition enumeration. The Linux kernel does
 not fall back without the `gpt` cmdline option, which is why `steamcl.efi`
-loads and then dies at `pivot_root`.
+loads but ultimately fails to boot. Symptoms are either:
+
+- Black screen when booting SteamOS, even manually through `steamcl.efi`
+- Dropping you to a `grub>` prompt after attempting to boot
+- Verbose boot logs ending in `ERROR: Mounting /dev/disk/bypartuuid/<UUIDOFYOURPARTITION> failed.`
 
 ## Features
 
