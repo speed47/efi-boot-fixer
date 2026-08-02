@@ -58,7 +58,12 @@ jobs:
     name: Build EFI binary
     runs-on: ubuntu-latest
     steps:
+      # Full history and tags: the build stamps the binary with `git describe`,
+      # and the default shallow clone has neither the tags nor the commit count
+      # that needs. See crates/gpttoolk/build.rs.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -72,6 +77,24 @@ jobs:
 
       - name: Build and stage
         run: make dist
+
+      # The whole point of the stamp is that a binary someone is running months
+      # later can be traced back to a commit, so a build that lost it should
+      # fail here rather than ship anonymously.
+      - name: Check the binary names its commit
+        run: |
+          set -euo pipefail
+          echo "git describe: $(git describe --tags --always --dirty --match 'v*')"
+          if git describe --tags --exact-match --match 'v*' HEAD >/dev/null 2>&1; then
+            echo "exact tag: the binary reports the package version alone"
+            exit 0
+          fi
+          short=$(git rev-parse --short=7 HEAD)
+          for efi in build/dist/gpttoolk.efi build/dist/efiprobe.efi; do
+            grep -qa "g$short" "$efi" \
+              || { echo "$efi does not mention commit $short" >&2; exit 1; }
+            echo "ok: $efi names commit $short"
+          done
 
       # Cheap guard against shipping something that is not a bootable EFI
       # application, e.g. if the target or subsystem ever changes.
@@ -135,6 +158,10 @@ jobs:
 
           Commit: \`${GITHUB_SHA}\`
           Built: $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          The binary prints its version on the first screen, and that version
+          carries this commit (\`g${GITHUB_SHA:0:7}\`). Quote it when reporting
+          anything, so it is clear which build you were running.
 
           ## Install
 

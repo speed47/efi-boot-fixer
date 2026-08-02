@@ -82,6 +82,13 @@ land in the entry list. See [docs/boot.md](docs/boot.md).
 (`{ gpt.partition_type_guid }`) before being compared; taking a reference to
 one does not compile, and would be UB if it did.
 
+**The version comes from `build.rs`, not `CARGO_PKG_VERSION`.** Use
+`env!("GPTTOOLK_VERSION")`: it is the package version with the `git describe`
+commit appended for anything that is not an exact tag, which is the only way a
+continuous build in the wild can be traced back to a commit. CI checks that the
+staged binaries contain the commit hash, and clones with `fetch-depth: 0`
+because a shallow one cannot describe. See [docs/using.md](docs/using.md).
+
 **`font_data.rs` is generated and committed.** Do not hand-edit it; `make
 font` re-bakes it from DejaVu Sans Mono. A normal build needs no font
 installed.

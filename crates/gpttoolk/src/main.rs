@@ -506,7 +506,7 @@ fn next_name() -> Result<String, String> {
 fn provenance(disk: &Disk, boot_device: &BootDevice) -> Vec<(String, String)> {
     let mut meta = alloc::vec![(
         String::from("tool"),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("GPTTOOLK_VERSION"))
     )];
 
     let vendor = uefi::system::firmware_vendor().to_string();
@@ -1016,7 +1016,7 @@ fn take_boot_snapshot() -> Result<String, String> {
     }
     let mut meta = alloc::vec![(
         String::from("tool"),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("GPTTOOLK_VERSION"))
     )];
     let vendor = uefi::system::firmware_vendor().to_string();
     if !vendor.is_empty() {
@@ -1499,7 +1499,7 @@ fn main() -> Status {
     ui::init();
 
     let boot_device = BootDevice::resolve();
-    let mut intro = alloc::vec![dim(format!("  version {}", env!("CARGO_PKG_VERSION")))];
+    let mut intro = alloc::vec![dim(format!("  version {}", env!("GPTTOOLK_VERSION")))];
     if boot_device.is_known() {
         intro.extend(ui::wrapped(
             &format!("  launched from {}", path_text(boot_device.path())),

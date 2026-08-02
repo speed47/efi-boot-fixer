@@ -11,7 +11,7 @@ inline help:
 ```
 EFI GPT Toolkit for Steam Deck
 ------------------------------------------------------------------
-  version 0.1.0
+  version 0.1.0+3.g1a2b3c4
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
   Check GPT                                          <- highlighted
@@ -25,6 +25,20 @@ EFI GPT Toolkit for Steam Deck
   Writes nothing.
   D-pad = move    A = choose    B = exit
 ```
+
+## The version line
+
+A release built from a tag reports its version alone — `0.1.0`. Anything else,
+including every continuous build, appends the commit it was compiled from as
+semver build metadata: `0.1.0+3.g1a2b3c4` is three commits past `v0.1.0` at
+`1a2b3c4`, and `0.1.0+g1a2b3c4` is a build made before any tag existed. A
+`.dirty` on the end means the working tree had uncommitted changes.
+
+That suffix is the only way to tell which build someone is running, since the
+package version does not move between releases, so quote the whole line when
+reporting anything. It is computed by `crates/gpttoolk/build.rs` at compile
+time, and the same string is stored in snapshot metadata and written to
+`efiprobe.log`.
 
 ## The disk picker
 

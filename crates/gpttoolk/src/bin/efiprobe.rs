@@ -361,6 +361,8 @@ fn main() -> Status {
     let mut log = Log::open();
 
     log.line("=== efiprobe v2: guided UEFI input mapping ===");
+    // A log mailed in weeks later has to name the build that wrote it.
+    log.line(&format!("build: {}", env!("GPTTOOLK_VERSION")));
     log.line(&format!(
         "firmware: {} rev {:#x}, UEFI {}.{}",
         system::firmware_vendor(),
