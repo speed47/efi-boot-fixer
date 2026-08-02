@@ -77,8 +77,11 @@ pub struct Candidate {
 pub struct Scan {
     pub volumes: Vec<EspVolume>,
     pub candidates: Vec<Candidate>,
-    /// Volumes that looked like an ESP but could not be read.
-    pub unreadable: Vec<String>,
+    /// Indices into `volumes` that looked like an ESP but could not be
+    /// read. By index rather than by path: `path_text` answers `<unknown>`
+    /// for a partition with no device path protocol, and two of those would
+    /// otherwise be indistinguishable.
+    pub unreadable: Vec<usize>,
 }
 
 /// The pair that identifies a bootloader: which partition, and which file.
@@ -263,7 +266,7 @@ pub fn scan(boot: &crate::selfdev::BootDevice, entries: &[(u16, Vec<u8>)]) -> Sc
         {
             Some(mut root) => probe(&mut root),
             None => {
-                scan.unreadable.push(volume.path.clone());
+                scan.unreadable.push(index);
                 scan.volumes.push(volume);
                 continue;
             }

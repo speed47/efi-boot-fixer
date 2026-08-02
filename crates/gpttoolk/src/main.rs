@@ -970,7 +970,7 @@ fn run_boot_scan(boot_device: &BootDevice) {
         lines.extend(ui::wrapped(&format!("    {}", volume.path), Style::Dim, "      "));
         lines.push(dim(format!("    partition {}", volume.partition)));
 
-        if scan.unreadable.contains(&volume.path) {
+        if scan.unreadable.contains(&i) {
             lines.push(bad("    The filesystem on this ESP could not be opened."));
             continue;
         }
