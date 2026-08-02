@@ -18,6 +18,7 @@
 extern crate alloc;
 
 pub mod backup;
+pub mod bootcfg;
 pub mod bootopt;
 pub mod crc;
 pub mod disk;

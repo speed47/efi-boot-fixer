@@ -18,7 +18,7 @@
 //! application passes the rendered text back in when it wants a line drawn.
 //! That boundary is what keeps this file testable on the host.
 
-use crate::style::{dim, line, Line, Style};
+use crate::style::{dim, line, title, Line, Style};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -227,6 +227,136 @@ pub fn parse_slot(name: &str) -> Option<u16> {
 /// reason.
 pub fn next_free_slot(taken: &[u16]) -> Option<u16> {
     (0..=u16::MAX).find(|s| !taken.contains(s))
+}
+
+/// One variable to be written, and why.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct VarWrite {
+    pub name: String,
+    pub data: Vec<u8>,
+    /// What this write accomplishes, for the screen shown before it.
+    pub what: String,
+}
+
+/// Write a new entry, then put it in the boot order.
+///
+/// **The order of these two writes is the point, not an implementation
+/// detail.** It is the same rule the GPT side follows when it writes an
+/// entry array before the header that points at it: a power cut between
+/// the two must not leave a pointer to something that does not exist.
+///
+/// Interrupted after the first write, NVRAM holds an entry that is not in
+/// the boot order — which the firmware ignores and the view screen shows
+/// under "Present, but not in the boot order". Interrupted the other way
+/// round, `BootOrder` would name a slot with nothing behind it: a position
+/// the firmware silently skips, and one no screen can explain. One of
+/// those states is legible and the other is not.
+///
+/// `first` puts the new entry at the head of the order rather than the
+/// tail, making it the default in the same operation.
+pub fn plan_register(slot: u16, opt: &LoadOption, order: &[u16], first: bool) -> Vec<VarWrite> {
+    let mut next: Vec<u16> = order.iter().copied().filter(|s| *s != slot).collect();
+    if first {
+        next.insert(0, slot);
+    } else {
+        next.push(slot);
+    }
+
+    alloc::vec![
+        VarWrite {
+            name: slot_name(slot),
+            data: encode(opt),
+            what: format!("the new entry, \"{}\"", opt.description),
+        },
+        VarWrite {
+            name: String::from("BootOrder"),
+            data: encode_order(&next),
+            what: format!(
+                "the boot order, with {} {}",
+                slot_name(slot),
+                if first { "first" } else { "last" }
+            ),
+        },
+    ]
+}
+
+/// Move an existing entry to the front of the boot order.
+///
+/// Only `BootOrder` is touched. No entry is rewritten, so this cannot
+/// damage one: the worst case is an order the operator did not want, and
+/// the same screen puts it back.
+pub fn plan_set_default(slot: u16, order: &[u16]) -> Vec<VarWrite> {
+    alloc::vec![VarWrite {
+        name: String::from("BootOrder"),
+        data: encode_order(&reorder(slot, order)),
+        what: format!("the boot order, with {} first", slot_name(slot)),
+    }]
+}
+
+/// `order` with `slot` moved to the front, keeping the rest as they were.
+///
+/// Also the preview the confirmation screen shows, so the bytes authorised
+/// and the list read are computed once rather than derived twice.
+pub fn reorder(slot: u16, order: &[u16]) -> Vec<u16> {
+    let mut next = alloc::vec![slot];
+    next.extend(order.iter().copied().filter(|s| *s != slot));
+    next
+}
+
+/// Boot one entry once, without changing the order.
+///
+/// The firmware consumes `BootNext` as it uses it, so this undoes itself.
+/// It is the safe way to try an entry that may not work: if it fails, the
+/// next boot is the old default again with nothing to put back.
+pub fn plan_boot_next(slot: u16) -> Vec<VarWrite> {
+    alloc::vec![VarWrite {
+        name: String::from("BootNext"),
+        data: slot.to_le_bytes().to_vec(),
+        what: format!("a one-shot override to {}", slot_name(slot)),
+    }]
+}
+
+/// The writes a plan will make, in the order it will make them.
+pub fn render_plan(writes: &[VarWrite]) -> Vec<Line> {
+    let mut out = alloc::vec![title("  Will write, in this order:")];
+    for (i, w) in writes.iter().enumerate() {
+        out.push(Line::new(
+            format!("   {}. {}  ({} bytes)", i + 1, w.name, w.data.len()),
+            Style::Key,
+        ));
+        out.push(dim(format!("      {}", w.what)));
+    }
+    out.push(Line::blank());
+    out.push(dim("  No disk is touched. These are firmware variables;"));
+    out.push(dim("  a reboot is what makes them take effect."));
+    out
+}
+
+/// How the boot order reads before and after.
+///
+/// Two lists rather than "moved to the front", because the operator is
+/// about to authorise the *result* and should be reading it, not reading a
+/// description of the edit.
+pub fn render_order_change(
+    before: &[u16],
+    after: &[u16],
+    name: impl Fn(u16) -> String,
+) -> Vec<Line> {
+    let mut out = alloc::vec![dim("  Boot order now:")];
+    for (i, s) in before.iter().enumerate() {
+        out.push(dim(format!("   {}. {}", i + 1, name(*s))));
+    }
+    if before.is_empty() {
+        out.push(dim("   (empty)"));
+    }
+    out.push(Line::blank());
+    out.push(title("  Boot order after:"));
+    for (i, s) in after.iter().enumerate() {
+        let text = format!("   {}. {}", i + 1, name(*s));
+        // Position one is the whole point of the change.
+        out.push(if i == 0 { Line::new(text, Style::Key) } else { line(text) });
+    }
+    out
 }
 
 /// One row in a list of entries.
