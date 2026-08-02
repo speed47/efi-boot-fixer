@@ -1505,7 +1505,11 @@ fn main() -> Status {
     loop {
         // Rebuilt every time round rather than once: the device path is
         // wrapped to the screen width, and the display screen can change
-        // that width from any menu, this one included.
+        // that width from any submenu this returns from. Not from this
+        // menu's own display screen, though: the menu loop handles View
+        // itself and never hands control back here, so a width changed
+        // there leaves these lines truncated until a submenu is entered
+        // and left again.
         let mut intro = alloc::vec![dim(format!("  version {}", env!("GPTTOOLK_VERSION")))];
         if boot_device.is_known() {
             intro.extend(ui::wrapped(

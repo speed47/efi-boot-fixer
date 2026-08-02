@@ -340,7 +340,7 @@ pub fn message(title: &str, lines: &[Line]) {
         for line in lines {
             styled(line, cols);
         }
-        footer(rows, "  A = continue");
+        footer(rows, &with_display_hint("  A = continue"));
 
         match wait() {
             Input::Select | Input::Cancel => return,
@@ -556,7 +556,7 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
             body();
         }
 
-        footer(rows, "  B = cancel, nothing is written");
+        footer(rows, &with_display_hint("  B = cancel, nothing is written"));
 
         let input = wait();
         if input == Input::Cancel {
