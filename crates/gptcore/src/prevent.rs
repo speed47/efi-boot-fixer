@@ -22,6 +22,7 @@
 //! table on a theory. Callers must present it as such.
 
 use crate::crc::Crc32;
+use crate::mbr::MbrStatus;
 use crate::repair::{Analysis, RepairPlan, Step};
 use crate::style::{self, good, key, line, warn, Line, Style};
 use alloc::string::String;
@@ -29,6 +30,15 @@ use alloc::vec::Vec;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Blocker {
+    /// The disk carries a hybrid MBR.
+    ///
+    /// The same refusal `repair` makes, for the same reason: some legacy
+    /// OS is relying on that view of the disk. It has to be repeated here
+    /// because this operation reaches the headers by its own route —
+    /// `analyze` decides the repair verdict, and nothing about a hybrid
+    /// MBR makes the two GPTs *invalid*, so the checks below would happily
+    /// pass a disk the tool has already said it will not touch.
+    HybridMbr,
     /// One of the two tables is not currently valid. Repair first.
     TableNotHealthy,
     /// The primary entry array is not at LBA 2, so the disk has a problem
@@ -47,6 +57,9 @@ pub enum Blocker {
 impl core::fmt::Display for Blocker {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Blocker::HybridMbr => {
+                write!(f, "this disk carries a hybrid MBR, which this tool never modifies")
+            }
             Blocker::TableNotHealthy => {
                 write!(f, "the GPT is not currently healthy; repair it first")
             }
@@ -90,6 +103,13 @@ impl Verdict {
 
 /// Decide whether the gap can be closed on this disk.
 pub fn assess(analysis: &Analysis) -> Verdict {
+    // First, and deliberately not delegated to `analysis.verdict`: that
+    // field answers "what would a repair do", and a disk can be perfectly
+    // healthy from a repair's point of view while still being one this
+    // tool has promised not to write to.
+    if analysis.mbr == MbrStatus::Hybrid {
+        return Verdict::Refused(Blocker::HybridMbr);
+    }
     let (Ok(primary), Ok(backup)) = (&analysis.primary, &analysis.backup) else {
         return Verdict::Refused(Blocker::TableNotHealthy);
     };

@@ -184,6 +184,43 @@ fn closing_the_gap_is_idempotent() {
     assert!(gptcore::prevent::plan(&second, &CRC).is_none());
 }
 
+/// The hybrid-MBR refusal is unconditional, and this operation is the one
+/// place it could have leaked.
+///
+/// Nothing about a hybrid MBR makes either GPT invalid, so every check
+/// prevention makes would pass: the tables are healthy, the entry array is
+/// at LBA 2, and the real Deck has a gap to close. Repair refuses such a
+/// disk on `analysis.verdict`, which prevention has no reason to consult —
+/// so without an explicit check this would rewrite both headers on a disk
+/// the tool has promised not to touch.
+#[test]
+fn a_hybrid_mbr_is_refused_for_prevention_though_both_gpts_are_healthy() {
+    let img = deck_image();
+    let mut mbr = img.read_lba(0, 1);
+    // A real NTFS record beside the protective one, as in the repair test.
+    let rec = 446 + 16;
+    mbr[rec] = 0x80;
+    mbr[rec + 4] = 0x07;
+    mbr[rec + 8..rec + 12].copy_from_slice(&2048u32.to_le_bytes());
+    mbr[rec + 12..rec + 16].copy_from_slice(&524_288u32.to_le_bytes());
+    img.write_lba(0, &mbr);
+
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+
+    // The precondition that makes this test worth having: both tables are
+    // fine, so nothing but the MBR check stands between us and a write.
+    assert!(analysis.primary.as_ref().unwrap().is_valid());
+    assert!(analysis.backup.as_ref().unwrap().is_valid());
+
+    assert_eq!(
+        gptcore::prevent::assess(&analysis),
+        gptcore::prevent::Verdict::Refused(gptcore::prevent::Blocker::HybridMbr)
+    );
+    assert!(gptcore::prevent::plan(&analysis, &CRC).is_none());
+    assert!(dev.writes().is_empty());
+}
+
 /// A disk whose primary is broken must be repaired first; this operation
 /// rewrites healthy headers and has no business guessing at a damaged one.
 #[test]
