@@ -1488,6 +1488,12 @@ fn main_menu_items() -> Vec<ui::Item> {
 #[entry]
 fn main() -> Status {
     uefi::helpers::init().expect("failed to initialise uefi helpers");
+    // The firmware arms a five-minute watchdog before handing control to a boot
+    // option, and resets the machine when it fires. A menu waiting on a keypress
+    // outlives that, so the reset lands mid-session and the machine comes back
+    // up on the default entry. A timeout of zero disarms it; codes below 0x10000
+    // belong to the firmware, so the code here is one of ours.
+    let _ = boot::set_watchdog_timer(0, 0x1_0000, None);
     // Settles which screen the menus are drawn on, and which way up, before
     // anything is drawn on it.
     ui::init();
