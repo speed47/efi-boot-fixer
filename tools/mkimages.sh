@@ -107,4 +107,11 @@ esac
 
 echo "--- test.img health after '$CORRUPTION' (sgdisk) ---"
 sgdisk -v "$TEST" 2>&1 | grep -E "Main header|Backup header|Main partition|Caution|invalid" || echo "(clean)"
+
+# Left for run-qemu.sh, which cannot otherwise know what it is booting
+# into. What a run is supposed to do to the disk depends on this: only
+# 'bad-mbr' reaches the application's write path under OVMF, per the note
+# above, so it is the only mode where a repair should change anything.
+echo "$CORRUPTION" > "$OUT/corruption"
+
 echo "images ready in $OUT"

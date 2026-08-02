@@ -41,10 +41,88 @@ RES=${RES:-}
 SHOTS=${SHOTS:-}
 SHOT_EVERY=${SHOT_EVERY:-6}
 
+# What the run should have done to the test disk.
+#
+# Without this the harness has no failure signal at all. QEMU is killed by
+# `timeout` on every run, successful or not — it does not exit when the
+# keypress feeder closes its stdin — and the application returns to the
+# firmware rather than reporting anything back to us. So a run in which the
+# application never started, or in which the keypresses landed in OVMF's
+# boot manager instead of our menus, looks exactly like a run that worked.
+# The disk is the only witness.
+#
+# `auto` works it out from the script and the corruption mkimages recorded.
+# Set EXPECT=change|no-change|skip to state it directly.
+EXPECT=${EXPECT:-auto}
+
 CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 VARS="$DIR/vars.fd"
 cp -f "$VARS_SRC" "$VARS"
+
+# What mkimages did to test.img, if it left a note.
+CORRUPTION=$(cat "$DIR/corruption" 2>/dev/null || true)
+
+expected_effect() {
+    case "$EXPECT" in
+        change|no-change|skip) echo "$EXPECT"; return ;;
+        auto) ;;
+        *) echo "unknown EXPECT: $EXPECT (want change, no-change, skip or auto)" >&2
+           exit 1 ;;
+    esac
+
+    local want
+    case "$SCRIPT" in
+        # Read-only walks, the run that declines at the gate, and the two
+        # backup runs — those write a file to the ESP on the boot disk,
+        # never to the disk being backed up.
+        none|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice)
+            want=no-change ;;
+        # Lowering FirstUsableLBA is what Prevent does to a *healthy*
+        # table, and these images are built with FirstUsableLBA 2048 above
+        # a 32-block entry array, so there is always a gap to close.
+        prevent) want=change ;;
+        repair)
+            # Only 'bad-mbr' reaches our write path; see the note in
+            # mkimages.sh. Everything else is either repaired by the
+            # firmware before we run, refused outright, or already healthy.
+            case "$CORRUPTION" in
+                bad-mbr) want=change ;;
+                *)       want=no-change ;;
+            esac ;;
+        # repair-boot targets disk 1, which mkimages never corrupts, and
+        # restore needs a snapshot that some earlier run left on the ESP.
+        # Neither has a post-condition this script can state on its own.
+        *) want=skip ;;
+    esac
+
+    # EDK II's PartitionDxe rebuilds an invalid primary GPT from the backup
+    # when it connects the disk, before any application runs. Under those
+    # corruptions the image changes whatever we do, so "nothing was
+    # written" stops being an observation this script can make.
+    if [ "$want" = no-change ]; then
+        case "$CORRUPTION" in
+            zero-header|zero-all|bad-crc) want=skip ;;
+        esac
+    fi
+    echo "$want"
+}
+
+# A cheap witness for "did anything we care about change".
+#
+# The application only ever writes the protective MBR, the two GPT headers
+# and the two entry arrays, and all of those live in the first and last few
+# dozen blocks. Hashing 64 GiB of mostly-sparse image to find that out
+# would be absurd, and would also pick up filesystem churn we do not care
+# about.
+disk_digest() {
+    local img=$1 blocks
+    blocks=$(( $(stat -c%s "$img") / 512 ))
+    {
+        dd if="$img" bs=512 count=34 2>/dev/null
+        dd if="$img" bs=512 skip=$(( blocks - 34 )) count=34 2>/dev/null
+    } | sha256sum | cut -d' ' -f1
+}
 
 UP=$'\033[A'; DOWN=$'\033[B'; RIGHT=$'\033[C'; LEFT=$'\033[D'
 A=$'\r'; B=$'\033'; TAB=$'\t'
@@ -136,6 +214,9 @@ if [ -n "$SHOTS" ]; then
         "$(( TIMEOUT / SHOT_EVERY ))" &
 fi
 
+EFFECT=$(expected_effect)
+BEFORE=$(disk_digest "$DIR/test.img")
+
 set +e
 drive | timeout "$TIMEOUT" qemu-system-x86_64 \
     -machine q35 \
@@ -152,4 +233,29 @@ drive | timeout "$TIMEOUT" qemu-system-x86_64 \
 rc=$?
 set -e
 echo
+# Not a failure in itself: qemu never exits on its own once the keypresses
+# are done, so `timeout` kills it on every run and 124 is the normal code.
 echo "### qemu exited with $rc (script: $SCRIPT) ###"
+
+AFTER=$(disk_digest "$DIR/test.img")
+case "$EFFECT" in
+    skip)
+        echo "### test disk: no post-condition for '$SCRIPT' with corruption" \
+             "'${CORRUPTION:-unknown}', not checked ###" ;;
+    change)
+        if [ "$BEFORE" = "$AFTER" ]; then
+            echo "### FAILED: '$SCRIPT' left the test disk untouched ###" >&2
+            echo "It was supposed to write to it. Either the application never" >&2
+            echo "started, or the keypresses landed somewhere other than its" >&2
+            echo "menus -- raise BOOT_WAIT if this host is slow." >&2
+            exit 1
+        fi
+        echo "### test disk changed, as '$SCRIPT' should have ###" ;;
+    no-change)
+        if [ "$BEFORE" != "$AFTER" ]; then
+            echo "### FAILED: '$SCRIPT' wrote to the test disk ###" >&2
+            echo "Nothing in this run was supposed to touch it." >&2
+            exit 1
+        fi
+        echo "### test disk untouched, as '$SCRIPT' should have left it ###" ;;
+esac
