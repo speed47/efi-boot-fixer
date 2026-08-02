@@ -583,7 +583,7 @@ fn display() {
         let (cols, rows) = size();
         clear();
         header("Display");
-        outln!("  This screen is drawn by efigptfix itself, so that it can be");
+        outln!("  This screen is drawn by the toolkit itself, so that it can be");
         outln!("  turned to match the panel. This one is mounted sideways, and");
         outln!("  the firmware's own text comes out a quarter turn off.");
         outln!();

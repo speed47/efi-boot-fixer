@@ -1,4 +1,4 @@
-# efigptfix
+# EFI GPT Toolkit for Steam Deck
 
 A UEFI application for inspecting, repairing, backing up and restoring GUID
 partition tables, targeting a Steam Deck that dual-boots Windows and SteamOS.
@@ -15,7 +15,7 @@ Five operations, all driven with the D-pad:
 | --- | --- | --- |
 | Check GPT | never | reads both tables and reports every defect |
 | Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
-| Back up both GPTs | ESP file | snapshots both tables to `\EFIGPTFIX\` on the ESP |
+| Back up both GPTs | ESP file | snapshots both tables to `\GPTTOOLK\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap (see below) |
 
@@ -26,7 +26,7 @@ sequence and shows exactly which LBAs it will write first.
 
 ```
 crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
-crates/efigptfix/    the EFI_APPLICATION (its own workspace; UEFI target only)
+crates/gpttoolk/    the EFI_APPLICATION (its own workspace; UEFI target only)
   src/ui/            the menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
 tools/               image builders, the QEMU harness, the font rasteriser
@@ -45,7 +45,7 @@ Requires a Rust toolchain with the `x86_64-unknown-uefi` target:
 
 ```sh
 rustup target add x86_64-unknown-uefi
-make build          # -> crates/efigptfix/target/x86_64-unknown-uefi/release/efigptfix.efi
+make build          # -> crates/gpttoolk/target/x86_64-unknown-uefi/release/gpttoolk.efi
 make               # list every target
 ```
 
@@ -58,7 +58,7 @@ needs its own cargo invocation with an explicit `--target`; the Makefile
 handles that. It also prefers `~/.cargo/bin/cargo` when present, because
 distro cargo packages generally ship no std for the UEFI target.
 
-The glyph bitmaps in `crates/efigptfix/src/gfx/font_data.rs` are generated and
+The glyph bitmaps in `crates/gpttoolk/src/gfx/font_data.rs` are generated and
 committed, so a normal build needs neither a font installed nor the tool that
 bakes one. `make font` re-bakes them from DejaVu Sans Mono and writes a
 specimen image next to the result; see "the panel is mounted sideways" below.
@@ -266,7 +266,7 @@ Both backends are always built, and one is chosen at startup:
 | a graphics protocol with a CPU-addressable framebuffer | own renderer, rotated to suit the panel |
 | `PixelBltOnly`, or no graphics protocol at all | the firmware's text console, as before |
 
-Nothing above `crates/efigptfix/src/ui/term.rs` knows which one it got. The
+Nothing above `crates/gpttoolk/src/ui/term.rs` knows which one it got. The
 menus, the reports and the confirmation gate are written once, against a
 character grid with a cursor and sixteen colours, and drawn by either.
 
@@ -320,11 +320,18 @@ Copy to the ESP and invoke it manually from the firmware menu. Deliberately
 **not** an NVRAM boot entry, since SteamOS rewrites the boot order on update:
 
 ```sh
-cp efigptfix.efi /esp/EFI/efigptfix.efi
+cp gpttoolk.efi /esp/EFI/gpttoolk.efi
 ```
 
-Then boot menu -> "Boot from file" -> the ESP -> `efigptfix.efi`. Secure Boot
+Then boot menu -> "Boot from file" -> the ESP -> `gpttoolk.efi`. Secure Boot
 must be off, as the binary is unsigned.
+
+If you ran an earlier build, its snapshots are in `\EFIGPTFIX` and this one
+looks in `\GPTTOOLK`. Move them across, or Restore will not offer them:
+
+```sh
+mv /esp/EFIGPTFIX /esp/GPTTOOLK
+```
 
 ### Using it
 
@@ -336,7 +343,7 @@ The selected item's description appears below the list, which doubles as
 inline help:
 
 ```
-efigptfix
+EFI GPT Toolkit for Steam Deck
 ------------------------------------------------------------------
   version 0.1.0
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
@@ -467,7 +474,7 @@ suspicious.
 
 ## Backup and restore
 
-Snapshots go to `\EFIGPTFIX\gpt.001`, `gpt.002`, ... on the ESP the program
+Snapshots go to `\GPTTOOLK\gpt.001`, `gpt.002`, ... on the ESP the program
 was launched from. A sequence number rather than a timestamp for two
 reasons: it fits 8.3, so the name reads the same from firmware, Windows and
 Linux; and it does not depend on the clock, which firmware may decline to
@@ -515,7 +522,7 @@ of the attached disks each one belongs to:
 
   Belongs to: Disk 2 - 10 of 10 partitions still carry the same unique GUID
   disk GUID 0FBB6478-4344-4767-A49E-A95B8F30CCF8
-  written by efigptfix 0.1.0
+  written by gpttoolk 0.1.0
   D-pad = move    A = choose    View = details    B = back
 ```
 
@@ -541,7 +548,7 @@ section exists for:
     Entry array   128 entries x 128 B at LBA 2
 
   Recorded when it was written
-    tool          efigptfix 0.1.0
+    tool          gpttoolk 0.1.0
     firmware      Valve rev 0x10033
     uefi          2.70
     device        PciRoot(0x0)/Pci(0x3,0x0)/NVMe(0x1,...)
@@ -663,8 +670,8 @@ synthetic one.
 
 ```sh
 sudo ./tools/deck-corrupt.py inspect /dev/nvme0n1                       # never writes
-sudo ./tools/deck-corrupt.py break   /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
-sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/EFIGPTFIX/gpt-before.bin
+sudo ./tools/deck-corrupt.py break   /dev/nvme0n1 -o /esp/GPTTOOLK/gpt-before.bin
+sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/GPTTOOLK/gpt-before.bin
 ```
 
 `break` refuses unless it has first written a snapshot and read it back
@@ -673,7 +680,7 @@ verify going in. The important one is the backup GPT: corrupting the primary
 when the backup could not repair it is the one outcome the script must never
 produce, and there is a test for that refusal.
 
-The snapshot is written in efigptfix's own archive format, so it can be put
+The snapshot is written in gpttoolk's own archive format, so it can be put
 back three ways: `restore` here, the EFI application's "Restore GPTs from a
 saved backup", or by hand from the sector dump inside it. Regular files are
 accepted as well as block devices, so the whole thing can be rehearsed

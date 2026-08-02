@@ -36,7 +36,7 @@ jobs:
           # listed separately or its target dir is never cached.
           workspaces: |
             .
-            crates/efigptfix
+            crates/gpttoolk
 
       # The integration tests build real disk images with sgdisk and use it
       # as the oracle for whether a repair worked.
@@ -68,7 +68,7 @@ jobs:
         with:
           workspaces: |
             .
-            crates/efigptfix
+            crates/gpttoolk
 
       - name: Build and stage
         run: make dist
@@ -77,7 +77,7 @@ jobs:
       # application, e.g. if the target or subsystem ever changes.
       - name: Verify PE32+ headers
         run: |
-          python3 - build/dist/efigptfix.efi <<'EOF'
+          python3 - build/dist/gpttoolk.efi <<'EOF'
           import struct, sys
           data = open(sys.argv[1], 'rb').read()
           assert data[:2] == b'MZ', "missing MZ magic"
@@ -94,7 +94,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: efigptfix
+          name: gpttoolk
           path: build/dist/
           if-no-files-found: error
 
@@ -114,7 +114,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: efigptfix
+          name: gpttoolk
           path: dist
 
       - name: Replace the continuous prerelease
@@ -142,7 +142,7 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp efigptfix.efi /esp/EFI/efigptfix.efi
+          cp gpttoolk.efi /esp/EFI/gpttoolk.efi
           \`\`\`
 
           It never writes without you typing the confirmation word, and it
@@ -169,7 +169,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: efigptfix
+          name: gpttoolk
           path: dist
 
       - name: Draft the release
@@ -187,7 +187,7 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp efigptfix.efi /esp/EFI/efigptfix.efi
+          cp gpttoolk.efi /esp/EFI/gpttoolk.efi
           \`\`\`
 
           EOF

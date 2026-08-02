@@ -1,4 +1,4 @@
-The glyph bitmaps in crates/efigptfix/src/gfx/font_data.rs are rasterised
+The glyph bitmaps in crates/gpttoolk/src/gfx/font_data.rs are rasterised
 from DejaVu Sans Mono by tools/mkfont. They are a derivative of that font
 and carry its licence, reproduced in full below.
 

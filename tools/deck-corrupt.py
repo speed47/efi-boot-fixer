@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reproduce, on purpose, the GPT corruption seen on a Steam Deck.
 
-This exists so the repair path in efigptfix can be tested against the real
+This exists so the repair path in gpttoolk can be tested against the real
 failure rather than a synthetic one. The damage it inflicts is exactly what
 was found on the affected disk: `PartitionEntryLBA` in the primary header
 moved from 2 to `FirstUsableLBA - entry_array_blocks`, with the header CRC
@@ -9,23 +9,23 @@ recomputed so the header still verifies. Six bytes. Nothing else changes,
 and no partition data is touched.
 
     sudo ./deck-corrupt.py inspect /dev/nvme0n1
-    sudo ./deck-corrupt.py save    /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
-    sudo ./deck-corrupt.py break   /dev/nvme0n1 -o /esp/EFIGPTFIX/gpt-before.bin
-    sudo ./deck-corrupt.py restore /dev/nvme0n1 -i /esp/EFIGPTFIX/gpt-before.bin
-    ./deck-corrupt.py show /esp/EFIGPTFIX/gpt.001         # no root, no device
+    sudo ./deck-corrupt.py save    /dev/nvme0n1 -o /esp/GPTTOOLK/gpt-before.bin
+    sudo ./deck-corrupt.py break   /dev/nvme0n1 -o /esp/GPTTOOLK/gpt-before.bin
+    sudo ./deck-corrupt.py restore /dev/nvme0n1 -i /esp/GPTTOOLK/gpt-before.bin
+    ./deck-corrupt.py show /esp/GPTTOOLK/gpt.001         # no root, no device
 
 `break` refuses to run unless it has first written a snapshot it can read
 back, and unless *both* tables and the protective MBR are healthy going in
 -- there is no point corrupting a disk whose backup GPT could not repair it
 afterwards.
 
-The snapshot is written in efigptfix's own archive format, so it can be
+The snapshot is written in gpttoolk's own archive format, so it can be
 restored three ways: with `restore` here, with the EFI application's
 "Restore GPTs from a saved backup", or by hand from the sector dump inside
 it. Put it somewhere you can still reach when the machine will not boot --
-the ESP is the obvious choice, which is where efigptfix looks:
+the ESP is the obvious choice, which is where gpttoolk looks:
 
-    /esp/EFIGPTFIX/         (SteamOS mounts the ESP at /esp)
+    /esp/GPTTOOLK/         (SteamOS mounts the ESP at /esp)
 
 After `break`, reboot to see the failure. The running kernel already has
 the partition table in memory, so nothing goes wrong until then.
@@ -41,7 +41,7 @@ import zlib
 SECTOR = 512
 GPT_SIG = b"EFI PART"
 
-# efigptfix archive format. Must match crates/gptcore/src/backup.rs.
+# gpttoolk archive format. Must match crates/gptcore/src/backup.rs.
 MAGIC = b"EFIGPTBK"
 VERSION = 2          # 2 added the metadata section; 1 is still readable
 MIN_VERSION = 1
@@ -222,7 +222,7 @@ def mbr_health(block, last_block):
         return False, "no protective (0xEE) record"
     idx = protective[0]
     if any(i != idx and any(r) for i, r in enumerate(records)):
-        return False, "HYBRID MBR -- efigptfix refuses to touch this disk"
+        return False, "HYBRID MBR -- gpttoolk refuses to touch this disk"
     start = struct.unpack_from("<I", records[idx], 8)[0]
     size = struct.unpack_from("<I", records[idx], 12)[0]
     expected = min(last_block, 0xFFFFFFFF)
@@ -321,7 +321,7 @@ def parse_archive(blob):
     if len(blob) < FIXED_LEN + 4:
         raise Fatal("file is too short to be a GPT snapshot")
     if blob[:8] != MAGIC:
-        raise Fatal("not an efigptfix GPT snapshot (bad magic)")
+        raise Fatal("not an gpttoolk GPT snapshot (bad magic)")
     version = struct.unpack_from("<I", blob, 8)[0]
     if not MIN_VERSION <= version <= VERSION:
         raise Fatal("snapshot format version %d is not supported" % version)
@@ -440,7 +440,7 @@ def cmd_inspect(args):
             proposed = target_entry_lba(primary)
             if primary.entry_lba != 2:
                 print("This disk is ALREADY corrupted in the way 'break' would corrupt it.")
-                print("Use 'restore', or efigptfix's repair, to fix it.")
+                print("Use 'restore', or gpttoolk's repair, to fix it.")
             elif proposed == 2:
                 print("There is no gap between the entry array and the first usable")
                 print("block, so the corruption being reproduced is not possible here:")
@@ -471,7 +471,7 @@ def snapshot(disk, path, allow_same_disk):
             "A snapshot stored on the disk you are about to break is not much of a\n"
             "safety net. Write it to another device, or pass --allow-same-disk if\n"
             "you have a copy elsewhere. The ESP is a reasonable choice *only*\n"
-            "because efigptfix can read it back without booting an OS."
+            "because gpttoolk can read it back without booting an OS."
             % (directory, disk.path)
         )
 
@@ -566,7 +566,7 @@ def cmd_break(args):
         )
         print()
         print("The header will still verify. The entry array is untouched at LBA 2,")
-        print("and the backup GPT is untouched, so efigptfix can repair this.")
+        print("and the backup GPT is untouched, so gpttoolk can repair this.")
         print("No partition or filesystem is modified.")
         print()
 

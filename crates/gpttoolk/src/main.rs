@@ -57,6 +57,16 @@ use uefi::Identify;
 
 const CRC: FirmwareCrc32 = FirmwareCrc32;
 
+/// What the operator sees at the top of the main menu.
+///
+/// The hardware is named because that is what someone searching for this
+/// will have typed, and because the layout checks and the prevention
+/// hypothesis are both specific to it. It is a suffix so that supporting
+/// another handheld with the same fault is a deletion rather than a
+/// rewrite: `EFI GPT Toolkit` stands on its own. The binary is named from
+/// the part that survives that deletion, so it never has to be renamed.
+const APP_NAME: &str = "EFI GPT Toolkit for Steam Deck";
+
 /// Open a protocol without disturbing drivers that already hold it.
 ///
 /// Inspection must not disconnect anything: an exclusive open on the disk
@@ -472,8 +482,10 @@ fn next_name() -> Result<String, String> {
 /// None of this is needed to restore the file. It is here for the question
 /// asked years afterwards: is this from this machine, and what was it?
 fn provenance(disk: &Disk, boot_device: &BootDevice) -> Vec<(String, String)> {
-    let mut meta =
-        alloc::vec![(String::from("tool"), format!("efigptfix {}", env!("CARGO_PKG_VERSION")))];
+    let mut meta = alloc::vec![(
+        String::from("tool"),
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+    )];
 
     let vendor = uefi::system::firmware_vendor().to_string();
     if !vendor.is_empty() {
@@ -574,7 +586,7 @@ fn attribute(archives: Vec<(String, backup::Archive)>, disks: &[Disk]) -> Vec<Sa
         .collect()
 }
 
-/// What was found in `\EFIGPTFIX`: the snapshots that decoded, and a
+/// What was found in `\GPTTOOLK`: the snapshots that decoded, and a
 /// readable complaint about each one that did not.
 struct Found {
     usable: Vec<(String, backup::Archive)>,
@@ -836,7 +848,7 @@ fn main() -> Status {
     let mut esp_lost = false;
 
     loop {
-        match ui::menu("efigptfix", &intro, &items, "B = exit") {
+        match ui::menu(APP_NAME, &intro, &items, "B = exit") {
             Some(0) => run_check(&boot_device),
             Some(1) => run_repair(&boot_device, &mut esp_lost),
             Some(2) => run_backup(&boot_device, esp_lost),

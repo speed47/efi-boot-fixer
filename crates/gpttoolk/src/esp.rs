@@ -20,7 +20,7 @@ use uefi::proto::media::file::{Directory, File, FileAttribute, FileInfo, FileMod
 use uefi::{cstr16, CString16, Status};
 
 /// Where backups live, relative to the root of the ESP.
-pub const DIR: &str = "EFIGPTFIX";
+pub const DIR: &str = "GPTTOOLK";
 
 /// A saved file, read into memory in full.
 pub struct Saved {
@@ -38,7 +38,7 @@ fn err(what: &str, status: Status) -> String {
     format!("{what} ({status:?})")
 }
 
-/// Open `\EFIGPTFIX`, creating it if `create`.
+/// Open `\GPTTOOLK`, creating it if `create`.
 ///
 /// `Ok(None)` means the directory is genuinely not there, which is the
 /// normal state of a volume nothing has been backed up to yet. Every other
@@ -50,19 +50,19 @@ fn open_dir(create: bool) -> Result<Option<Directory>, String> {
         .map_err(|e| err("no filesystem on the boot volume", e.status()))?;
     let mut root = fs.open_volume().map_err(|e| err("cannot open the ESP", e.status()))?;
     let mode = if create { FileMode::CreateReadWrite } else { FileMode::Read };
-    let handle = match root.open(cstr16!("EFIGPTFIX"), mode, FileAttribute::DIRECTORY) {
+    let handle = match root.open(cstr16!("GPTTOOLK"), mode, FileAttribute::DIRECTORY) {
         Ok(handle) => handle,
         Err(e) if e.status() == Status::NOT_FOUND => return Ok(None),
-        Err(e) => return Err(err("cannot open \\EFIGPTFIX on the ESP", e.status())),
+        Err(e) => return Err(err("cannot open \\GPTTOOLK on the ESP", e.status())),
     };
-    handle.into_directory().map(Some).ok_or_else(|| "\\EFIGPTFIX is not a directory".to_string())
+    handle.into_directory().map(Some).ok_or_else(|| "\\GPTTOOLK is not a directory".to_string())
 }
 
 fn name16(name: &str) -> Result<CString16, String> {
     CString16::try_from(name).map_err(|_| format!("{name} is not a usable filename"))
 }
 
-/// Write `data` to a *new* `\EFIGPTFIX\<name>`.
+/// Write `data` to a *new* `\GPTTOOLK\<name>`.
 ///
 /// Refuses a name that is already taken, rather than replacing it. Callers
 /// pick names from `backup::next_name`, which never reuses a sequence, so a
@@ -93,7 +93,7 @@ pub fn save(name: &str, data: &[u8]) -> Result<String, String> {
     Ok(format!("\\{DIR}\\{name}"))
 }
 
-/// Read every snapshot in `\EFIGPTFIX`, sorted by name.
+/// Read every snapshot in `\GPTTOOLK`, sorted by name.
 ///
 /// The files are a few tens of KiB each, so reading them all up front is
 /// cheaper than the alternative: the picker has to show what is *inside*
@@ -124,7 +124,7 @@ pub fn list() -> Result<Vec<Saved>, String> {
                 }
             }
             Ok(None) => break,
-            Err(e) => return Err(err("cannot read \\EFIGPTFIX", e.status())),
+            Err(e) => return Err(err("cannot read \\GPTTOOLK", e.status())),
         }
     }
     names.sort();
