@@ -37,7 +37,7 @@ exercises it has to be photographed rather than read:
 ```sh
 make qemu-shots                          # 800x1280 framebuffer, i.e. rotated
 make qemu-shots QRES=1280x800            # landscape, i.e. not rotated
-SCRIPT=display BOOT_WAIT=10 make qemu-shots   # the startup display screen
+SCRIPT=display make qemu-shots           # View, then the display screen
 ```
 
 Screendumps land in `build/shots` as PPM, one every few seconds, taken over

@@ -23,8 +23,13 @@ EFI GPT Toolkit for Steam Deck
 
   Read both tables and report what is wrong.
   Writes nothing.
-  D-pad = move    A = choose    B = exit
+  D-pad = move    A = choose    B = exit    View = display
 ```
+
+`View = display` is offered on every screen that waits for a press, and opens
+the screen that turns the picture and changes the text size — see
+[display.md](display.md). It is absent when the firmware's own text console is
+drawing, which has neither to offer.
 
 ## The version line
 

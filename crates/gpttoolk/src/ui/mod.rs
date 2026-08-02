@@ -14,6 +14,12 @@
 //! panel that is mounted sideways, which the Steam Deck's is; nothing in
 //! this module knows which one it is talking to.
 //!
+//! Which way up that picture goes, and how big its text is, are settled by
+//! [`display`], which View reaches from any screen that waits for a press.
+//! It is the one control that is not about the disk, and it has to be
+//! available from wherever the operator happens to be when they find they
+//! cannot read the screen.
+//!
 //! Report *formatting* lives in `gptcore::report`, which has no UEFI
 //! dependency and is tested on the host. This module only paints lines and
 //! reads answers back. Which colour a line gets is decided by the
@@ -22,7 +28,6 @@
 
 pub(crate) mod term;
 
-use crate::gfx::Rotation;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use gptcore::style::{Line, Style};
@@ -45,8 +50,8 @@ pub enum Input {
     Select,
     /// B, or the burger button.
     Cancel,
-    /// The View button.
-    Tab,
+    /// The View button, which arrives as TAB.
+    View,
 }
 
 fn poll() -> Option<Input> {
@@ -59,7 +64,7 @@ fn poll() -> Option<Input> {
         Key::Special(ScanCode::ESCAPE) => Some(Input::Cancel),
         Key::Printable(c) => match char::from(c) {
             '\r' | '\n' => Some(Input::Select),
-            '\t' => Some(Input::Tab),
+            '\t' => Some(Input::View),
             _ => None,
         },
         _ => None,
@@ -75,7 +80,7 @@ const TICK_US: usize = 10_000;
 /// a buffer, and there is no point showing a half-built screen, so the
 /// flush happens here, once, immediately before there is anything to wait
 /// for. Screens that never wait never needed to be seen.
-pub fn wait() -> Input {
+fn wait_raw() -> Input {
     term::flush();
     loop {
         if let Some(i) = poll() {
@@ -85,18 +90,24 @@ pub fn wait() -> Input {
     }
 }
 
-/// Wait, but give up after roughly `millis`.
-fn wait_for(millis: usize) -> Option<Input> {
-    term::flush();
-    let mut waited = 0;
-    while waited < millis * 1000 {
-        if let Some(i) = poll() {
-            return Some(i);
-        }
-        boot::stall(TICK_US);
-        waited += TICK_US;
+/// Wait, handling View here so that every screen gets [`display`] without
+/// asking for it.
+///
+/// Someone who cannot read the screen needs to fix it from wherever they
+/// are, not from wherever we decided the setting lived. The press is still
+/// reported back, because every screen that waits redraws on whatever it
+/// gets, and one that has just been drawn at a different size or a quarter
+/// turn round needs that redraw more than most.
+///
+/// Screens that read View themselves poll with [`wait_raw`] instead: a menu
+/// offering a closer look at the selected row, and [`display`], which would
+/// otherwise open on top of itself.
+fn wait() -> Input {
+    let input = wait_raw();
+    if input == Input::View {
+        display();
     }
-    None
+    input
 }
 
 /// Discard anything already queued.
@@ -187,9 +198,12 @@ fn text_width(columns: usize) -> usize {
 
 /// Break a long value across lines instead of cutting it off with a `~`.
 ///
-/// The screen width is fixed once the menus start — the only place that
-/// changes the cell size is the startup Display screen — so callers may
-/// wrap when they build their lines rather than on every repaint.
+/// Callers wrap once, where they build their lines, rather than on every
+/// repaint. [`display`] can change the width under a screen that is already
+/// up; [`fit`] then cuts whatever no longer fits, and the next screen to
+/// build its lines wraps them to the width now in force. Re-wrapping in
+/// place would mean handing the width to every writer in `gptcore`, which
+/// is a large price for a rescue screen nobody visits twice.
 pub fn wrapped(text: &str, style: Style, hang: &str) -> Vec<Line> {
     gptcore::style::wrap(text, text_width(size().0), style, hang)
 }
@@ -272,13 +286,17 @@ const SCROLL_LINES: usize = 3;
 /// anything longer than the screen has to be navigable rather than simply
 /// printed and lost.
 pub fn page(title: &str, lines: &[Line]) -> bool {
-    let (cols, rows) = size();
-    let view = rows.saturating_sub(6).max(4);
     let mut top = 0usize;
-    let max_top = lines.len().saturating_sub(view);
     drain();
 
     loop {
+        // Measured each time round: the display screen is reachable from
+        // here, and a page drawn for the old grid would be the wrong length.
+        let (cols, rows) = size();
+        let view = rows.saturating_sub(6).max(4);
+        let max_top = lines.len().saturating_sub(view);
+        top = top.min(max_top);
+
         clear();
         header(title);
         for line in lines.iter().skip(top).take(view) {
@@ -296,7 +314,7 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
             );
             body();
         }
-        footer(rows, "  A = continue    B = back");
+        footer(rows, &with_display_hint("  A = continue    B = back"));
 
         match wait() {
             Input::Up => top = top.saturating_sub(SCROLL_LINES),
@@ -305,22 +323,25 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
             Input::Right => top = (top + view).min(max_top),
             Input::Select => return true,
             Input::Cancel => return false,
-            Input::Tab => {}
+            // Already handled: the display screen has been and gone, and
+            // this pass repaints the page underneath it.
+            Input::View => {}
         }
     }
 }
 
 /// A message with a single acknowledgement.
 pub fn message(title: &str, lines: &[Line]) {
-    let (cols, rows) = size();
-    clear();
-    header(title);
-    for line in lines {
-        styled(line, cols);
-    }
-    footer(rows, "  A = continue");
     drain();
     loop {
+        let (cols, rows) = size();
+        clear();
+        header(title);
+        for line in lines {
+            styled(line, cols);
+        }
+        footer(rows, "  A = continue");
+
         match wait() {
             Input::Select | Input::Cancel => return,
             _ => {}
@@ -425,18 +446,23 @@ fn run_menu(
 
         let keys = match inspect_hint {
             Some(extra) => alloc::format!("  D-pad = move    A = choose    {extra}    {hint}"),
-            None => alloc::format!("  D-pad = move    A = choose    {hint}"),
+            None => with_display_hint(&alloc::format!("  D-pad = move    A = choose    {hint}")),
         };
         footer(rows, &keys);
 
-        match wait() {
+        // Raw, because a menu offering a closer look wants View for that;
+        // where it does not, this reaches the display screen itself.
+        match wait_raw() {
             Input::Up => {
                 selected = if selected == 0 { items.len() - 1 } else { selected - 1 };
             }
             Input::Down => selected = (selected + 1) % items.len(),
             Input::Select => return Choice::Item(selected),
             Input::Cancel => return Choice::Cancelled,
-            Input::Tab if inspect_hint.is_some() => return Choice::Inspect(selected),
+            Input::View => match inspect_hint {
+                Some(_) => return Choice::Inspect(selected),
+                None => display(),
+            },
             _ => {}
         }
     }
@@ -461,7 +487,7 @@ fn step_name(i: Input) -> &'static str {
         Input::Right => "RIGHT",
         Input::Select => "A",
         Input::Cancel => "B",
-        Input::Tab => "VIEW",
+        Input::View => "VIEW",
     }
 }
 
@@ -500,12 +526,12 @@ fn draw_steps(position: usize) {
 ///
 /// Any wrong press resets progress. B cancels outright.
 pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
-    let (cols, rows) = size();
     let mut position = 0usize;
     let mut wrong = false;
     drain();
 
     loop {
+        let (cols, rows) = size();
         clear();
         header(title);
         for line in warning {
@@ -536,6 +562,12 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
         if input == Input::Cancel {
             return false;
         }
+        // View has just been off to the display screen and back. Making
+        // a legitimate reach for legibility also cost you your place in
+        // the sequence would be gratuitous; it is not one of the presses.
+        if input == Input::View {
+            continue;
+        }
         if input == CONFIRM_SEQUENCE[position] {
             wrong = false;
             position += 1;
@@ -553,38 +585,45 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
 
 // ----------------------------------------------------------------- display
 
-/// How long the display screen waits before deciding it was right.
-const DISPLAY_SECONDS: usize = 6;
+/// How [`display`] is advertised in the key hints along the bottom.
+///
+/// Only where it leads somewhere: on the firmware's own text console the
+/// orientation and the font belong to the firmware, [`display`] returns
+/// without drawing, and a footer must not offer what View will not do.
+fn with_display_hint(keys: &str) -> String {
+    match term::rotation() {
+        Some(_) => alloc::format!("{keys}    View = display"),
+        None => keys.to_string(),
+    }
+}
 
 /// Choose a backend, and settle which way up the screen goes.
 ///
-/// Call once, before anything else draws.
+/// Call once, before anything else draws. The orientation guessed from the
+/// framebuffer's shape is taken as the answer and the session opens on the
+/// menu; [`display`] is where it gets argued with, at whatever point the
+/// operator decides it is wrong.
 pub fn init() {
     // Before taking the framebuffer, not after: the firmware's console is
     // about to have its screen drawn on, and anything it puts there on the
     // way out should land where our first fill will wipe it.
     hide_cursor();
 
-    let Some(guess) = term::init() else {
-        // No usable framebuffer. The firmware's console it is, in whatever
-        // orientation the firmware has it — which is the situation this
-        // tool shipped in, and still works.
-        return;
-    };
-    if guess != Rotation::None {
-        display();
-    }
+    // No usable framebuffer means the firmware's console, in whatever
+    // orientation the firmware has it — which is the situation this tool
+    // shipped in, and still works.
+    term::init();
 }
 
-/// Offer to turn the picture, and to change how much of it fits.
+/// Turn the picture, and change how much of it fits.
 ///
-/// Shown only when [`crate::gfx::Framebuffer::guess_rotation`] guessed, which
-/// means a portrait framebuffer, which means a panel mounted sideways. The
-/// guess is almost certainly right, so this continues on its own after a
-/// few seconds rather than demanding a press every launch. The moment
-/// anything is pressed it stops counting and waits properly: someone
-/// pressing a button here is someone who cannot read the screen, and they
-/// should not be racing a timer while they fix it.
+/// Reachable with View from any screen that waits for a press, because the
+/// moment this is wanted is the moment the screen cannot be read, and that
+/// can happen anywhere: [`crate::gfx::Framebuffer::guess_rotation`] guessing
+/// wrong on unfamiliar hardware, or simply a report of device paths that
+/// wants more columns than the menu it was reached from. It used to be a
+/// timed screen at startup, which charged every launch for a correction
+/// almost nobody needed and still offered it only once.
 ///
 /// LEFT and RIGHT work regardless of which way round the text came out,
 /// which is the only reason this screen can rescue a wrong guess at all.
@@ -593,8 +632,9 @@ pub fn init() {
 /// wherever they happen to be holding it, and no amount of arithmetic here
 /// settles it.
 fn display() {
-    let mut rotation = term::rotation().unwrap_or_default();
-    let mut countdown = Some(DISPLAY_SECONDS);
+    let Some(mut rotation) = term::rotation() else {
+        return;
+    };
     let mut at_limit = false;
     drain();
 
@@ -602,9 +642,10 @@ fn display() {
         let (cols, rows) = size();
         clear();
         header("Display");
-        outln!("  This screen is drawn by the toolkit itself, so that it can be");
-        outln!("  turned to match the panel. This one is mounted sideways, and");
-        outln!("  the firmware's own text comes out a quarter turn off.");
+        outln!("  This screen is drawn by the toolkit itself rather than by the");
+        outln!("  firmware, which is what makes it possible to turn the picture");
+        outln!("  to match the panel. The Steam Deck's is mounted sideways, so");
+        outln!("  the firmware's own text comes out a quarter turn off there.");
         outln!();
         paint(colors(Style::Key));
         outln!("  Now showing: {}, {cols} x {rows} characters", fit(rotation.name(), cols));
@@ -616,44 +657,24 @@ fn display() {
             paint(colors(Style::Dim));
             outln!("  No further text size that way.");
             body();
-        } else {
-            match countdown {
-                Some(0) => return,
-                Some(left) => {
-                    paint(colors(Style::Dim));
-                    outln!("  Continuing in {left}s.");
-                    body();
-                }
-                None => {}
-            }
         }
 
         footer(rows, "  LEFT / RIGHT = turn    UP / DOWN = text size    A = done");
 
-        let input = match countdown {
-            Some(left) => match wait_for(1000) {
-                None => {
-                    countdown = Some(left - 1);
-                    continue;
-                }
-                // Any press at all stops the clock, including the one being
-                // acted on below.
-                Some(input) => {
-                    countdown = None;
-                    input
-                }
-            },
-            None => wait(),
-        };
-
         at_limit = false;
-        match input {
+        // Raw, or View would open this screen on top of itself.
+        match wait_raw() {
             Input::Left => rotation = rotation.previous(),
             Input::Right => rotation = rotation.next(),
             Input::Up => at_limit = !term::resize_text(true),
             Input::Down => at_limit = !term::resize_text(false),
-            Input::Select | Input::Cancel => return,
-            Input::Tab => continue,
+            Input::Select | Input::Cancel | Input::View => {
+                // The press that leaves is held long enough to repeat as
+                // often as any other, and the screen this returns to would
+                // act on what it left behind.
+                drain();
+                return;
+            }
         }
         term::set_rotation(rotation);
     }

@@ -28,15 +28,27 @@ character grid with a cursor and sixteen colours, and drawn by either.
 
 A framebuffer taller than it is wide means a panel mounted sideways, and the
 correction is a quarter turn clockwise; anything else is taken at face value.
-That is a guess, so when it is made the first screen offers to change it, with
-LEFT and RIGHT turning the picture — controls that work no matter which way
-round the text came out, which is the only reason the screen can rescue a
-wrong guess. UP and DOWN step the text size on the same screen, because how
+That guess is taken as the answer and the session opens on the menu.
+
+Arguing with it is the Display screen, which **View** reaches from any screen
+that waits for a press. LEFT and RIGHT turn the picture — controls that work
+no matter which way round the text came out, which is the only reason the
+screen can rescue a wrong guess. UP and DOWN step the text size, because how
 big is comfortable depends on a particular person holding a particular panel
 at whatever distance they hold it, and no amount of arithmetic settles that
-here. It continues on its own after six seconds, and stops counting the moment
-anything is pressed: someone pressing a button here cannot read the screen and
-should not also be racing a timer.
+here.
+
+It used to be the first screen, on a six-second timer. That charged every
+launch for a correction almost nobody needs, and still offered it only once —
+so a guess that turned out wrong three screens in, or a report of device paths
+that wanted more columns than the menu it came from, had no answer at all. A
+button that works everywhere is the same rescue without the toll. The timer
+went with it: there is nothing left to time out into.
+
+The one screen that keeps View for itself is the snapshot list, where it opens
+the selected record; its footer says so. On the firmware's own text console
+the orientation and the font belong to the firmware, so there is no Display
+screen and no footer offers one.
 
 ## The font
 

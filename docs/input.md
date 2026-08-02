@@ -59,6 +59,14 @@ capture is in [efiprobe-deck.log](efiprobe-deck.log).
 So the usable set is: **CR**, **ESCAPE**, **four D-pad scan codes**, **TAB**,
 and a relative pointer with two buttons and a scroll axis.
 
+TAB — the View button — is the only press beyond a D-pad and two buttons that
+the hardware can distinguish, which makes it the one place to put anything
+that is not "move, choose, go back". It opens the Display screen from every
+screen that waits for a press, because wanting it means being unable to read
+the screen, and that can happen anywhere. The snapshot list is the single
+exception: there View opens the selected record, and its footer says so
+instead.
+
 Three results worth calling out:
 
 **Keys auto-repeat while held.** Holding A for six seconds produced 63 CR

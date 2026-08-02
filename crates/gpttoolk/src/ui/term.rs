@@ -50,13 +50,16 @@ fn with<R>(f: impl FnOnce(&mut Backend) -> R) -> R {
     f(slot.get_or_insert(Backend::Text))
 }
 
-/// Pick a backend. Call once, before anything is drawn.
+/// Pick a backend, and take the orientation it guesses. Call once, before
+/// anything is drawn.
 ///
-/// Returns the orientation the graphical backend guessed, or `None` if it
-/// is not being used — which the caller needs, because a guess is worth
-/// confirming with the operator and a text console is not.
-pub fn init() -> Option<Rotation> {
-    let mut fb = Framebuffer::open()?;
+/// The guess stands unless the operator says otherwise, which they do from
+/// the display screen; [`rotation`] is how the rest of the module tells
+/// whether there is one to argue with at all.
+pub fn init() {
+    let Some(mut fb) = Framebuffer::open() else {
+        return;
+    };
     let guess = fb.guess_rotation();
     fb.set_rotation(guess);
 
@@ -64,7 +67,6 @@ pub fn init() -> Option<Rotation> {
     // replacing whatever is in the slot.
     let slot = unsafe { &mut *BACKEND.0.get() };
     *slot = Some(Backend::Gfx(Console::new(fb)));
-    Some(guess)
 }
 
 /// The current orientation, or `None` when the text console is in use and

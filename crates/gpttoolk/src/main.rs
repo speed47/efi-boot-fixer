@@ -1499,21 +1499,24 @@ fn main() -> Status {
     ui::init();
 
     let boot_device = BootDevice::resolve();
-    let mut intro = alloc::vec![dim(format!("  version {}", env!("GPTTOOLK_VERSION")))];
-    if boot_device.is_known() {
-        intro.extend(ui::wrapped(
-            &format!("  launched from {}", path_text(boot_device.path())),
-            Style::Dim,
-            "    ",
-        ));
-    } else {
-        intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
-    }
-
     let items = main_menu_items();
     let mut esp_lost = false;
 
     loop {
+        // Rebuilt every time round rather than once: the device path is
+        // wrapped to the screen width, and the display screen can change
+        // that width from any menu, this one included.
+        let mut intro = alloc::vec![dim(format!("  version {}", env!("GPTTOOLK_VERSION")))];
+        if boot_device.is_known() {
+            intro.extend(ui::wrapped(
+                &format!("  launched from {}", path_text(boot_device.path())),
+                Style::Dim,
+                "    ",
+            ));
+        } else {
+            intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
+        }
+
         match ui::menu(APP_NAME, &intro, &items, "B = exit") {
             Some(0) => run_check(&boot_device),
             Some(1) => run_repair(&boot_device, &mut esp_lost),

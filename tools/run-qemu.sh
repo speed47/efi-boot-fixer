@@ -227,13 +227,15 @@ drive() {
             keys "$B" "$B" ;;
         menu)                                       # walk the menu, choose nothing
             keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$UP" "$UP" "$B" ;;
-        display)                                    # the startup display screen
-            # Only reached with a portrait RES, and only if the first key
-            # lands while it is still up -- it continues on its own after
-            # six seconds. Tune BOOT_WAIT, not this.
+        display)                                    # the display screen
+            # Opened with View from the main menu, so there is no timer to
+            # race any more. RES=none has no framebuffer to turn, and the
+            # application offers no such screen: this walk needs a RES.
+            keys "$TAB"                             # View, from the menu
             keys "$DOWN" "$DOWN" "$UP"              # text size down, down, up
             keys "$LEFT" "$RIGHT"                   # turn away and back
-            keys "$A" "$B" ;;                       # accept, then exit
+            keys "$A"                               # done, back to the menu
+            keys "$B" ;;                            # exit
         *)
             echo "unknown script: $SCRIPT" >&2; exit 1 ;;
     esac

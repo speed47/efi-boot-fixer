@@ -97,8 +97,10 @@ the Deck.
 ### 4. Use it
 
 - **D-pad** moves, **A** chooses, **B** goes back or cancels.
-- The first screen offers to rotate the picture and change the text size; it
-  continues on its own after six seconds if you press nothing.
+- **View** (the two rectangles, left of the left stick) opens the Display
+  screen from anywhere: LEFT and RIGHT turn the picture, UP and DOWN change
+  the text size. It starts up the right way round on a Deck, so this is only
+  there if it comes out wrong or you want the text bigger.
 - Start with **Check GPT** — it writes nothing and tells you what is wrong.
 - Then **Back up both GPTs**, before anything that writes.
 - Writing requires the sequence **LEFT RIGHT LEFT RIGHT A**; any wrong press
