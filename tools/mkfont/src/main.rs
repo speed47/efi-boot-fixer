@@ -28,7 +28,7 @@
 //!
 //!     cargo run --release -- \
 //!         /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf \
-//!         ../../crates/gpttoolk/src/gfx/font_data.rs
+//!         ../../crates/bootfixr/src/gfx/font_data.rs
 
 use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use std::fmt::Write as _;
@@ -176,7 +176,7 @@ fn emit(out: &mut String, name: &str, baked: &Baked) {
 /// desktop than the white-on-black the application actually draws.
 fn preview(baked: &Baked, dest: &str) {
     let specimen = [
-        "EFI GPT Toolkit  Check GPT (read only)",
+        "EFI Boot Fixer  Check GPT (read only)",
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789",
         "abcdefghijklmnopqrstuvwxyz !\"#$%&'()*+",
         ",-./:;<=>?@[\\]^_`{|}~  1101 => 34.4 GiB",

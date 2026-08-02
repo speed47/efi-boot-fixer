@@ -59,8 +59,8 @@ one.
 
 ```sh
 sudo ./tools/deck-corrupt.py inspect /dev/nvme0n1                       # never writes
-sudo ./tools/deck-corrupt.py break   /dev/nvme0n1 -o /esp/GPTTOOLK/gpt-before.bin
-sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/GPTTOOLK/gpt-before.bin
+sudo ./tools/deck-corrupt.py break   /dev/nvme0n1 -o /esp/BOOTFIXR/gpt-before.bin
+sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/BOOTFIXR/gpt-before.bin
 ```
 
 `break` refuses unless it has first written a snapshot and read it back
@@ -69,7 +69,7 @@ going in. The important one is the backup GPT: corrupting the primary when the
 backup could not repair it is the one outcome the script must never produce,
 and there is a test for that refusal.
 
-The snapshot is written in gpttoolk's own archive format, so it can be put
+The snapshot is written in bootfixr's own archive format, so it can be put
 back three ways: `restore` here, the EFI application's "Restore GPTs from a
 saved backup", or by hand from the sector dump inside it. Regular files are
 accepted as well as block devices, so the whole thing can be rehearsed against

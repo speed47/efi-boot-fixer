@@ -21,10 +21,10 @@ fn main() {
             None => pkg,
         },
     };
-    println!("cargo:rustc-env=GPTTOOLK_VERSION={version}");
+    println!("cargo:rustc-env=BOOTFIXR_VERSION={version}");
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=GPTTOOLK_VERSION");
+    println!("cargo:rerun-if-env-changed=BOOTFIXR_VERSION");
     // Set by GitHub Actions and different on every commit. A cached target
     // directory would otherwise keep serving a stamp computed for an earlier
     // build, which is worse than no stamp at all: it names the wrong commit.
@@ -36,7 +36,7 @@ fn main() {
 
 /// An explicit version, for a build that knows better than git does.
 fn env_override() -> Option<String> {
-    let v = std::env::var("GPTTOOLK_VERSION").ok()?;
+    let v = std::env::var("BOOTFIXR_VERSION").ok()?;
     let v = v.trim();
     (!v.is_empty()).then(|| v.to_string())
 }

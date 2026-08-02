@@ -36,7 +36,7 @@ macro_rules! backup_dir {
     };
 }
 
-backup_dir!("GPTTOOLK");
+backup_dir!("BOOTFIXR");
 
 /// A saved file, read into memory in full.
 pub struct Saved {

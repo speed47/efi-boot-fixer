@@ -20,7 +20,7 @@ fn now() -> Timestamp {
 
 fn meta() -> Vec<(String, String)> {
     vec![
-        ("tool".to_string(), "gpttoolk test".to_string()),
+        ("tool".to_string(), "bootfixr test".to_string()),
         ("firmware".to_string(), "Valve rev 0x10033".to_string()),
     ]
 }
@@ -212,7 +212,7 @@ fn provenance_survives_the_round_trip() {
     let img = deck_image();
     let archive = snapshot(&img);
     assert_eq!(archive.version, backup::VERSION);
-    assert_eq!(archive.meta_get("tool"), Some("gpttoolk test"));
+    assert_eq!(archive.meta_get("tool"), Some("bootfixr test"));
     assert_eq!(archive.meta_get("firmware"), Some("Valve rev 0x10033"));
     assert_eq!(archive.meta_get("nonexistent"), None);
 }
@@ -288,7 +288,7 @@ fn inspecting_a_snapshot_shows_what_identifies_it() {
 
     let text = gptcore::style::plain(&backup::inspect(&archive, Some(("Disk 1", &c))));
     assert!(text.contains("Belongs to:"), "{text}");
-    assert!(text.contains("gpttoolk test"), "{text}");
+    assert!(text.contains("bootfixr test"), "{text}");
     assert!(text.contains("Unique GUID"), "{text}");
     assert!(text.contains("rootfs-A"), "{text}");
     // The per-partition GUID is the evidence; it must actually be printed.

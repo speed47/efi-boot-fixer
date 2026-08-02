@@ -9,7 +9,7 @@ The selected item's description appears below the list, which doubles as
 inline help:
 
 ```
-EFI GPT Toolkit for Steam Deck
+EFI Boot Fixer for Steam Deck
 ------------------------------------------------------------------
   version 0.1.0+3.g1a2b3c4
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
@@ -43,7 +43,7 @@ semver build metadata: `0.1.0+3.g1a2b3c4` is three commits past `v0.1.0` at
 
 That suffix is the only way to tell which build someone is running, since the
 package version does not move between releases, so quote the whole line when
-reporting anything. It is computed by `crates/gpttoolk/build.rs` at compile
+reporting anything. It is computed by `crates/bootfixr/build.rs` at compile
 time, and the same string is stored in snapshot metadata and written to
 `efiprobe.log`.
 

@@ -1,4 +1,4 @@
-# gpttoolk - build, test and QEMU harness.
+# bootfixr - build, test and QEMU harness.
 #
 # The UEFI application and the host-testable core are separate workspaces,
 # so they need different cargo invocations. That is what most of this file
@@ -12,10 +12,10 @@ CARGO      ?= cargo
 UEFI_CARGO ?= $(if $(wildcard $(HOME)/.cargo/bin/cargo),$(HOME)/.cargo/bin/cargo,$(CARGO))
 
 TARGET     := x86_64-unknown-uefi
-EFI_CRATE  := crates/gpttoolk
-EFI        := $(EFI_CRATE)/target/$(TARGET)/release/gpttoolk.efi
+EFI_CRATE  := crates/bootfixr
+EFI        := $(EFI_CRATE)/target/$(TARGET)/release/bootfixr.efi
 PROBE      := $(EFI_CRATE)/target/$(TARGET)/release/efiprobe.efi
-EFI_DEBUG  := $(EFI_CRATE)/target/$(TARGET)/debug/gpttoolk.efi
+EFI_DEBUG  := $(EFI_CRATE)/target/$(TARGET)/debug/bootfixr.efi
 
 BUILD      ?= build
 DIST       := $(BUILD)/dist
@@ -41,7 +41,7 @@ FONT_DATA  := $(EFI_CRATE)/src/gfx/font_data.rs
         font install clean distclean
 
 help: ## Show this help
-	@echo "gpttoolk targets:"
+	@echo "bootfixr targets:"
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo
@@ -68,9 +68,9 @@ size: build ## Report the binary size
 
 dist: build ## Stage both binaries and a checksum in build/dist
 	@mkdir -p $(DIST)
-	cp $(EFI) $(DIST)/gpttoolk.efi
+	cp $(EFI) $(DIST)/bootfixr.efi
 	cp $(PROBE) $(DIST)/efiprobe.efi
-	cd $(DIST) && sha256sum gpttoolk.efi efiprobe.efi > SHA256SUMS
+	cd $(DIST) && sha256sum bootfixr.efi efiprobe.efi > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
 probe-esp: build ## Copy just the input probe to $(ESP)/EFI/BOOT/BOOTX64.EFI
@@ -141,8 +141,8 @@ verify-image: ## Ask sgdisk what it thinks of the test disk
 
 install: build ## Copy the binary to $(ESP)/EFI (does NOT add a boot entry)
 	@test -d "$(ESP)" || { echo "no ESP mounted at $(ESP); set ESP=..." >&2; exit 1; }
-	install -D -m 0644 $(EFI) "$(ESP)/EFI/gpttoolk.efi"
-	@echo "installed to $(ESP)/EFI/gpttoolk.efi"
+	install -D -m 0644 $(EFI) "$(ESP)/EFI/bootfixr.efi"
+	@echo "installed to $(ESP)/EFI/bootfixr.efi"
 	@echo "invoke it from the firmware's 'boot from file' menu."
 
 # ------------------------------------------------------------------ clean

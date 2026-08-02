@@ -4,7 +4,7 @@ Requires a Rust toolchain with the `x86_64-unknown-uefi` target:
 
 ```sh
 rustup target add x86_64-unknown-uefi
-make build          # -> crates/gpttoolk/target/x86_64-unknown-uefi/release/gpttoolk.efi
+make build          # -> crates/bootfixr/target/x86_64-unknown-uefi/release/bootfixr.efi
 make                # list every target
 ```
 
@@ -17,7 +17,7 @@ needs its own cargo invocation with an explicit `--target`; the Makefile
 handles that. It also prefers `~/.cargo/bin/cargo` when present, because
 distro cargo packages generally ship no std for the UEFI target.
 
-The glyph bitmaps in `crates/gpttoolk/src/gfx/font_data.rs` are generated and
+The glyph bitmaps in `crates/bootfixr/src/gfx/font_data.rs` are generated and
 committed, so a normal build needs neither a font installed nor the tool that
 bakes one. `make font` re-bakes them from DejaVu Sans Mono and writes a
 specimen image next to the result; see [display.md](display.md).

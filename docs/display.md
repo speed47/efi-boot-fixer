@@ -20,7 +20,7 @@ Both backends are always built, and one is chosen at startup:
 | a graphics protocol with a CPU-addressable framebuffer | own renderer, rotated to suit the panel |
 | `PixelBltOnly`, or no graphics protocol at all | the firmware's text console, as before |
 
-Nothing above `crates/gpttoolk/src/ui/term.rs` knows which one it got. The
+Nothing above `crates/bootfixr/src/ui/term.rs` knows which one it got. The
 menus, the reports and the confirmation gate are written once, against a
 character grid with a cursor and sixteen colours, and drawn by either.
 

@@ -1,4 +1,4 @@
-# EFI GPT Toolkit for Steam Deck
+# EFI Boot Fixer for Steam Deck
 
 A UEFI application for inspecting, repairing, backing up and restoring GUID
 partition tables, targeting a Steam Deck that dual-boots Windows and SteamOS.
@@ -23,7 +23,7 @@ Five operations, all driven with the D-pad:
 | --- | --- | --- |
 | Check GPT | never | reads both tables and reports every defect |
 | Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
-| Back up both GPTs | ESP file | snapshots both tables to `\GPTTOOLK\` on the ESP |
+| Back up both GPTs | ESP file | snapshots both tables to `\BOOTFIXR\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
 | Boot entries (NVRAM) | NVRAM | shows the firmware's boot list and the loaders on the ESPs; registers one, sets the default, or boots one once |
@@ -58,8 +58,8 @@ Five operations, all driven with the D-pad:
 
 ### 1. Download it
 
-Grab `gpttoolk.efi` and `SHA256SUMS` from the
-[latest release](https://github.com/speed47/efi-gpt-toolkit/releases/latest).
+Grab `bootfixr.efi` and `SHA256SUMS` from the
+[latest release](https://github.com/speed47/efi-boot-fixer/releases/latest).
 The `continuous` prerelease is a rolling build of the default branch; prefer a
 tagged release if one exists.
 
@@ -72,7 +72,7 @@ sha256sum -c SHA256SUMS
 Mount the Deck's EFI system partition and drop the binary in:
 
 ```sh
-cp gpttoolk.efi /esp/EFI/gpttoolk.efi
+cp bootfixr.efi /esp/EFI/bootfixr.efi
 ```
 
 On SteamOS the ESP is normally already mounted at `/boot/efi`. If the Deck no
@@ -89,7 +89,7 @@ SteamOS rewrites the boot order on update.
 2. Hold **Volume Up (+)** and tap **Power**, keeping Volume Up held until the
    Boot Manager appears.
 3. Choose **Boot From File**, then the EFI system partition, then `EFI`, then
-   `gpttoolk.efi`.
+   `bootfixr.efi`.
 
 Secure Boot must be off, as the binary is unsigned. It is off by default on
 the Deck.
@@ -114,7 +114,7 @@ Requires a Rust toolchain with the `x86_64-unknown-uefi` target:
 
 ```sh
 rustup target add x86_64-unknown-uefi
-make build          # -> crates/gpttoolk/target/x86_64-unknown-uefi/release/gpttoolk.efi
+make build          # -> crates/bootfixr/target/x86_64-unknown-uefi/release/bootfixr.efi
 make                # list every target
 ```
 

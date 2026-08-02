@@ -10,7 +10,7 @@ wrong.
 ```
 crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
 crates/gptcore/tests/  host tests; sgdisk is the independent oracle
-crates/gpttoolk/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
+crates/bootfixr/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
   src/ui/            menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
   src/nvram.rs       reading Boot####/BootOrder out of the variable store
@@ -42,7 +42,7 @@ make qemu SCRIPT=repair     # boot under OVMF and drive the menus over serial
 
 ## Traps
 
-**Two workspaces.** `crates/gpttoolk` is a separate workspace and only builds
+**Two workspaces.** `crates/bootfixr` is a separate workspace and only builds
 for `x86_64-unknown-uefi`. A bare `cargo build` at the root does not touch it,
 and a bare `cargo test` cannot compile it. The Makefile invokes it separately
 with an explicit `--target`, and prefers `~/.cargo/bin/cargo`, because distro
@@ -83,7 +83,7 @@ land in the entry list. See [docs/boot.md](docs/boot.md).
 one does not compile, and would be UB if it did.
 
 **The version comes from `build.rs`, not `CARGO_PKG_VERSION`.** Use
-`env!("GPTTOOLK_VERSION")`: it is the package version with the `git describe`
+`env!("BOOTFIXR_VERSION")`: it is the package version with the `git describe`
 commit appended for anything that is not an exact tag, which is the only way a
 continuous build in the wild can be traced back to a commit. CI checks that the
 staged binaries contain the commit hash, and clones with `fetch-depth: 0`
@@ -104,7 +104,7 @@ queued input first. See [docs/input.md](docs/input.md).
   them, in both repair and restore. A power cut must not leave a valid header
   describing garbage. The NVRAM side follows the same rule: `Boot####` is
   written before the `BootOrder` naming it, asserted in `tests/bootwrite.rs`.
-- The boot configuration is saved to `\GPTTOOLK\boot.NNN` before the
+- The boot configuration is saved to `\BOOTFIXR\boot.NNN` before the
   session's first NVRAM write. Its variables are stored as opaque bytes and
   never re-encoded — an entry this build cannot parse is the one most worth
   copying exactly.

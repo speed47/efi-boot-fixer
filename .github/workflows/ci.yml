@@ -36,7 +36,7 @@ jobs:
           # listed separately or its target dir is never cached.
           workspaces: |
             .
-            crates/gpttoolk
+            crates/bootfixr
 
       # The integration tests build real disk images with sgdisk and use it
       # as the oracle for whether a repair worked.
@@ -60,7 +60,7 @@ jobs:
     steps:
       # Full history and tags: the build stamps the binary with `git describe`,
       # and the default shallow clone has neither the tags nor the commit count
-      # that needs. See crates/gpttoolk/build.rs.
+      # that needs. See crates/bootfixr/build.rs.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -73,7 +73,7 @@ jobs:
         with:
           workspaces: |
             .
-            crates/gpttoolk
+            crates/bootfixr
 
       - name: Build and stage
         run: make dist
@@ -90,7 +90,7 @@ jobs:
             exit 0
           fi
           short=$(git rev-parse --short=7 HEAD)
-          for efi in build/dist/gpttoolk.efi build/dist/efiprobe.efi; do
+          for efi in build/dist/bootfixr.efi build/dist/efiprobe.efi; do
             grep -qa "g$short" "$efi" \
               || { echo "$efi does not mention commit $short" >&2; exit 1; }
             echo "ok: $efi names commit $short"
@@ -100,7 +100,7 @@ jobs:
       # application, e.g. if the target or subsystem ever changes.
       - name: Verify PE32+ headers
         run: |
-          python3 - build/dist/gpttoolk.efi <<'EOF'
+          python3 - build/dist/bootfixr.efi <<'EOF'
           import struct, sys
           data = open(sys.argv[1], 'rb').read()
           assert data[:2] == b'MZ', "missing MZ magic"
@@ -117,7 +117,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gpttoolk
+          name: bootfixr
           path: build/dist/
           if-no-files-found: error
 
@@ -137,7 +137,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: gpttoolk
+          name: bootfixr
           path: dist
 
       - name: Replace the continuous prerelease
@@ -169,12 +169,12 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp gpttoolk.efi /esp/EFI/gpttoolk.efi
+          cp bootfixr.efi /esp/EFI/bootfixr.efi
           \`\`\`
 
           Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
           reach the Boot Manager, and choose "Boot From File" -> the ESP ->
-          \`gpttoolk.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
+          \`bootfixr.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
           rewrites the boot order on update. Secure Boot must be off, as the
           binary is unsigned.
 
@@ -209,7 +209,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: gpttoolk
+          name: bootfixr
           path: dist
 
       - name: Draft the release
@@ -224,12 +224,12 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp gpttoolk.efi /esp/EFI/gpttoolk.efi
+          cp bootfixr.efi /esp/EFI/bootfixr.efi
           \`\`\`
 
           Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
           reach the Boot Manager, and choose "Boot From File" -> the ESP ->
-          \`gpttoolk.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
+          \`bootfixr.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
           rewrites the boot order on update. Secure Boot must be off, as this
           binary is unsigned.
 

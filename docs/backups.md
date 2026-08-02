@@ -1,6 +1,6 @@
 # Backup and restore
 
-Snapshots go to `\GPTTOOLK\gpt.001`, `gpt.002`, ... on the ESP the program was
+Snapshots go to `\BOOTFIXR\gpt.001`, `gpt.002`, ... on the ESP the program was
 launched from. A sequence number rather than a timestamp for two reasons: it
 fits 8.3, so the name reads the same from firmware, Windows and Linux; and it
 does not depend on the clock, which firmware may decline to give. Numbering
@@ -10,7 +10,7 @@ date lives inside the file, where the picker shows it.
 
 > Upgrading from a build older than the rename: earlier versions kept their
 > snapshots in `\EFIGPTFIX`. Move them across or Restore will not offer them:
-> `mv /esp/EFIGPTFIX /esp/GPTTOOLK`.
+> `mv /esp/EFIGPTFIX /esp/BOOTFIXR`.
 
 ## The file format
 
@@ -54,7 +54,7 @@ the attached disks each one belongs to:
 
   Belongs to: Disk 2 - 10 of 10 partitions still carry the same unique GUID
   disk GUID 0FBB6478-4344-4767-A49E-A95B8F30CCF8
-  written by gpttoolk 0.1.0
+  written by bootfixr 0.1.0
   D-pad = move    A = choose    View = details    B = back
 ```
 
@@ -80,7 +80,7 @@ section exists for:
     Entry array   128 entries x 128 B at LBA 2
 
   Recorded when it was written
-    tool          gpttoolk 0.1.0
+    tool          bootfixr 0.1.0
     firmware      Valve rev 0x10033
     uefi          2.70
     device        PciRoot(0x0)/Pci(0x3,0x0)/NVMe(0x1,...)

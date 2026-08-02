@@ -127,7 +127,7 @@ fn snapshot() -> Snapshot {
             (String::from("Boot0001"), include_bytes!("data/boot/ovmf-boot0001.bin").to_vec()),
             (String::from("Timeout"), vec![0x03, 0x00]),
         ],
-        meta: vec![(String::from("tool"), String::from("gpttoolk 0.1.0"))],
+        meta: vec![(String::from("tool"), String::from("bootfixr 0.1.0"))],
     }
 }
 

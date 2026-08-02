@@ -15,6 +15,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "bootfixr"
+version = "0.1.0"
+dependencies = [
+ "gptcore",
+ "uefi",
+ "uefi-raw",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23,15 +32,6 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "gptcore"
 version = "0.1.0"
-
-[[package]]
-name = "gpttoolk"
-version = "0.1.0"
-dependencies = [
- "gptcore",
- "uefi",
- "uefi-raw",
-]
 
 [[package]]
 name = "log"

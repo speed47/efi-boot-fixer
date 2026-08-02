@@ -4,7 +4,7 @@
 
 ```
 crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
-crates/gpttoolk/     the EFI_APPLICATION (its own workspace; UEFI target only)
+crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/ui/            the menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
 tools/               image builders, the QEMU harness, the font rasteriser

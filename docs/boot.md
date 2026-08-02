@@ -79,7 +79,7 @@ with `Boot`, and a lenient match sweeps them into the entry list.
 `espscan` looks at every partition whose GPT type GUID is the EFI System
 Partition, skipping removable media — a boot entry pointing at a USB stick
 breaks the moment the stick comes out, and that matches the refusal list in
-[safety.md](safety.md). This is a different job from [esp.rs](../crates/gpttoolk/src/esp.rs),
+[safety.md](safety.md). This is a different job from [esp.rs](../crates/bootfixr/src/esp.rs),
 which reads and writes the tool's own backups on the volume it was launched
 from and only there.
 
@@ -145,7 +145,7 @@ Three operations write to NVRAM. None of them touches a disk.
 There is no backup `BootOrder` at the far end of NVRAM the way there is a
 backup GPT at the far end of a disk. The boot configuration is the only
 copy of itself. So before this session's first NVRAM write — whichever
-operation gets there first — the whole thing is saved to `\GPTTOOLK\boot.NNN`
+operation gets there first — the whole thing is saved to `\BOOTFIXR\boot.NNN`
 on the ESP, next to the GPT snapshots.
 
 Variables go in as opaque name/bytes pairs and are never re-encoded. A

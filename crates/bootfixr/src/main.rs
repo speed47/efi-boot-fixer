@@ -65,9 +65,9 @@ const CRC: FirmwareCrc32 = FirmwareCrc32;
 /// will have typed, and because the layout checks and the prevention
 /// hypothesis are both specific to it. It is a suffix so that supporting
 /// another handheld with the same fault is a deletion rather than a
-/// rewrite: `EFI GPT Toolkit` stands on its own. The binary is named from
+/// rewrite: `EFI Boot Fixer` stands on its own. The binary is named from
 /// the part that survives that deletion, so it never has to be renamed.
-const APP_NAME: &str = "EFI GPT Toolkit for Steam Deck - github.com/speed47/efi-gpt-toolkit";
+const APP_NAME: &str = "EFI Boot Fixer for Steam Deck - github.com/speed47/efi-boot-fixer";
 
 /// Open a protocol without disturbing drivers that already hold it.
 ///
@@ -506,7 +506,7 @@ fn next_name() -> Result<String, String> {
 fn provenance(disk: &Disk, boot_device: &BootDevice) -> Vec<(String, String)> {
     let mut meta = alloc::vec![(
         String::from("tool"),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("GPTTOOLK_VERSION"))
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("BOOTFIXR_VERSION"))
     )];
 
     let vendor = uefi::system::firmware_vendor().to_string();
@@ -605,7 +605,7 @@ fn attribute(archives: Vec<(String, backup::Archive)>, disks: &[Disk]) -> Vec<Sa
         .collect()
 }
 
-/// What was found in `\GPTTOOLK`: the snapshots that decoded, and a
+/// What was found in `\BOOTFIXR`: the snapshots that decoded, and a
 /// readable complaint about each one that did not.
 struct Found {
     usable: Vec<(String, backup::Archive)>,
@@ -1016,7 +1016,7 @@ fn take_boot_snapshot() -> Result<String, String> {
     }
     let mut meta = alloc::vec![(
         String::from("tool"),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("GPTTOOLK_VERSION"))
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("BOOTFIXR_VERSION"))
     )];
     let vendor = uefi::system::firmware_vendor().to_string();
     if !vendor.is_empty() {
@@ -1541,7 +1541,7 @@ fn main() -> Status {
         // itself and never hands control back here, so a width changed
         // there leaves these lines truncated until a submenu is entered
         // and left again.
-        let mut intro = alloc::vec![dim(format!("  version {}", env!("GPTTOOLK_VERSION")))];
+        let mut intro = alloc::vec![dim(format!("  version {}", env!("BOOTFIXR_VERSION")))];
         if boot_device.is_known() {
             intro.extend(ui::wrapped(
                 &format!("  launched from {}", path_text(boot_device.path())),

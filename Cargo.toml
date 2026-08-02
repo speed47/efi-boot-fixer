@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/gptcore"]
 # The UEFI application lives in its own workspace: it only builds for
 # x86_64-unknown-uefi, so it must not be pulled into a host `cargo test`.
-exclude = ["crates/gpttoolk"]
+exclude = ["crates/bootfixr"]
 
 [workspace.package]
 version = "0.1.0"

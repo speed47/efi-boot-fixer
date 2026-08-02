@@ -49,8 +49,8 @@ const KNOWN: &[(&str, &str)] = &[
     // This tool. Named here because the operator most likely to be reading
     // this list is the one deciding where to install it, or looking for the
     // copy they installed last time.
-    ("gpttoolk.efi", "EFI GPT Toolkit (this program)"),
-    ("efiprobe.efi", "EFI GPT Toolkit input probe"),
+    ("bootfixr.efi", "EFI Boot Fixer (this program)"),
+    ("efiprobe.efi", "EFI Boot Fixer input probe"),
 ];
 
 fn describe_file(name: &str) -> &'static str {

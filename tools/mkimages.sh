@@ -30,7 +30,7 @@ ESP_END=$(sgdisk -i 1 "$BOOT" | awk '/Last sector/ {print $3}')
 ESP_SECTORS=$(( ESP_END - ESP_START + 1 ))
 
 truncate -s $(( ESP_SECTORS * 512 )) "$ESP"
-mkfs.vfat -F 32 -n GPTTOOLK "$ESP" >/dev/null
+mkfs.vfat -F 32 -n BOOTFIXR "$ESP" >/dev/null
 mmd -i "$ESP" ::/EFI ::/EFI/BOOT
 mcopy -i "$ESP" "$EFI" ::/EFI/BOOT/BOOTX64.EFI
 
