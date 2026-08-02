@@ -67,7 +67,7 @@ const CRC: FirmwareCrc32 = FirmwareCrc32;
 /// another handheld with the same fault is a deletion rather than a
 /// rewrite: `EFI GPT Toolkit` stands on its own. The binary is named from
 /// the part that survives that deletion, so it never has to be renamed.
-const APP_NAME: &str = "EFI GPT Toolkit for Steam Deck";
+const APP_NAME: &str = "EFI GPT Toolkit for Steam Deck - github.com/speed47/efi-gpt-toolkit";
 
 /// Open a protocol without disturbing drivers that already hold it.
 ///
