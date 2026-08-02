@@ -19,37 +19,37 @@ use crate::guid::Guid;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub const EFI_SYSTEM_PARTITION: Guid = Guid::from_fields(
+pub(crate) const EFI_SYSTEM_PARTITION: Guid = Guid::from_fields(
     0xC12A_7328,
     0xF81F,
     0x11D2,
     [0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B],
 );
-pub const LINUX_FILESYSTEM: Guid = Guid::from_fields(
+pub(crate) const LINUX_FILESYSTEM: Guid = Guid::from_fields(
     0x0FC6_3DAF,
     0x8483,
     0x4772,
     [0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4],
 );
-pub const LINUX_SWAP: Guid = Guid::from_fields(
+pub(crate) const LINUX_SWAP: Guid = Guid::from_fields(
     0x0657_FD6D,
     0xA4AB,
     0x43C4,
     [0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F],
 );
-pub const MS_BASIC_DATA: Guid = Guid::from_fields(
+pub(crate) const MS_BASIC_DATA: Guid = Guid::from_fields(
     0xEBD0_A0A2,
     0xB9E5,
     0x4433,
     [0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7],
 );
-pub const MS_RESERVED: Guid = Guid::from_fields(
+pub(crate) const MS_RESERVED: Guid = Guid::from_fields(
     0xE3C9_E316,
     0x0B5C,
     0x4DB8,
     [0x81, 0x7D, 0xF9, 0x2D, 0xF0, 0x02, 0x15, 0xAE],
 );
-pub const WINDOWS_RECOVERY: Guid = Guid::from_fields(
+pub(crate) const WINDOWS_RECOVERY: Guid = Guid::from_fields(
     0xDE94_BBA4,
     0x06D1,
     0x4D40,
@@ -58,31 +58,31 @@ pub const WINDOWS_RECOVERY: Guid = Guid::from_fields(
 
 // SteamOS uses the systemd discoverable-partition GUIDs, not the generic
 // "Linux filesystem" type. Confirmed against a real Deck.
-pub const LINUX_ROOT_X86_64: Guid = Guid::from_fields(
+pub(crate) const LINUX_ROOT_X86_64: Guid = Guid::from_fields(
     0x4F68_BCE3,
     0xE8CD,
     0x4DB1,
     [0x96, 0xE7, 0xFB, 0xCA, 0xF9, 0x84, 0xB7, 0x09],
 );
-pub const LINUX_VAR: Guid = Guid::from_fields(
+pub(crate) const LINUX_VAR: Guid = Guid::from_fields(
     0x4D21_B016,
     0xB534,
     0x45C2,
     [0xA9, 0xFB, 0x5C, 0x16, 0xE0, 0x91, 0xFD, 0x2D],
 );
-pub const LINUX_HOME: Guid = Guid::from_fields(
+pub(crate) const LINUX_HOME: Guid = Guid::from_fields(
     0x933A_C7E1,
     0x2EB4,
     0x4F13,
     [0xB8, 0x44, 0x0E, 0x14, 0xE2, 0xAE, 0xF9, 0x15],
 );
-pub const LINUX_USR_X86_64: Guid = Guid::from_fields(
+pub(crate) const LINUX_USR_X86_64: Guid = Guid::from_fields(
     0x8484_680C,
     0x9521,
     0x48C6,
     [0x9C, 0x11, 0xB0, 0x72, 0x06, 0x56, 0xF6, 0x9E],
 );
-pub const LINUX_LUKS: Guid = Guid::from_fields(
+pub(crate) const LINUX_LUKS: Guid = Guid::from_fields(
     0xCA7D_7CCB,
     0x63ED,
     0x4C53,
@@ -90,7 +90,7 @@ pub const LINUX_LUKS: Guid = Guid::from_fields(
 );
 
 /// Partition type GUIDs that are unremarkable on a dual-booting Deck.
-pub const KNOWN_TYPES: &[(Guid, &str)] = &[
+pub(crate) const KNOWN_TYPES: &[(Guid, &str)] = &[
     (EFI_SYSTEM_PARTITION, "EFI system partition"),
     (LINUX_FILESYSTEM, "Linux filesystem"),
     (LINUX_ROOT_X86_64, "Linux x86-64 root"),
@@ -129,7 +129,7 @@ pub const STEAMOS_PARTITIONS: &[(&str, Guid)] = &[
 
 /// Names whose absence means this is almost certainly not a bootable
 /// SteamOS table, whatever else it contains.
-pub const STEAMOS_CRITICAL: &[&str] = &["esp", "rootfs-A"];
+pub(crate) const STEAMOS_CRITICAL: &[&str] = &["esp", "rootfs-A"];
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum StructuralIssue {

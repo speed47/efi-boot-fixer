@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Number of UTF-16 code units in the name field.
-pub const NAME_LEN: usize = 36;
+pub(crate) const NAME_LEN: usize = 36;
 
 const OFF_TYPE_GUID: usize = 0;
 const OFF_UNIQUE_GUID: usize = 16;

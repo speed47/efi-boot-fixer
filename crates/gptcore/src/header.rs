@@ -11,11 +11,11 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// "EFI PART" read as a little-endian u64.
-pub const GPT_SIGNATURE: u64 = 0x5452_4150_2049_4645;
-pub const GPT_REVISION_1_0: u32 = 0x0001_0000;
+pub(crate) const GPT_SIGNATURE: u64 = 0x5452_4150_2049_4645;
+pub(crate) const GPT_REVISION_1_0: u32 = 0x0001_0000;
 
 /// Spec minimum. Headers may declare more, up to one block.
-pub const HEADER_MIN_SIZE: u32 = 92;
+pub(crate) const HEADER_MIN_SIZE: u32 = 92;
 
 /// Offsets of the fields we rewrite or zero, per UEFI spec table 5.5.
 const OFF_SIGNATURE: usize = 0;
@@ -36,7 +36,7 @@ const OFF_ENTRY_ARRAY_CRC32: usize = 88;
 /// An upper bound on the entry array, so a corrupt count cannot make us
 /// try to read gigabytes. 128 entries is conventional; the spec requires
 /// firmware to support at least 16 KiB of entry array.
-pub const MAX_ENTRY_COUNT: u32 = 8192;
+pub(crate) const MAX_ENTRY_COUNT: u32 = 8192;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GptHeader {
@@ -290,7 +290,7 @@ impl GptHeader {
     /// Returns `None` if `header_size` is not a usable length for `raw`,
     /// which is why the caller must treat an out-of-range HeaderSize as
     /// fatal before relying on the CRC.
-    pub fn compute_header_crc(&self, raw: &[u8], crc: &impl Crc32) -> Option<u32> {
+    pub(crate) fn compute_header_crc(&self, raw: &[u8], crc: &impl Crc32) -> Option<u32> {
         let size = self.header_size as usize;
         if size < HEADER_MIN_SIZE as usize || size > raw.len() {
             return None;

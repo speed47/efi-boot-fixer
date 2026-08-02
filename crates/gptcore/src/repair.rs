@@ -41,7 +41,7 @@ impl TableView {
 }
 
 /// Read the header at `lba` and the entry array it points at.
-pub fn read_table<D: BlockDevice + ?Sized>(
+pub(crate) fn read_table<D: BlockDevice + ?Sized>(
     dev: &mut D,
     lba: u64,
     crc: &impl Crc32,

@@ -170,7 +170,7 @@ pub fn render_analysis(analysis: &Analysis) -> Vec<Line> {
 }
 
 /// The table the operator is being asked to approve.
-pub fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<Line> {
+pub(crate) fn render_table(plan: &RepairPlan, block_size: u32) -> Vec<Line> {
     render_entries(&plan.entries, block_size, plan.header.disk_guid, "Proposed table:")
 }
 

@@ -6,8 +6,8 @@
 
 use alloc::vec::Vec;
 
-pub const MBR_BOOT_SIGNATURE: u16 = 0xAA55;
-pub const OS_TYPE_GPT_PROTECTIVE: u8 = 0xEE;
+pub(crate) const MBR_BOOT_SIGNATURE: u16 = 0xAA55;
+pub(crate) const OS_TYPE_GPT_PROTECTIVE: u8 = 0xEE;
 
 const OFF_BOOT_CODE_END: usize = 440;
 const OFF_RECORDS: usize = 446;
@@ -21,7 +21,7 @@ const START_CHS: [u8; 3] = [0x00, 0x02, 0x00];
 const END_CHS: [u8; 3] = [0xFF, 0xFF, 0xFF];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct MbrRecord {
+pub(crate) struct MbrRecord {
     pub boot_indicator: u8,
     pub start_chs: [u8; 3],
     pub os_type: u8,
@@ -79,7 +79,7 @@ impl MbrStatus {
 }
 
 /// What SizeInLBA should be: the disk size minus one, saturated.
-pub fn expected_size_in_lba(last_block: u64) -> u32 {
+pub(crate) fn expected_size_in_lba(last_block: u64) -> u32 {
     last_block.min(u32::MAX as u64) as u32
 }
 

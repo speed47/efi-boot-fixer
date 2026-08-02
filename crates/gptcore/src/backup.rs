@@ -28,11 +28,18 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub const MAGIC: [u8; 8] = *b"EFIGPTBK";
+pub(crate) const MAGIC: [u8; 8] = *b"EFIGPTBK";
 /// Bumped to 2 when the metadata section was added. Version 1 files stay
 /// readable: a snapshot is worthless if a later build refuses it.
 pub const VERSION: u32 = 2;
 /// The oldest layout [`decode`] understands.
+///
+/// Version 1 is not hypothetical and this is not speculative
+/// compatibility: v1 snapshots were written by earlier builds and at least
+/// one is held on real hardware. The `version >= 2` branch in [`decode`]
+/// and the "predates provenance" line in [`inspect`] exist to read it. A
+/// sweep for unreachable code will keep suggesting all three; they are
+/// reachable by any file older than the metadata section.
 pub const MIN_VERSION: u32 = 1;
 
 /// Size of the fixed part, before the chunks: magic, version, block size,
@@ -243,7 +250,7 @@ impl Archive {
     }
 
     /// The header the restore would install at LBA 1, if it can be parsed.
-    pub fn primary_header(&self) -> Option<GptHeader> {
+    pub(crate) fn primary_header(&self) -> Option<GptHeader> {
         GptHeader::parse(&self.chunk(Role::PrimaryHeader)?.data)
     }
 
@@ -678,7 +685,7 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
 /// not depend on the clock: firmware that will not give a sensible time
 /// would otherwise produce a pile of identically-named files, exactly when
 /// ambiguity is least welcome. The date lives inside the file.
-pub const NAME_PREFIX: &str = "gpt.";
+pub(crate) const NAME_PREFIX: &str = "gpt.";
 pub const MAX_SEQUENCE: u32 = 999;
 
 /// The number in `gpt.NNN`, case-insensitively: FAT may hand back `GPT.001`.
