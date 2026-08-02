@@ -1492,10 +1492,11 @@ fn main_menu_items() -> Vec<ui::Item> {
             ],
         ),
         ui::Item::with_detail(
-            "Prevent recurrence (close the FirstUsableLBA gap)",
+            "Prevent recurrence",
             alloc::vec![
-                dim("  Lower FirstUsableLBA so the arithmetic that caused"),
-                dim("  the corruption produces the right answer.")
+                dim("  Lower FirstUsableLBA so the Windows arithmetic that caused"),
+                dim("  the corruption produces the right answer for this GPT."),
+                dim("  This is unproven. Read docs/corruption.md first.")
             ],
         ),
         ui::Item::with_detail(
