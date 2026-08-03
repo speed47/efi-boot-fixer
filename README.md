@@ -31,7 +31,7 @@ All driven with the D-pad, from one read-only summary and two submenus:
 | **Check this machine** | never | every disk's table, the boot list and the loaders on the ESPs, on one page |
 | *Partition tables (GPT)* | | |
 | Check a disk's GPT | never | reads both tables and reports every defect |
-| Back up both GPTs | ESP file | snapshots both tables to `\BOOTFIXR\` on the ESP |
+| Back up both GPTs | a file | snapshots both tables to `\BOOTFIXR\` on the ESP, on a USB stick or SD card, or on both |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Repair main GPT | disk | rebuilds a corrupt main GPT from the secondary GPT |
 | Prevent recurrence (experimental) | disk | closes the `FirstUsableLBA` gap that causes the damage |
@@ -49,12 +49,14 @@ All driven with the D-pad, from one read-only summary and two submenus:
 - **Nothing is written by accident.** Every operation that touches a disk
   shows exactly which LBAs it will overwrite and then requires a five-press
   confirmation sequence. See [docs/using.md](docs/using.md).
-- **It refuses more than it accepts.** No removable or read-only media, no
-  hybrid MBRs, no implausible secondary GPTs, no mismatched snapshots.
-  See [docs/safety.md](docs/safety.md).
+- **It refuses more than it accepts.** No removable or read-only disks to
+  repair, no hybrid MBRs, no implausible secondary GPTs, no mismatched
+  snapshots. See [docs/safety.md](docs/safety.md).
 - **Snapshots you can still read years later.** Structured, checksummed,
-  self-describing archives on the ESP, attributed back to the right disk by
-  per-partition GUIDs. See [docs/backups.md](docs/backups.md).
+  self-describing archives, attributed back to the right disk by
+  per-partition GUIDs. They go on the ESP, and — when a USB stick or an SD
+  card is plugged in — onto that too, which is the copy that survives losing
+  the disk. See [docs/backups.md](docs/backups.md).
 - **A theory about the cause, and a fix for it.** The infamous Windows 24H2 upgrade
   damage on the main GPT is two bytes, and the arithmetic that produces them is reproducible.
   See [docs/corruption.md](docs/corruption.md).

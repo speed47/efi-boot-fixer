@@ -11,7 +11,7 @@
 //! it would defeat the point. Knowing which one it is still matters, both
 //! because the operator should be told what they are pointing at and
 //! because writing to that disk tears down the filesystem driver serving
-//! the ESP (see `esp::Volume`).
+//! the ESP (see `store::Volume`).
 
 use alloc::boxed::Box;
 use uefi::boot;

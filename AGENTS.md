@@ -14,7 +14,8 @@ crates/bootfixr/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
   src/ui/            menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
   src/nvram.rs       reading Boot####/BootOrder out of the variable store
-  src/espscan.rs     finding bootloaders on the ESPs (not src/esp.rs)
+  src/store.rs       our own files, on the ESP and on removable media
+  src/espscan.rs     finding bootloaders on the ESPs (not src/store.rs)
 tools/               image builders, the QEMU harness, the font rasteriser
 docs/                the long-form reasoning that used to be in the README
 ```
@@ -78,6 +79,14 @@ means the machine offers. The name match is strict (`Boot` plus exactly four
 hex digits) because `BootOrder`, `BootNext` and `BootCurrent` would otherwise
 land in the entry list. See [docs/boot.md](docs/boot.md).
 
+**"Never removable media" is a rule about disks, not about files.** The
+repair targets exclude removable and read-only *block devices*; `store.rs`
+deliberately offers removable *volumes* as backup destinations, through a
+filesystem. Under QEMU that path needs `USB=1`, and specifically
+`-device usb-storage,...,removable=on`: without `removable=on` QEMU leaves
+the RMB bit clear in the SCSI INQUIRY, EDK II marks the media fixed, and the
+destination menu never appears. See [docs/backups.md](docs/backups.md).
+
 **`GptPartitionEntry` is a packed struct.** Its fields must be copied out
 (`{ gpt.partition_type_guid }`) before being compared; taking a reference to
 one does not compile, and would be UB if it did.
@@ -126,6 +135,13 @@ queued input first. See [docs/input.md](docs/input.md).
 - Colour is decided where a line is written (`gptcore::style::Style`), never
   by inspecting text in the UEFI layer.
 - Snapshot names count up from the highest present and never fill a gap.
+- A snapshot written to two destinations gets **one name**, numbered from
+  what is in use on every volume the tool can see — not just the
+  destinations, or saving to one volume now and another later yields two
+  different files sharing a name. A destination whose directory cannot be
+  listed is dropped from the write rather than counting as empty *or*
+  failing the whole thing; a destination that fails the write does not stop
+  the others; both outcomes reach the screen.
 
 ## Conventions
 

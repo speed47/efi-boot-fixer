@@ -1,16 +1,77 @@
 # Backup and restore
 
-Snapshots go to `\BOOTFIXR\gpt.001`, `gpt.002`, ... on the ESP the program was
-launched from. A sequence number rather than a timestamp for two reasons: it
-fits 8.3, so the name reads the same from firmware, Windows and Linux; and it
-does not depend on the clock, which firmware may decline to give. Numbering
-counts up from the highest present and never fills a gap — reusing the number
-of a deleted snapshot would make the ordering lie about which is newest. The
-date lives inside the file, where the picker shows it.
+Snapshots go to `\BOOTFIXR\gpt.001`, `gpt.002`, ... A sequence number rather
+than a timestamp for two reasons: it fits 8.3, so the name reads the same from
+firmware, Windows and Linux; and it does not depend on the clock, which
+firmware may decline to give. Numbering counts up from the highest present and
+never fills a gap — reusing the number of a deleted snapshot would make the
+ordering lie about which is newest. The date lives inside the file, where the
+picker shows it.
 
 > Upgrading from a build older than the rename: earlier versions kept their
 > snapshots in `\EFIGPTFIX`. Move them across or Restore will not offer them:
 > `mv /esp/EFIGPTFIX /esp/BOOTFIXR`.
+
+## Where they go
+
+The ESP the program was launched from is the default, and used to be the only
+choice. It is the one volume guaranteed to be there in the situation this tool
+exists for — no keyboard, no stick, the machine will not boot — so a copy
+there is a copy the operator can definitely reach.
+
+It is also, very often, a copy on the disk being backed up. That is the whole
+weakness of it, and it is why a USB stick or an SD card is offered as a second
+destination whenever one is plugged in:
+
+```
+  Removable media is attached, so a copy can be kept
+  somewhere other than this machine's own disk.
+
+  Save to both                            <- highlighted
+   Save to the ESP only
+   Save to RESCUE only
+
+  One copy on the ESP, one on RESCUE.
+  The ESP copy is the one this program can always find
+  again; the other one survives the disk.
+```
+
+With nothing attached the question is not asked at all — every answer would be
+the same one — and the screen that reports what was written says that plugging
+something in first would have offered more. Volumes are taken as they come:
+**any** removable, writable, present filesystem qualifies, partitioned or not,
+ESP-typed or not, because a stick formatted by a phone is still somewhere a
+40 KiB file can live. The only removable volume deliberately left out is the
+one the program was launched from, which running off a rescue stick makes
+normal: it is already offered, as the launch volume.
+
+Saving to both writes **the same name to both places** — one snapshot, one
+number, wherever it ends up. The number is chosen from what is already in use
+on *every* volume the tool can see, not only on the ones being written to. Ask
+less than that and one name comes to mean two things: save to the stick now
+and to the ESP later, and each gets a `gpt.001` holding a different table,
+which is precisely the pair the restore screen cannot help you tell apart.
+
+A destination whose directory cannot be listed is **dropped, and the others
+are still written**. It cannot be written to itself — a number picked from an
+incomplete listing can collide with a snapshot nobody can see — but making
+that fatal would be worse than it sounds: on the NVRAM path a misbehaving
+stick would otherwise talk the operator into changing boot variables with no
+saved copy at all, on a machine whose ESP was writable the whole time. Writing
+then goes ahead on every remaining destination even after one has failed, and
+the result screen names both outcomes: a full stick must not hide the copy
+that did land on the ESP.
+
+Restore is the mirror of it and asks nothing: it lists what it finds in
+`\BOOTFIXR` on the ESP *and* on whatever removable media is attached at the
+time, with the volume each snapshot came from on its detail line. The two
+copies of one snapshot carry the same name, so that line is what tells them
+apart. A volume that will not open is reported as a rejection rather than
+emptying the screen — an unreadable stick must not stand between the operator
+and the snapshots sitting on the ESP.
+
+The same choice, and the same rules, apply to the `boot.NNN` snapshot of the
+NVRAM boot configuration; see [boot.md](boot.md).
 
 ## The file format
 
@@ -33,13 +94,23 @@ truncated or bit-rotted snapshot is rejected outright rather than
 half-restored. Files that fail to decode are listed as rejected and never
 offered as a choice.
 
+The listing matches `*.bin` as well as `gpt.NNN`, so that snapshots from
+older builds and from `deck-corrupt.py` stay visible. That glob now sweeps
+removable media the operator keeps their own files on, so anything over 4 MiB
+is rejected on sight rather than read: an unrelated `firmware.bin` of a few
+hundred MiB would otherwise be pulled into memory in full merely to be turned
+down, and an allocation the firmware refuses is not a rejection line — in
+`no_std` it is the allocation error handler.
+
 The checksum is written by `gBS->CalculateCrc32` under firmware and verified
 by `gptcore`'s own implementation on the host; a snapshot taken under OVMF was
 confirmed byte-for-byte against `zlib.crc32`, so archives are portable between
 the two.
 
 A caveat the tool states on screen: when the ESP is on the disk being backed
-up, this is a convenience copy, not an off-device backup.
+up, that copy is a convenience, not an off-device backup. Choosing a removable
+destination as well replaces the caveat with the reason it existed — the
+removable copy is the one that survives losing the disk.
 
 ## Choosing between snapshots years later
 

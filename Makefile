@@ -116,6 +116,9 @@ images: build ## Build the QEMU boot and test disk images
 # repair, repair-boot, repair-cancel, backup, restore, prevent, and the
 # boot* walks over the NVRAM screens. ONE_DISK=1 (with check-one) leaves the
 # test disk off the machine, which is how the skipped picker gets exercised.
+# USB=1 attaches a removable stick, which is what the backup-usb* and
+# restore-usb walks need: without it there is only one place a backup can go
+# and the application does not ask.
 SCRIPT ?= menu
 
 qemu: images ## Boot under OVMF and drive the menus (SCRIPT=...)

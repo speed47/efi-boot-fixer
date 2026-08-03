@@ -4,7 +4,10 @@ Applied in order, before anything is written:
 
 - whole disks only (`Media->LogicalPartition == FALSE`)
 - never removable media, never read-only media — so the SD card and USB
-  sticks never appear as repair targets
+  sticks never appear as repair targets. This is a rule about *disks*, and
+  the backup screens are not covered by it: a snapshot is a file, written
+  through a filesystem, and removable media is offered there on purpose —
+  see [backups.md](backups.md). Nothing writes blocks to a removable disk.
 - never a disk with a hybrid MBR (some legacy OS depends on that view)
 - never a secondary GPT that fails structural checks (overlaps, ranges outside
   the usable area, inverted extents) or whose entry array would collide with
@@ -26,9 +29,10 @@ The NVRAM screens add their own, and touch no disk at all:
 
 - only ESPs on fixed disks are scanned, so a loader on a USB stick never
   becomes a boot entry that breaks when the stick is pulled
-- the whole boot configuration is saved to the ESP before the first change
-  of a session, and a failure to save it is a question rather than a silent
-  skip — see [boot.md](boot.md)
+- the whole boot configuration is saved before the first change of a
+  session — to the ESP, to removable media, or to both — and a failure to
+  save it anywhere is a question rather than a silent skip; see
+  [boot.md](boot.md)
 - a new entry is written before the `BootOrder` that names it, never after
 - no boot entry is ever deleted; removing one is left to the firmware's own
   menu, and restoring a saved configuration overwrites the variables that

@@ -3,6 +3,7 @@
 #
 #   boot.img - the ESP the image is launched from, disk 1 in the picker
 #   test.img - a SteamOS-shaped disk with a deliberate defect, disk 2
+#   usb.img  - a removable FAT volume, attached only when USB=1
 #
 # The application no longer excludes the disk it booted from, so both are
 # offered; the scripts below select disk 2 by pressing DOWN once.
@@ -80,10 +81,12 @@ expected_effect() {
 
     local want
     case "$SCRIPT" in
-        # Read-only walks, the run that declines at the gate, and the two
-        # backup runs — those write a file to the ESP on the boot disk,
-        # never to the disk being backed up.
-        none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice|bootentries)
+        # Read-only walks, the run that declines at the gate, and the backup
+        # runs — those write a file to the ESP or to the stick, never to the
+        # disk being backed up.
+        none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice)
+            want=no-change ;;
+        backup-usb|backup-usb-only|bootentries)
             want=no-change ;;
         # The test disk is not attached at all, so there is nothing to say
         # about it.
@@ -189,6 +192,32 @@ drive() {
         backup)                                     # GPT item 2
             gpt_menu
             keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A" "$B" "$B" ;;
+        backup-usb)                                 # to the ESP and the stick
+            # Needs USB=1, which is what puts a destination menu between the
+            # disk picker and the review page. Its first row is "Save to
+            # both", so this is the plain 'backup' walk with one more A in
+            # the middle -- and if the menu were somehow not offered, that
+            # extra press would land on the result screen and the run would
+            # end one screen short, which is what makes it a test.
+            gpt_menu
+            keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A" "$A" "$B" "$B" ;;
+        backup-usb-only)                            # to the stick alone
+            gpt_menu
+            keys "$DOWN" "$A" "$DOWN" "$A"          # Back up, disk 2
+            keys "$DOWN" "$DOWN" "$A"               # third row: the stick only
+            keys "$A" "$A" "$B" "$B" ;;
+        restore-usb)                                # from the copy on the stick
+            # Wants exactly one snapshot, and it on the stick: rebuild the
+            # images and run 'backup-usb-only' first. Then the single row
+            # offered here can only have come from removable media, which is
+            # the thing this walk is for -- and the "found on" line in the
+            # detail pane says so.
+            gpt_menu
+            keys "$DOWN" "$DOWN" "$A"               # Restore GPTs
+            keys "$A"                               # the only row
+            keys "$DOWN" "$A" "$A"                  # disk 2, review page
+            confirm
+            keys "$A" "$B" "$B" ;;
         restore)                                    # GPT item 3
             gpt_menu
             keys "$DOWN" "$DOWN" "$A" "$A" "$DOWN" "$A" "$A"
@@ -291,6 +320,19 @@ DISKS=()
 if [ "${ONE_DISK:-0}" != 1 ]; then
     DISKS+=(-drive "file=$DIR/test.img,format=raw,if=none,id=testdisk"
             -device nvme,drive=testdisk,serial=TESTDISK)
+fi
+
+# A USB stick, for the walks that back up to removable media.
+#
+# `removable=on` is the whole point and not a detail: it is what sets the
+# RMB bit in the SCSI INQUIRY, which is what makes EDK II mark the media
+# removable, which is what the application looks at to decide whether it has
+# anywhere to offer besides the ESP. Without it QEMU presents a fixed disk
+# over USB and the destination menu never appears.
+if [ "${USB:-0}" = 1 ]; then
+    DISKS+=(-device qemu-xhci,id=xhci
+            -drive "file=$DIR/usb.img,format=raw,if=none,id=usbstick"
+            -device usb-storage,bus=xhci.0,drive=usbstick,removable=on)
 fi
 
 EXTRA=()

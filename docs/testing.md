@@ -47,6 +47,35 @@ lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
 exercise the real input path rather than a keyboard-only one. `repair-boot`
 targets disk 1, which is how the write-to-your-own-boot-disk case gets tested.
 
+`USB=1` attaches `usb.img` as a removable USB stick, which is the only way to
+reach the destination menu: with nothing removable present the tool does not
+ask where a backup should go, because there is only one answer. The stick is
+a bare labelled FAT volume — no partition table, no ESP type GUID — because
+that is what the tool is supposed to accept.
+
+```sh
+make images
+USB=1 ./tools/run-qemu.sh build/images backup-usb        # to both places
+mdir -i build/images/usb.img ::/BOOTFIXR                 # the copy on the stick
+mdir -i build/images/boot.img@@1048576 ::/BOOTFIXR       # and the one on the ESP
+```
+
+Both files carry the same name and are byte-for-byte identical; `cmp` on the
+two extracted copies is the assertion. `backup-usb-only` writes to the stick
+alone, and `restore-usb` puts the copy from it back:
+
+```sh
+make images                                              # start from nothing
+USB=1 ./tools/run-qemu.sh build/images backup-usb-only   # the only snapshot,
+USB=1 ./tools/run-qemu.sh build/images restore-usb       # on the stick
+```
+
+`backup-usb-only` specifically, and on fresh images: `restore-usb` presses A on
+the first row, so the run only proves anything if the single snapshot offered
+can have come from nowhere but the stick. After a `backup-usb` there would be
+a copy on the ESP too, and — since the launch volume is listed first — that is
+the row it would land on, testing the path that already had a walk.
+
 `ONE_DISK=1` leaves `test.img` off the machine, which is the only way to
 exercise the picker being skipped — the shape of the hardware this tool is
 actually for. The `check-one` walk presses once where two presses would

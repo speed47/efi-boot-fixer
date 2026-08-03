@@ -12,7 +12,8 @@ crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/selfdev.rs     identifying which disk booted this image
   src/nvram.rs       read-only NVRAM boot-option parsing
   src/espscan.rs     read-only scan of every ESP for bootloaders
-  src/esp.rs         the tool's own snapshots on the boot ESP
+  src/store.rs       the tool's own snapshots, on the ESP and on any
+                     removable volume attached
   src/fwcrc.rs       CRC-32 via the firmware's CalculateCrc32, with a fallback
   src/bin/efiprobe.rs  a second EFI_APPLICATION that reports raw input/display
                      capabilities instead of touching disks; see input.md

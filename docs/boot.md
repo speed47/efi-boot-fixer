@@ -80,9 +80,9 @@ with `Boot`, and a lenient match sweeps them into the entry list.
 `espscan` looks at every partition whose GPT type GUID is the EFI System
 Partition, skipping removable media — a boot entry pointing at a USB stick
 breaks the moment the stick comes out, and that matches the refusal list in
-[safety.md](safety.md). This is a different job from [esp.rs](../crates/bootfixr/src/esp.rs),
-which reads and writes the tool's own backups on the volume it was launched
-from and only there.
+[safety.md](safety.md). This is a different job from [store.rs](../crates/bootfixr/src/store.rs),
+which reads and writes the tool's own backups — and which, going the other
+way, treats a removable volume as a perfectly good place to keep one.
 
 Probing is two explicit lists rather than a guessed vendor table:
 
@@ -147,8 +147,10 @@ Four operations write to NVRAM. None of them touches a disk.
 There is no second `BootOrder` at the far end of NVRAM the way there is a
 secondary GPT at the far end of a disk. The boot configuration is the only
 copy of itself. So before this session's first NVRAM write — whichever
-operation gets there first — the whole thing is saved to `\BOOTFIXR\boot.NNN`
-on the ESP, next to the GPT snapshots.
+operation gets there first — the whole thing is saved to `\BOOTFIXR\boot.NNN`,
+next to the GPT snapshots and with the same choice of destination: the ESP,
+removable media, or both, asked once per session because that is how often
+the snapshot is taken. See [backups.md](backups.md).
 
 Variables go in as opaque name/bytes pairs and are never re-encoded. A
 `Boot####` this build cannot parse is exactly the one worth having an exact

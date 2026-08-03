@@ -31,7 +31,7 @@ pub struct BootState {
     /// Every `Boot####` in the store, by slot, lowest first.
     ///
     /// An entry that will not decode is carried as an `Err` rather than
-    /// dropped, the same way [`crate::esp::Saved`] carries an unreadable
+    /// dropped, the same way [`crate::store::Saved`] carries an unreadable
     /// snapshot. A corrupt boot entry is a finding, not a non-event.
     pub entries: Vec<(u16, Result<LoadOption, String>)>,
     /// Why the enumeration stopped early, if it did.

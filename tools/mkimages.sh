@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Build the two images the QEMU harness boots:
+# Build the three images the QEMU harness boots:
 #
 #   boot.img - GPT disk with an ESP holding the application
 #   test.img - SteamOS-shaped disk whose main GPT we deliberately break
+#   usb.img  - a bare FAT volume, attached only when USB=1 says so
 #
 # The app must exclude boot.img (it booted from it) and repair test.img.
 # No root required: the FAT filesystem is built in its own file and dd'd
@@ -17,6 +18,7 @@ CORRUPTION=${3:-zero-header}
 mkdir -p "$OUT"
 BOOT="$OUT/boot.img"
 TEST="$OUT/test.img"
+USB="$OUT/usb.img"
 ESP="$OUT/esp.fat"
 
 # ---------------------------------------------------------------- boot disk
@@ -48,6 +50,16 @@ mcopy -i "$ESP" "$DECOY" ::/EFI/weird/mystery.efi
 rm -f "$DECOY"
 dd if="$ESP" of="$BOOT" bs=512 seek="$ESP_START" conv=notrunc status=none
 rm -f "$ESP"
+
+# ------------------------------------------------------------ removable disk
+# Deliberately not an ESP, and deliberately not partitioned: a whole-device
+# FAT volume is what a stick formatted by a phone or a camera looks like,
+# and the tool is supposed to take one as a backup destination anyway. It is
+# given a volume label because that label is what the destination menu shows
+# the operator, and an unlabelled stick would not prove it.
+rm -f "$USB"
+truncate -s 64M "$USB"
+mkfs.vfat -F 16 -n RESCUE "$USB" >/dev/null
 
 # ---------------------------------------------------------------- test disk
 rm -f "$TEST"
