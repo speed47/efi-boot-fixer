@@ -16,6 +16,12 @@ Applied in order, before anything is written:
   whose header names the disk about to be written to — which is what allows
   the picker to be skipped when there is only one disk to pick
 
+Prevent recurrence, being experimental, adds its own refusals on top: the
+table must already be healthy, `PartitionEntryLBA` must already be 2 (the
+shape this operation exists to close, not to repair), both headers must
+agree on where the entry array lives, geometry must be known, and no
+partition may already sit where the closed gap would need to start.
+
 The NVRAM screens add their own, and touch no disk at all:
 
 - only ESPs on fixed disks are scanned, so a loader on a USB stick never

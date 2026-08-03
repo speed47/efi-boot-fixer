@@ -7,6 +7,15 @@ crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
 crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/ui/            the menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
+  src/blockdev.rs    gptcore::BlockDevice over EFI_BLOCK_IO_PROTOCOL
+  src/diskinfo.rs    drive vendor/model via EFI_DISK_INFO_PROTOCOL
+  src/selfdev.rs     identifying which disk booted this image
+  src/nvram.rs       read-only NVRAM boot-option parsing
+  src/espscan.rs     read-only scan of every ESP for bootloaders
+  src/esp.rs         the tool's own snapshots on the boot ESP
+  src/fwcrc.rs       CRC-32 via the firmware's CalculateCrc32, with a fallback
+  src/bin/efiprobe.rs  a second EFI_APPLICATION that reports raw input/display
+                     capabilities instead of touching disks; see input.md
 tools/               image builders, the QEMU harness, the font rasteriser
 ```
 
@@ -46,9 +55,9 @@ uses the systemd discoverable-partition GUIDs — `4F68BCE3` for `rootfs-A/B`,
 `4D21B016` for `var-A/B`, `933AC7E1` for `home` — and `efi-A/B` are Microsoft
 basic data. Seven of eight were wrong. Because `recognize()` then required
 both name *and* type to match, `rootfs-A` counted as missing, which is a
-critical partition, so the verdict came out `RefusedImplausibleBackup`: **the
-tool refused to repair the exact disk it was written for**, and it took real
-sectors to find out.
+critical partition, so the verdict came out `RefusedImplausibleSecondary`:
+**the tool refused to repair the exact disk it was written for**, and it took
+real sectors to find out.
 
 So matching is now by partition **name**, with the type GUID compared and
 reported but never fatal. A hardcoded type table is precisely the kind of

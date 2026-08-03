@@ -8,9 +8,12 @@ make build          # -> crates/bootfixr/target/x86_64-unknown-uefi/release/boot
 make                # list every target
 ```
 
-`make dist` stages the binary plus a `SHA256SUMS` in `build/dist`, and
-`make install ESP=/boot/efi` copies it onto a mounted ESP without touching
-NVRAM. `make check` runs exactly what CI runs.
+`make dist` stages both binaries — `bootfixr.efi` and `efiprobe.efi`, see
+[input.md](input.md) for what the second one is for — plus a `SHA256SUMS` in
+`build/dist`, and `make install ESP=/boot/efi` copies `bootfixr.efi` onto a
+mounted ESP without touching NVRAM. `make check` runs the same `fmt-check`,
+`clippy` and test suite as CI's `test` job; the `build` job does a bit more
+than `make build` alone, see the CI table below.
 
 Note that the UEFI application is a separate workspace from `gptcore`, so it
 needs its own cargo invocation with an explicit `--target`; the Makefile
@@ -29,7 +32,7 @@ specimen image next to the result; see [display.md](display.md).
 | Job | Trigger | What it does |
 | --- | --- | --- |
 | `test` | every push and PR | `fmt-check`, `clippy -D warnings`, full test suite (installs `gdisk`) |
-| `build` | every push and PR | builds the `.efi`, asserts it really is a PE32+ x86_64 EFI application, uploads it as an artifact |
+| `build` | every push and PR | builds both `.efi` binaries, asserts each really is a PE32+ x86_64 EFI application, checks that both are stamped with the commit they were built from (`git describe`), uploads them as artifacts |
 | `continuous` | push to the default branch | deletes and recreates the `continuous` **prerelease** with the binary attached |
 | `release` | tag `v*` | creates a **draft** release with the binary attached |
 

@@ -32,13 +32,13 @@ they act on, and each group is ordered by what it costs to be wrong:
 
 ```
 Check this machine (read only)
-Partition tables (GPT)          Boot entries (NVRAM)
-  Check a disk's GPT              View the boot entries
-  Back up both GPTs to the ESP    Scan the ESPs for bootloaders
-  Restore GPTs from a saved copy  Register a bootloader
-  Repair main GPT                 Set the default boot entry
-  Prevent recurrence              Boot something once
-                                  Restore the boot configuration
+Partition tables (GPT)                      Boot entries (NVRAM)
+  Check a disk's GPT                          View the boot entries
+  Back up both GPTs to the ESP                Scan the ESPs for bootloaders
+  Restore GPTs from a saved backup            Register a bootloader
+  Repair main GPT from the secondary          Set the default boot entry
+  Prevent recurrence (experimental)           Boot something once (next boot only)
+                                              Restore the boot configuration
 Reboot / Exit
 ```
 

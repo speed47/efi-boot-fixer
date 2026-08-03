@@ -1,12 +1,23 @@
 # Testing
 
-Host unit and integration tests. The integration tests build real disk images
-with `sgdisk`, corrupt them, repair them, and then ask `sgdisk` whether it is
-satisfied — an independent implementation is the oracle, so a bug shared
-between our reader and our writer cannot hide:
+Host unit and integration tests, in `crates/gptcore/tests/`:
+
+- `repair_images.rs` builds real disk images with `sgdisk`, corrupts them,
+  repairs them, and then asks `sgdisk` whether it is satisfied — an
+  independent implementation is the oracle, so a bug shared between our
+  reader and our writer cannot hide
+- `backup_restore.rs` covers the snapshot format, including decoding an
+  older format version
+- `bootopt.rs` covers NVRAM load-option parsing, `bootwrite.rs` the write
+  plans described in [boot.md](boot.md)
+- `corrupt_script.rs` and `deck_corrupt.rs` exercise `tools/deck-corrupt.py`
+  and its refusal conditions, alongside [corruption.md](corruption.md)
+- `deck_fixture.rs` is covered in "Testing against real hardware" below
 
 ```sh
-cargo test              # needs gdisk installed
+make test               # everything below, needs gdisk installed
+make test-unit          # cargo test --lib: gptcore's unit tests only, no gdisk needed
+make test-integration   # cargo test --test repair_images: the sgdisk-backed images
 ```
 
 Note that `sgdisk -v` prints "No problems found" on a disk with a wrecked
@@ -24,6 +35,11 @@ make images CORRUPTION=bad-mbr
 ./tools/run-qemu.sh build/images repair   # or overview, check, backup, restore, prevent, menu
 sgdisk -v build/images/test.img           # verify the result independently
 ```
+
+`make qemu-repair` is a shortcut for the two `make images` + `run-qemu.sh
+... repair` steps above. `make qemu SCRIPT=<name>` covers the rest of the
+scripts, including the boot-entry ones (`bootnext`, `bootdefault`,
+`bootregister`, `bootrestore`) exercised in [boot.md](boot.md).
 
 `run-qemu.sh` drives the menus over the serial console, where OVMF's
 `TerminalDxe` turns `ESC[A`..`ESC[D` into D-pad scan codes, CR into A and a

@@ -5,9 +5,10 @@ boot. An emptied or reordered `BootOrder` is the other, and it looks
 identical from the outside: the machine powers on and goes nowhere. This
 half of the tool is about the second one.
 
-Everything described here is **read-only**. Nothing in this build writes to
-NVRAM. Registering a loader and changing the default are the next step; see
-the end of this file for what that will involve.
+Reading the boot configuration never writes anything. Registering a loader,
+changing the default, booting once and restoring a saved configuration do —
+see "Changing the boot configuration" below for how those writes are planned
+and ordered.
 
 ## What the firmware actually stores
 

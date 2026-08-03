@@ -34,7 +34,7 @@ All driven with the D-pad, from one read-only summary and two submenus:
 | Back up both GPTs | ESP file | snapshots both tables to `\BOOTFIXR\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
 | Repair main GPT | disk | rebuilds a corrupt main GPT from the secondary GPT |
-| Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
+| Prevent recurrence (experimental) | disk | closes the `FirstUsableLBA` gap that causes the damage |
 | *Boot entries (NVRAM)* | | |
 | View the boot entries | never | the firmware's boot list, including entries that have fallen out of it |
 | Scan the ESPs | never | the loaders installed on disk, and whether NVRAM points at each |
@@ -117,6 +117,8 @@ using the tool itself if you want it.
   writes. DO NOT SKIP THIS STEP.
 - In any case, actually writing requires the sequence **LEFT RIGHT LEFT RIGHT A**;
   any wrong press resets it, and B cancels with nothing written.
+- **Reboot**, at the bottom of the main menu, is a plain cold reboot — useful
+  once a fix is applied and it's time to try booting the OS again.
 
 [docs/using.md](docs/using.md) walks through the screens.
 
