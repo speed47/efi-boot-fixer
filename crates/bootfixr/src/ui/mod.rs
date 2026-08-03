@@ -389,16 +389,23 @@ fn footer(rows: usize, hints: &[Hint]) {
 
 // -------------------------------------------------------------------- menu
 
-/// One selectable line, plus whatever should be shown about it while it is
-/// selected.
+/// One line of a menu: usually selectable, occasionally a blank spacer
+/// that groups the rows around it.
 pub struct Item {
     pub label: String,
     pub detail: Vec<Line>,
+    pub selectable: bool,
 }
 
 impl Item {
     pub fn with_detail(label: impl Into<String>, detail: Vec<Line>) -> Self {
-        Item { label: label.into(), detail }
+        Item { label: label.into(), detail, selectable: true }
+    }
+
+    /// A blank row the D-pad skips over, for splitting a menu into groups
+    /// without a submenu neither group needs.
+    pub fn separator() -> Self {
+        Item { label: String::new(), detail: Vec::new(), selectable: false }
     }
 }
 
@@ -525,6 +532,20 @@ pub fn menu_inspectable(
     run_menu(title, intro, items, back, Some(inspect), start)
 }
 
+/// The next selectable row from `from`, moving by `dir` (1 down, -1 up) and
+/// wrapping. Separators are stepped over rather than landed on, so the
+/// D-pad never has to be pressed twice to clear one.
+fn step(items: &[Item], from: usize, dir: isize) -> usize {
+    let len = items.len() as isize;
+    let mut i = from as isize;
+    loop {
+        i = (i + dir).rem_euclid(len);
+        if items[i as usize].selectable {
+            return i as usize;
+        }
+    }
+}
+
 fn run_menu(
     title: &str,
     intro: &[Line],
@@ -537,6 +558,9 @@ fn run_menu(
         return Choice::Cancelled;
     }
     let mut selected = start.min(items.len() - 1);
+    if !items[selected].selectable {
+        selected = step(items, selected, 1);
+    }
     let mut top = 0usize;
     drain();
 
@@ -601,10 +625,8 @@ fn run_menu(
         // Raw, because a menu offering a closer look wants View for that;
         // where it does not, this reaches the display screen itself.
         match wait_raw() {
-            Input::Up => {
-                selected = if selected == 0 { items.len() - 1 } else { selected - 1 };
-            }
-            Input::Down => selected = (selected + 1) % items.len(),
+            Input::Up => selected = step(items, selected, -1),
+            Input::Down => selected = step(items, selected, 1),
             Input::Select => return Choice::Item(selected),
             Input::Cancel => return Choice::Cancelled,
             Input::View => match inspect {

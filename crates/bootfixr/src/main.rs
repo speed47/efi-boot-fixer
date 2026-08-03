@@ -1897,33 +1897,43 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
 /// wires it to its neighbour's action. An action carried on the row cannot
 /// drift from it, which is what makes reordering a menu a safe edit.
 struct Menu<A> {
-    actions: Vec<A>,
+    actions: Vec<Option<A>>,
     items: Vec<ui::Item>,
 }
 
 impl<A: Copy> Menu<A> {
-    fn new(rows: Vec<(A, ui::Item)>) -> Self {
+    fn new(rows: Vec<(Option<A>, ui::Item)>) -> Self {
         let (actions, items) = rows.into_iter().unzip();
         Menu { actions, items }
     }
 
-    /// Show it, and say what was chosen. `None` if the operator backed out.
+    /// Show it, and say what was chosen. `None` if the operator backed out,
+    /// or, in principle, if the D-pad landed on a separator row — it never
+    /// does, since [`ui::menu`] steps over those on its own.
     fn show(&self, title: &str, intro: &[Line], back: &str) -> Option<A> {
-        ui::menu(title, intro, &self.items, back).map(|i| self.actions[i])
+        ui::menu(title, intro, &self.items, back).and_then(|i| self.actions[i])
     }
 }
 
 /// One row: what it does, what it is called, and the help shown under the
 /// list while it is selected.
-fn row<A>(action: A, label: &str, detail: &[&str]) -> (A, ui::Item) {
-    (action, ui::Item::with_detail(label, detail.iter().map(|t| dim(format!("  {t}"))).collect()))
+fn row<A>(action: A, label: &str, detail: &[&str]) -> (Option<A>, ui::Item) {
+    (
+        Some(action),
+        ui::Item::with_detail(label, detail.iter().map(|t| dim(format!("  {t}"))).collect()),
+    )
+}
+
+/// A blank, unselectable row that splits a menu into groups.
+fn separator<A>() -> (Option<A>, ui::Item) {
+    (None, ui::Item::separator())
 }
 
 /// Marks a row that opens another menu rather than doing something.
 ///
 /// Cheap, and it is the whole difference between a list of five operations
 /// and a list of three operations and two doors.
-const SUBMENU: &str = "  >";
+const SUBMENU: &str = " ...";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Gpt {
@@ -2095,23 +2105,46 @@ fn run_reboot() {
     uefi::runtime::reset(uefi::runtime::ResetType::COLD, Status::SUCCESS, None);
 }
 
+/// Power the machine off, after one confirmation.
+///
+/// Same reasoning as [`run_reboot`]: nothing is written on the way out, so
+/// an acknowledgement is enough and the confirmation sequence is not needed.
+fn run_shutdown() {
+    let lines = alloc::vec![
+        warn("  The machine powers off now."),
+        Line::blank(),
+        line("  Nothing is written by this. Anything this session"),
+        line("  changed has already been written and flushed."),
+    ];
+    if !ui::page("Shutdown", &lines) {
+        return;
+    }
+    // The reset does not return, so this is the last chance to leave the
+    // console the way the firmware handed it over.
+    ui::finish();
+    uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Main {
     Overview,
     Gpt,
     Nvram,
     Reboot,
+    Shutdown,
     Exit,
 }
 
-/// The top level: one diagnostic, two doors, and the way out.
+/// The top level: one diagnostic, two doors, and the ways out.
 ///
 /// Grouped by what an operation acts on rather than by the order the
 /// features were built in. The version before this had five GPT operations
 /// flat and five NVRAM operations behind a submenu, so two halves of the
 /// same tool sat at different depths for no reason anyone reading the menu
 /// could see. The overview is first because it is what answers the question
-/// someone arrives with, and it ends by naming the door to go through.
+/// someone arrives with. A separator sets the last three rows apart from
+/// it: they are not things the program does to a disk, they are ways to
+/// leave — restarted, powered off, or just handed back to the firmware.
 fn main_menu() -> Menu<Main> {
     Menu::new(alloc::vec![
         row(
@@ -2135,12 +2168,18 @@ fn main_menu() -> Menu<Main> {
                 "loaders on the ESPs it could point at."
             ]
         ),
+        separator(),
         row(
             Main::Reboot,
             "Reboot",
             &["Restart the machine, so the firmware reads the", "disks and the boot list again."]
         ),
-        row(Main::Exit, "Exit", &["Return to the firmware."]),
+        row(Main::Shutdown, "Shutdown", &["Power the machine off."]),
+        row(
+            Main::Exit,
+            "Exit to the firmware",
+            &["Leave the program without restarting or", "powering off."]
+        ),
     ])
 }
 
@@ -2189,8 +2228,9 @@ fn main() -> Status {
             Some(Main::Overview) => run_overview(&boot_device),
             Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
             Some(Main::Nvram) => run_nvram_menu(&boot_device, &mut boot_snapshot, esp_lost),
-            // Only comes back if the reboot was not confirmed.
+            // Only comes back if the reboot/shutdown was not confirmed.
             Some(Main::Reboot) => run_reboot(),
+            Some(Main::Shutdown) => run_shutdown(),
             Some(Main::Exit) | None => break,
         }
     }
