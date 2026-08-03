@@ -335,13 +335,13 @@ const fn hint<'a>(key: &'a str, action: &'a str) -> Hint<'a> {
     Hint { key, action }
 }
 
-/// The display screen's hint, where View leads there at all.
+/// The display config screen's hint, where View leads there at all.
 ///
 /// On the firmware's own text console the orientation and the font belong to
 /// the firmware, [`display`] returns without drawing, and a footer must not
 /// offer what View will not do.
 fn display_hint() -> Option<Hint<'static>> {
-    term::rotation().map(|_| hint("View", "display"))
+    term::rotation().map(|_| hint("View", "display config"))
 }
 
 /// The key hints along the bottom: what the operator can press, and what it

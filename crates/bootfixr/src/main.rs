@@ -396,7 +396,7 @@ fn run_overview(boot_device: &BootDevice) {
                         "  Disk {} has a defect this tool can fix.",
                         disk.number
                     )));
-                    next.push(dim("    Partition tables (GPT) -> Repair main GPT"));
+                    next.push(dim("    Partition tables (GPT) -> Repair main GPT from the secondary"));
                 }
             }
             Err(e) => lines.push(bad(format!("      GPT: could not be read - {e}"))),
@@ -470,7 +470,7 @@ fn run_overview(boot_device: &BootDevice) {
         let unregistered = esps.candidates.iter().filter(|c| c.registered.is_none()).count();
         if unregistered > 0 {
             lines.push(warn(format!(
-                "    {} nothing in NVRAM points at",
+                "    {} not referenced by any NVRAM boot entry",
                 count(unregistered, "loader", "loaders")
             )));
             next.push(warn("  A loader on an ESP has no boot entry pointing at it."));
@@ -1396,7 +1396,7 @@ fn run_boot_scan(boot_device: &BootDevice) {
             "  {unregistered} of {} have no boot entry pointing at them.",
             scan.candidates.len()
         )));
-        lines.push(dim("  Registering them is not offered yet."));
+        lines.push(dim("  Boot entries (NVRAM) -> Register a bootloader can add one."));
     }
     lines.push(good("  Nothing was written. This screen never modifies NVRAM."));
     ui::page("Bootloaders on the ESPs (read only)", &lines);
@@ -2151,8 +2151,9 @@ fn main_menu() -> Menu<Main> {
             Main::Overview,
             "Check this machine (read only)",
             &[
-                "Every disk's partition table, the firmware's boot",
-                "list, and what is on the ESPs."
+                "This will check every disk's partition table,",
+                "the firmware's boot list, and what is on the",
+                "EFI System Partitions (ESPs)."
             ]
         ),
         row(
@@ -2164,8 +2165,8 @@ fn main_menu() -> Menu<Main> {
             Main::Nvram,
             &format!("Boot entries (NVRAM){SUBMENU}"),
             &[
-                "What the firmware will try to boot, and the",
-                "loaders on the ESPs it could point at."
+                "View and/or modify what the firmware will try to boot,",
+                "and the loaders on the ESPs it could point at."
             ]
         ),
         separator(),

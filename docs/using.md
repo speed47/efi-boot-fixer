@@ -15,20 +15,23 @@ EFI Boot Fixer for Steam Deck
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
   Check this machine (read only)                     <- highlighted
-   Partition tables (GPT)  >
-   Boot entries (NVRAM)  >
-   Reboot
-   Exit
+   Partition tables (GPT) ...
+   Boot entries (NVRAM) ...
 
-  Every disk's partition table, the firmware's boot
-  list, and what is on the ESPs.
+   Reboot
+   Shutdown
+   Exit to the firmware
+
+  This will check every disk's partition table, the
+  firmware's boot list, and what is on the EFI System
+  Partitions (ESPs).
   ----------------------------------------------------------
   [D-pad] move   [A] choose   [View] display   [B] exit
 ```
 
 ## The shape of the menus
 
-One diagnostic, two doors, and the way out. Operations are grouped by what
+One diagnostic, two doors, and the ways out. Operations are grouped by what
 they act on, and each group is ordered by what it costs to be wrong:
 
 ```
@@ -40,7 +43,7 @@ Partition tables (GPT)                      Boot entries (NVRAM)
   Repair main GPT from the secondary          Set the default boot entry
   Prevent recurrence (experimental)           Boot something once (next boot only)
                                               Restore the boot configuration
-Reboot / Exit
+Reboot / Shutdown / Exit to the firmware
 ```
 
 Read-only screens come first in both submenus, then anything that writes.
@@ -56,7 +59,7 @@ valid" but "why will this thing not boot", and answering that used to mean
 knowing in advance which half of the tool to look in.
 
 Nothing is more than two rows deep: the row that opens a submenu, then the
-operation. The rows ending in `>` are the doors; the rest do something.
+operation. The rows ending in `...` are the doors; the rest do something.
 
 `[View] display` is offered on every screen that waits for a press, and opens
 the screen that turns the picture and changes the text size — see

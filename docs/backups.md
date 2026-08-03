@@ -8,10 +8,6 @@ present and never fills a gap — reusing the number of a deleted snapshot
 would make the ordering lie about which is newest. The date lives inside the
 file, where the picker shows it.
 
-> Upgrading from a build older than the rename: earlier versions kept their
-> snapshots in `\EFIGPTFIX`. Move them across or Restore will not offer them:
-> `mv /esp/EFIGPTFIX /esp/BOOTFIXR`.
-
 ## Where they go
 
 The ESP the program was launched from is the default, and used to be the only

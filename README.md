@@ -24,24 +24,22 @@ USB keyboard at hand, and no USB recovery key.
 
 ## Features
 
-All driven with the D-pad, from one read-only summary and two submenus:
+All driven with the D-pad, no keyboard required:
 
-| Operation | Writes | What it does |
-| --- | --- | --- |
-| **Check this machine** | never | every disk's table, the boot list and the loaders on the ESPs, on one page |
-| *Partition tables (GPT)* | | |
-| Check a disk's GPT | never | reads both tables and reports every defect |
-| Back up both GPTs | a file | snapshots both tables to `\BOOTFIXR\` on the ESP, on a USB stick or SD card, or on both |
-| Restore GPTs | disk | writes a saved snapshot back |
-| Repair main GPT | disk | rebuilds a corrupt main GPT from the secondary GPT |
-| Prevent recurrence (experimental) | disk | closes the `FirstUsableLBA` gap that causes the damage |
-| *Boot entries (NVRAM)* | | |
-| View the boot entries | never | the firmware's boot list, including entries that have fallen out of it |
-| Scan the ESPs | never | the loaders installed on disk, and whether NVRAM points at each |
-| Register a bootloader | NVRAM | adds a boot entry for a loader nothing points at |
-| Set the default | NVRAM | moves an entry to the front of the boot order |
-| Boot something once | NVRAM | tries an entry without committing to it |
-| Restore the boot configuration | NVRAM | writes back a saved copy of the entries and the order |
+- **Diagnose at a glance** — one read-only page covering every disk's
+  partition table, the boot list and the loaders found on the ESPs.
+- **Repair a corrupt GPT** — rebuilds a broken main GPT from the secondary
+  one, the fix for the infamous Windows 24H2 dual-boot corruption.
+- **Back up and restore GPTs** — snapshot both partition tables to the ESP,
+  a USB stick or an SD card, and write them back later.
+- **Inspect and fix NVRAM boot entries** — view the firmware's boot list
+  (including entries that fell out of it), scan the ESPs for loaders,
+  register a missing one, change the default, boot something once without
+  committing to it, or restore a saved boot configuration.
+- **Prevent the Windows 24H2 corruption from recurring** (experimental) — modifies
+  the primary GPT so that on the next upgrade, Windows doesn't break it (hopefully).
+
+## Principles
 
 - **No keyboard needed.** The Deck's buttons are the only input; the menus,
   reports and prompts are built for a D-pad and two buttons.
@@ -75,11 +73,11 @@ All driven with the D-pad, from one read-only summary and two submenus:
 Grab `bootfixr.efi` and `SHA256SUMS` from the
 [latest release](https://github.com/speed47/efi-boot-fixer/releases/latest).
 The `continuous` prerelease is a rolling build of the default branch; prefer a
-tagged release if one exists.
+tagged release for stability.
 
-If the ESP is too tight for `bootfixr.efi`, grab `bootfixr-tiny.efi` instead —
-the same tool, UPX-compressed and missing the two font sizes it doesn't need
-to lay the menus out. See [docs/display.md](docs/display.md).
+If the ESP is too tight for `bootfixr.efi`, grab `bootfixr-tiny.efi` instead,
+it's the same tool, same features, but UPX-compressed and with only one font
+size. See [docs/display.md](docs/display.md).
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -87,24 +85,25 @@ sha256sum -c SHA256SUMS
 
 ### 2. Copy it to the ESP
 
-Mount the Deck's EFI system partition and drop the binary in:
+Under the SteamOS desktop mode, just drop the binary on the ESP partition:
 
 ```sh
-cp bootfixr.efi /esp/EFI/bootfixr.efi
+sudo cp bootfixr.efi /esp/EFI/
 ```
 
-On SteamOS the ESP is normally already mounted at `/esp`. If the Deck no
+On SteamOS the ESP is normally already mounted at `/esp`. If the Steam Deck no
 longer boots, mount its ESP from another Linux machine or a live USB and copy
-the file there — installing to the internal ESP is what means no external
-media is needed *afterwards*, when you actually run it.
+the file there.
 
-This is deliberately **not** registered as an NVRAM boot entry, because
-SteamOS rewrites the boot order on update. Note that you can add it maually
-using the tool itself if you want it.
+The main advantage of this tool is that it'll be able to help you if corruption
+occurs BUT you already have dropped it on your ESP partition before, this way
+you won't be needing the USB recovery key nor a keyboard when it happens.
+
+So obviously, it is advised to copy it to your ESP even if everything works for now.
 
 ### 3. Boot it
 
-1. Shut the Deck down completely.
+1. Shut the Steam Deck down completely.
 2. Hold **Volume Up (+)** and tap **Power**, keeping Volume Up held until the
    Boot Manager appears.
 3. Choose **Boot From File**, then the EFI system partition (usually it's the
@@ -115,15 +114,16 @@ using the tool itself if you want it.
 - **D-pad** moves, **A** chooses, **B** goes back or cancels.
 - **View** (the two rectangles, left of the left stick) opens the Display config
   screen from anywhere: LEFT and RIGHT turn the picture, UP and DOWN change
-  the text size. It starts up the right way round on a Deck, so this is only
+  the text size. It starts up the right way round on a Steam Deck, so this is only
   there if it comes out wrong or you want the text bigger.
 - Start with **Check this machine** — it writes nothing, looks at everything,
   and ends by naming the menu that holds the fix for what it found.
 - Then **Partition tables (GPT) → Back up both GPTs**, before anything that
-  writes. DO NOT SKIP THIS STEP.
+  writes. DO NOT SKIP THIS STEP. Even if you have nothing to repair now, having
+  a backup is never a bad idea.
 - In any case, actually writing requires the sequence **LEFT RIGHT LEFT RIGHT A**;
   any wrong press resets it, and B cancels with nothing written.
-- **Reboot**, at the bottom of the main menu, is a plain cold reboot — useful
+- **Reboot**, at the bottom of the main menu, is a plain cold reboot, useful
   once a fix is applied and it's time to try booting the OS again.
 
 [docs/using.md](docs/using.md) walks through the screens.
