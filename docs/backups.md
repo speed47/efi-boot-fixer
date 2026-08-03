@@ -126,7 +126,8 @@ the attached disks each one belongs to:
   Belongs to: Disk 2 - 10 of 10 partitions still carry the same unique GUID
   disk GUID 0FBB6478-4344-4767-A49E-A95B8F30CCF8
   written by bootfixr 0.1.0
-  D-pad = move    A = choose    View = details    B = back
+  ----------------------------------------------------------
+  [D-pad] move   [A] choose   [View] details   [B] back
 ```
 
 Attribution leans on the **per-partition unique GUIDs**, not the disk GUID.

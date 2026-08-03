@@ -25,11 +25,14 @@ use uefi::proto::console::text::Color;
 /// The sixteen console colours, as this renderer draws them.
 ///
 /// Close to the Tango palette, which was designed for exactly this — solid
-/// colours that stay distinguishable without being garish. Two departures,
-/// both for the panel this runs on: `DarkGray` is lifted well above
-/// Tango's, because it carries `Style::Dim` and Tango's is barely visible
-/// on a bright handheld screen, and `LightRed` is softened, because a
-/// saturated red on black fringes badly at this pixel density.
+/// colours that stay distinguishable without being garish. Three departures,
+/// all for the panel this runs on: `DarkGray` is lifted well above Tango's,
+/// because it carries `Style::Dim` and Tango's is barely visible on a bright
+/// handheld screen; `LightRed` is softened, because a saturated red on black
+/// fringes badly at this pixel density; and `LightMagenta` is brightened a
+/// long way past Tango's plum, because it is the one colour that names a
+/// button in the key hints and a muted mauve down there is what made those
+/// hints easy to miss in the first place.
 pub fn rgb(color: Color) -> Rgb {
     match color {
         Color::Black => Rgb(0x10, 0x12, 0x16),
@@ -45,7 +48,7 @@ pub fn rgb(color: Color) -> Rgb {
         Color::LightGreen => Rgb(0x8a, 0xe2, 0x34),
         Color::LightCyan => Rgb(0x34, 0xe2, 0xe2),
         Color::LightRed => Rgb(0xef, 0x6b, 0x6b),
-        Color::LightMagenta => Rgb(0xad, 0x7f, 0xa8),
+        Color::LightMagenta => Rgb(0xe0, 0x8f, 0xe8),
         Color::Yellow => Rgb(0xfc, 0xe9, 0x4f),
         Color::White => Rgb(0xff, 0xff, 0xff),
     }

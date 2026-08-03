@@ -136,6 +136,14 @@ pub fn size() -> (usize, usize) {
 const BODY: (Color, Color) = (Color::LightGray, Color::Black);
 /// The selected row in a menu.
 const HIGHLIGHT: (Color, Color) = (Color::Black, Color::Cyan);
+/// The button names in the key hints along the bottom.
+///
+/// A colour used nowhere else, and deliberately so. Sat in `Dim`, the hints
+/// were read as chrome and skipped: test sessions had operators who never
+/// found View, and who were unsure which button committed a choice and
+/// which backed out of it. Nothing else on the screen names a physical
+/// button, so a colour that means only that costs no ambiguity elsewhere.
+const HINT_KEY: (Color, Color) = (Color::LightMagenta, Color::Black);
 
 /// Semantic style to a concrete pair.
 ///
@@ -313,12 +321,69 @@ fn header(title: &str) {
     body();
 }
 
-/// The key hints along the bottom, which are chrome and should not compete
-/// with the content above them.
-fn footer(rows: usize, text: &str) {
-    at(0, rows.saturating_sub(2));
+/// One button, and what it does on this screen.
+///
+/// A pair rather than a formatted string because the two halves are painted
+/// differently, and working out which half is the button by looking at the
+/// text is exactly what the module note forbids.
+struct Hint<'a> {
+    key: &'a str,
+    action: &'a str,
+}
+
+const fn hint<'a>(key: &'a str, action: &'a str) -> Hint<'a> {
+    Hint { key, action }
+}
+
+/// The display screen's hint, where View leads there at all.
+///
+/// On the firmware's own text console the orientation and the font belong to
+/// the firmware, [`display`] returns without drawing, and a footer must not
+/// offer what View will not do.
+fn display_hint() -> Option<Hint<'static>> {
+    term::rotation().map(|_| hint("View", "display"))
+}
+
+/// The key hints along the bottom: what the operator can press, and what it
+/// will do.
+///
+/// Set off from the content by a rule and given a colour of its own, because
+/// this is the one row on every screen that has to be found without being
+/// looked for. It is still the least loud thing on the screen — the button
+/// names carry [`HINT_KEY`] and nothing else does, and what they do is
+/// plain body text rather than the `Dim` this used to be drawn in entirely.
+///
+/// Hints that will not fit are dropped rather than wrapped: a hint spilling
+/// onto the last row would push the whole footer out of the place operators
+/// learn to look at.
+fn footer(rows: usize, hints: &[Hint]) {
+    let (cols, _) = size();
+    let limit = text_width(cols);
+
+    at(0, rows.saturating_sub(3));
     paint(colors(Style::Dim));
-    out!("{text}");
+    out!("{}", rule(cols));
+
+    at(0, rows.saturating_sub(2));
+    body();
+    let mut used = 0usize;
+    for (i, hint) in hints.iter().enumerate() {
+        // The margin before the first, the gap between the rest, then
+        // "[key] action".
+        let gap = if i == 0 { 2 } else { 3 };
+        let width = gap + hint.key.chars().count() + 3 + hint.action.chars().count();
+        if used + width > limit {
+            break;
+        }
+        for _ in 0..gap {
+            out!(" ");
+        }
+        paint(HINT_KEY);
+        out!("[{}]", hint.key);
+        body();
+        out!(" {}", hint.action);
+        used += width;
+    }
     body();
 }
 
@@ -359,8 +424,8 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
         // Measured each time round: the display screen is reachable from
         // here, and a page drawn for the old grid would be the wrong length.
         let (cols, rows) = size();
-        // The header, the scroll indicator, the footer and the blank row
-        // above it.
+        // The header, the scroll indicator, the footer's rule, the footer,
+        // and the row below it.
         let view = rows.saturating_sub(header_rows() + 4).max(4);
         let max_top = lines.len().saturating_sub(view);
         top = top.min(max_top);
@@ -371,7 +436,8 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
             styled(line, cols);
         }
         if lines.len() > view {
-            at(0, rows.saturating_sub(3));
+            // Above the footer's rule, which owns the row below this one.
+            at(0, rows.saturating_sub(4));
             paint(colors(Style::Key));
             outln!(
                 "  lines {}-{} of {}   up/down = {} lines, left/right = a screen",
@@ -382,7 +448,9 @@ pub fn page(title: &str, lines: &[Line]) -> bool {
             );
             body();
         }
-        footer(rows, &with_display_hint("  A = continue    B = back"));
+        let mut keys = alloc::vec![hint("A", "continue"), hint("B", "back")];
+        keys.extend(display_hint());
+        footer(rows, &keys);
 
         match wait() {
             Input::Up => top = top.saturating_sub(SCROLL_LINES),
@@ -408,7 +476,9 @@ pub fn message(title: &str, lines: &[Line]) {
         for line in lines {
             styled(line, cols);
         }
-        footer(rows, &with_display_hint("  A = continue"));
+        let mut keys = alloc::vec![hint("A", "continue")];
+        keys.extend(display_hint());
+        footer(rows, &keys);
 
         match wait() {
             Input::Select | Input::Cancel => return,
@@ -429,10 +499,11 @@ pub enum Choice {
 /// A D-pad menu with a highlight bar. Returns the chosen index, or `None`
 /// if the operator backed out.
 ///
-/// `hint` names what B does here, which differs between the top level
-/// ("exit") and a submenu ("back").
-pub fn menu(title: &str, intro: &[Line], items: &[Item], hint: &str) -> Option<usize> {
-    match run_menu(title, intro, items, hint, None, 0) {
+/// `back` names what B does here, which differs between the top level
+/// ("exit") and a submenu ("back"). It is the action alone: the footer draws
+/// the button.
+pub fn menu(title: &str, intro: &[Line], items: &[Item], back: &str) -> Option<usize> {
+    match run_menu(title, intro, items, back, None, 0) {
         Choice::Item(i) => Some(i),
         _ => None,
     }
@@ -440,25 +511,26 @@ pub fn menu(title: &str, intro: &[Line], items: &[Item], hint: &str) -> Option<u
 
 /// A menu whose entries can also be opened for a closer look.
 ///
-/// `start` is the initially selected row, so returning from an inspection
+/// `inspect` names what View does with the selected row, as `back` does for
+/// B. `start` is the initially selected row, so returning from an inspection
 /// puts the operator back where they were rather than at the top.
 pub fn menu_inspectable(
     title: &str,
     intro: &[Line],
     items: &[Item],
-    hint: &str,
-    inspect_hint: &str,
+    back: &str,
+    inspect: &str,
     start: usize,
 ) -> Choice {
-    run_menu(title, intro, items, hint, Some(inspect_hint), start)
+    run_menu(title, intro, items, back, Some(inspect), start)
 }
 
 fn run_menu(
     title: &str,
     intro: &[Line],
     items: &[Item],
-    hint: &str,
-    inspect_hint: Option<&str>,
+    back: &str,
+    inspect: Option<&str>,
     start: usize,
 ) -> Choice {
     if items.is_empty() {
@@ -471,8 +543,12 @@ fn run_menu(
     loop {
         let (cols, rows) = size();
         let detail_rows = items.iter().map(|i| i.detail.len()).max().unwrap_or(0);
-        // header, intro, blank, [items], blank, detail, blank, hint
-        let overhead = header_rows() + intro.len() + 1 + detail_rows + 3;
+        // header, intro, blank, [items], blank, detail, rule, hint, blank.
+        // The last three are the footer's, and are why this reserves four
+        // rows below the detail rather than three: the count of items shown
+        // has to leave the rule a row of its own even when the "... n of m"
+        // line is there too, or a long menu would draw over it.
+        let overhead = header_rows() + intro.len() + 1 + detail_rows + 4;
         let view = rows.saturating_sub(overhead).clamp(1, items.len());
 
         // Keep the selection inside the window.
@@ -512,10 +588,12 @@ fn run_menu(
             styled(line, cols);
         }
 
-        let keys = match inspect_hint {
-            Some(extra) => alloc::format!("  D-pad = move    A = choose    {extra}    {hint}"),
-            None => with_display_hint(&alloc::format!("  D-pad = move    A = choose    {hint}")),
-        };
+        let mut keys = alloc::vec![hint("D-pad", "move"), hint("A", "choose")];
+        match inspect {
+            Some(action) => keys.push(hint("View", action)),
+            None => keys.extend(display_hint()),
+        }
+        keys.push(hint("B", back));
         footer(rows, &keys);
 
         // Raw, because a menu offering a closer look wants View for that;
@@ -527,7 +605,7 @@ fn run_menu(
             Input::Down => selected = (selected + 1) % items.len(),
             Input::Select => return Choice::Item(selected),
             Input::Cancel => return Choice::Cancelled,
-            Input::View => match inspect_hint {
+            Input::View => match inspect {
                 Some(_) => return Choice::Inspect(selected),
                 None => display(),
             },
@@ -624,7 +702,9 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
             body();
         }
 
-        footer(rows, &with_display_hint("  B = cancel, nothing is written"));
+        let mut keys = alloc::vec![hint("B", "cancel, nothing is written")];
+        keys.extend(display_hint());
+        footer(rows, &keys);
 
         let input = wait();
         if input == Input::Cancel {
@@ -652,18 +732,6 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
 }
 
 // ----------------------------------------------------------------- display
-
-/// How [`display`] is advertised in the key hints along the bottom.
-///
-/// Only where it leads somewhere: on the firmware's own text console the
-/// orientation and the font belong to the firmware, [`display`] returns
-/// without drawing, and a footer must not offer what View will not do.
-fn with_display_hint(keys: &str) -> String {
-    match term::rotation() {
-        Some(_) => alloc::format!("{keys}    View = display"),
-        None => keys.to_string(),
-    }
-}
 
 /// Choose a backend, and settle which way up the screen goes.
 ///
@@ -727,7 +795,10 @@ fn display() {
             body();
         }
 
-        footer(rows, "  LEFT / RIGHT = turn    UP / DOWN = text size    A = done");
+        footer(
+            rows,
+            &[hint("LEFT/RIGHT", "turn"), hint("UP/DOWN", "text size"), hint("A", "done")],
+        );
 
         at_limit = false;
         // Raw, or View would open this screen on top of itself.

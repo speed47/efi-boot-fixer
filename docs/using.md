@@ -22,7 +22,8 @@ EFI Boot Fixer for Steam Deck
 
   Every disk's partition table, the firmware's boot
   list, and what is on the ESPs.
-  D-pad = move    A = choose    B = exit    View = display
+  ----------------------------------------------------------
+  [D-pad] move   [A] choose   [View] display   [B] exit
 ```
 
 ## The shape of the menus
@@ -57,7 +58,7 @@ knowing in advance which half of the tool to look in.
 Nothing is more than two rows deep: the row that opens a submenu, then the
 operation. The rows ending in `>` are the doors; the rest do something.
 
-`View = display` is offered on every screen that waits for a press, and opens
+`[View] display` is offered on every screen that waits for a press, and opens
 the screen that turns the picture and changes the text size — see
 [display.md](display.md). It is absent when the firmware's own text console is
 drawing, which has neither to offer.
@@ -137,7 +138,8 @@ held button:
      [x]   [x]    [ ]   [ ]    [ ]
 
   next: LEFT
-  B = cancel, nothing is written
+  ----------------------------------------------------------
+  [B] cancel, nothing is written
 ```
 
 Any wrong press resets it; B cancels outright. A sequence was chosen over
@@ -163,7 +165,16 @@ living in the application:
 | `Bad` | light red | damage, refusal, failure |
 | `Key` | light cyan | the value you must actually take in: an LBA about to be overwritten, the disk you are pointed at |
 
+Two colours are not in that table because they are not a `Style` at all: the
+cyan bar on the selected row of a menu, and the **light magenta** the key
+hints use for button names — `[A]`, `[B]`, `[View]`, `[D-pad]`. Nothing else
+on any screen names a physical button, so that colour means exactly one
+thing. The hints sit under a rule at the bottom of every screen; they used to
+be dim throughout, which read as chrome and got skipped, taking `[View]` with
+it.
+
 The UEFI side never decides a colour by looking at the text, so rewording a
-message cannot silently change what it looks like. In the confirmation gate
-each progress box is coloured individually — completed steps green, the one
-being waited for cyan, the rest dim.
+message cannot silently change what it looks like — the hints are held as a
+button and an action separately, for the same reason. In the confirmation
+gate each progress box is coloured individually — completed steps green, the
+one being waited for cyan, the rest dim.

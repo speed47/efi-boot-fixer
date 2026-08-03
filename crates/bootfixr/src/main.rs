@@ -276,7 +276,7 @@ fn pick_from(title: &str, disks: Vec<Disk>) -> Option<Disk> {
     ];
     let items: Vec<ui::Item> =
         disks.iter().map(|d| ui::Item::with_detail(d.label(), d.detail())).collect();
-    let choice = ui::menu(title, &intro, &items, "B = back")?;
+    let choice = ui::menu(title, &intro, &items, "back")?;
     disks.into_iter().nth(choice)
 }
 
@@ -608,7 +608,7 @@ fn choose_destinations(title: &str) -> Option<Vec<store::Volume>> {
             dim("  More than one removable volume is attached."),
             dim("  A snapshot can go to one of them, not to all."),
         ];
-        let chosen = ui::menu("Which removable volume?", &intro, &items, "B = back")?;
+        let chosen = ui::menu("Which removable volume?", &intro, &items, "back")?;
         removable.remove(chosen)
     };
 
@@ -640,7 +640,7 @@ fn choose_destinations(title: &str) -> Option<Vec<store::Volume>> {
         dim("  Removable media is attached, so a copy can be kept"),
         dim("  somewhere other than this machine's own disk."),
     ];
-    match menu.show(title, &intro, "B = back")? {
+    match menu.show(title, &intro, "back")? {
         Dest::Both => Some(alloc::vec![store::Volume::boot(), stick]),
         Dest::Esp => Some(alloc::vec![store::Volume::boot()]),
         Dest::Removable => Some(alloc::vec![stick]),
@@ -1092,14 +1092,7 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     // Browse, inspect, choose. Inspecting returns to the same row.
     let mut selected = 0usize;
     let archive = loop {
-        match ui::menu_inspectable(
-            "Restore GPT",
-            &intro,
-            &items,
-            "B = back",
-            "View = details",
-            selected,
-        ) {
+        match ui::menu_inspectable("Restore GPT", &intro, &items, "back", "details", selected) {
             ui::Choice::Cancelled => return,
             ui::Choice::Item(i) => break &saved[i].archive,
             ui::Choice::Inspect(i) => {
@@ -1602,7 +1595,7 @@ fn pick_boot_entry(title: &str, intro: &[Line], state: &nvram::BootState) -> Opt
         ui::message(title, &alloc::vec![warn("  There are no boot entries in NVRAM.")]);
         return None;
     }
-    ui::menu(title, intro, &items, "B = back").map(|i| slots[i])
+    ui::menu(title, intro, &items, "back").map(|i| slots[i])
 }
 
 /// Put a loader found on an ESP into NVRAM.
@@ -1643,7 +1636,7 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
         dim("  Loaders on the ESPs that nothing in NVRAM points at."),
         dim("  Registering one adds a boot entry for it."),
     ];
-    let Some(chosen) = ui::menu("Register a bootloader", &intro, &items, "B = back") else {
+    let Some(chosen) = ui::menu("Register a bootloader", &intro, &items, "back") else {
         return;
     };
     let candidate = new[chosen];
@@ -1661,8 +1654,7 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
             ],
         ),
     ];
-    let Some(placement) = ui::menu("Where in the boot order?", &[], &where_items, "B = back")
-    else {
+    let Some(placement) = ui::menu("Where in the boot order?", &[], &where_items, "back") else {
         return;
     };
     let first = placement == 0;
@@ -1866,7 +1858,7 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
         dim("  Saved copies of the boot entries and the boot order."),
         dim("  Restoring one writes those variables back as they were."),
     ];
-    let Some(chosen) = ui::menu(TITLE, &intro, &items, "B = back") else {
+    let Some(chosen) = ui::menu(TITLE, &intro, &items, "back") else {
         return;
     };
     let (name, source, snap) = &usable[chosen];
@@ -1916,8 +1908,8 @@ impl<A: Copy> Menu<A> {
     }
 
     /// Show it, and say what was chosen. `None` if the operator backed out.
-    fn show(&self, title: &str, intro: &[Line], hint: &str) -> Option<A> {
-        ui::menu(title, intro, &self.items, hint).map(|i| self.actions[i])
+    fn show(&self, title: &str, intro: &[Line], back: &str) -> Option<A> {
+        ui::menu(title, intro, &self.items, back).map(|i| self.actions[i])
     }
 }
 
@@ -1989,7 +1981,7 @@ fn run_gpt_menu(boot_device: &BootDevice, esp_lost: &mut bool) {
         dim("  The rest rewrite a table, and show what first."),
     ];
     loop {
-        match menu.show("Partition tables (GPT)", &intro, "B = back") {
+        match menu.show("Partition tables (GPT)", &intro, "back") {
             Some(Gpt::Check) => run_check(boot_device),
             Some(Gpt::Backup) => run_backup(boot_device, *esp_lost),
             Some(Gpt::Restore) => run_restore(boot_device, esp_lost),
@@ -2067,7 +2059,7 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
         dim("  The rest change NVRAM, and say so before they do."),
     ];
     loop {
-        match menu.show("Boot entries (NVRAM)", &intro, "B = back") {
+        match menu.show("Boot entries (NVRAM)", &intro, "back") {
             Some(Nvram::View) => run_boot_view(),
             Some(Nvram::Scan) => run_boot_scan(boot_device),
             Some(Nvram::Register) => run_boot_register(boot_device, snapshot, esp_lost),
@@ -2193,7 +2185,7 @@ fn main() -> Status {
             intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
         }
 
-        match menu.show(APP_NAME, &intro, "B = exit") {
+        match menu.show(APP_NAME, &intro, "exit") {
             Some(Main::Overview) => run_overview(&boot_device),
             Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
             Some(Main::Nvram) => run_nvram_menu(&boot_device, &mut boot_snapshot, esp_lost),
