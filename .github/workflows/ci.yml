@@ -23,7 +23,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,7 +61,7 @@ jobs:
       # Full history and tags: the build stamps the binary with `git describe`,
       # and the default shallow clone has neither the tags nor the commit count
       # that needs. See crates/bootfixr/build.rs.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -142,7 +142,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v4
         with:
@@ -162,8 +162,7 @@ jobs:
 
           cat > notes.md <<EOF
           Rolling build of the default branch, replaced on every push.
-          **Unsigned and untested on your hardware** - prefer a tagged release
-          if one exists.
+          This is the most recent code, but prefer a tagged release if you want stability.
 
           Commit: \`${GITHUB_SHA}\`
           Built: $(date -u '+%Y-%m-%d %H:%M UTC')
@@ -178,24 +177,17 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp bootfixr.efi /esp/EFI/bootfixr.efi
+          sudo cp bootfixr.efi /esp/EFI/
           \`\`\`
 
-          Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
-          reach the Boot Manager, and choose "Boot From File" -> the ESP ->
-          \`bootfixr.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
-          rewrites the boot order on update. Secure Boot must be off, as the
-          binary is unsigned.
+          Then shut your Steam Deck down, hold **Volume Up (+)** and tap **Power** to
+          reach the Boot Manager, and choose "Boot From File" -> the ESP (usually the
+          first entry, already highlighted) -> \`bootfixr.efi\`.
 
-          Nothing is written until you enter the five-press confirmation
-          sequence (LEFT RIGHT LEFT RIGHT A), and every write names the exact
-          LBAs first. The disk this image was launched from is a valid target -
-          that is the whole point - and is labelled \`[boot]\` in the picker.
+          This tool doesn't modify anything until you enter the five-press confirmation sequence (LEFT RIGHT LEFT RIGHT A).
 
-          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
-          UPX-compressed build with only the 12x24 font cell baked in -
-          smaller on disk, at the cost of the text-size choice on the
-          Display screen.
+          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a UPX-compressed build with
+          only one font, so its disk footprint is reduced.
 
           Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/README.md
           EOF
@@ -214,7 +206,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -235,24 +227,17 @@ jobs:
 
           \`\`\`sh
           sha256sum -c SHA256SUMS
-          cp bootfixr.efi /esp/EFI/bootfixr.efi
+          sudo cp bootfixr.efi /esp/EFI/
           \`\`\`
 
-          Then shut the Deck down, hold **Volume Up (+)** and tap **Power** to
-          reach the Boot Manager, and choose "Boot From File" -> the ESP ->
-          \`bootfixr.efi\`. Deliberately not an NVRAM boot entry, since SteamOS
-          rewrites the boot order on update. Secure Boot must be off, as this
-          binary is unsigned.
+          Then shut your Steam Deck down, hold **Volume Up (+)** and tap **Power** to
+          reach the Boot Manager, and choose "Boot From File" -> the ESP (usually the
+          first entry, already highlighted) -> \`bootfixr.efi\`.
 
-          Nothing is written until you enter the five-press confirmation
-          sequence (LEFT RIGHT LEFT RIGHT A), and every write names the exact
-          LBAs first. The disk this image was launched from is a valid target -
-          that is the whole point - and is labelled \`[boot]\` in the picker.
+          This tool doesn't modify anything until you enter the five-press confirmation sequence (LEFT RIGHT LEFT RIGHT A).
 
-          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
-          UPX-compressed build with only the 12x24 font cell baked in -
-          smaller on disk, at the cost of the text-size choice on the
-          Display screen.
+          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a UPX-compressed build with
+          only one font, so its disk footprint is reduced.
 
           Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md
 
