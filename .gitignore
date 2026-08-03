@@ -3,4 +3,5 @@ target-tiny/
 build/
 *.img
 *.fat
+*.swp
 vars.fd
