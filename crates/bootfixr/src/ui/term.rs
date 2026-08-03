@@ -133,6 +133,19 @@ pub fn set_color(fg: Color, bg: Color) {
     });
 }
 
+/// The glyph that marks a menu's selected row.
+///
+/// The graphical backend has an arrow baked into its font; the firmware's
+/// text console does not, and asking it for U+27A4 would print whatever it
+/// falls back to for a code point outside its own set. `>` is the same idea
+/// in a character every text console already has.
+pub fn marker() -> char {
+    with(|b| match b {
+        Backend::Gfx(_) => crate::gfx::font::ARROW,
+        Backend::Text => '>',
+    })
+}
+
 pub fn write(text: &str) {
     with(|b| match b {
         Backend::Gfx(console) => console.write(text),

@@ -568,10 +568,12 @@ fn run_menu(
         for (i, item) in items.iter().enumerate().skip(top).take(view) {
             if i == selected {
                 paint(HIGHLIGHT);
-                // Pad so the bar spans the row rather than hugging the text.
-                let text = fit(&item.label, cols.saturating_sub(4));
-                let width = cols.saturating_sub(5);
-                outln!("  {text:<width$} ");
+                // Same left margin as an unselected row: the marker fills
+                // the slot a space would otherwise take, rather than
+                // shifting the text. Padded so the bar spans the row.
+                let width = cols.saturating_sub(3);
+                let text = fit(&item.label, width);
+                outln!(" {} {text:<width$}", term::marker());
                 body();
             } else {
                 outln!("   {}", fit(&item.label, cols.saturating_sub(3)));

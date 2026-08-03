@@ -33,11 +33,18 @@ use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use std::fmt::Write as _;
 use std::path::Path;
 
-/// Printable ASCII. Every string the application renders is ASCII by
-/// construction — the report writers are checked for it — so nothing else
-/// needs to be carried.
+/// Printable ASCII, plus one extra slot at the DEL code point (0x7F):
+/// every string the application renders is ASCII by construction — the
+/// report writers are checked for it — so nothing else needs to be carried,
+/// and DEL itself is never emitted as text. That spare slot is baked as an
+/// arrow (U+27A4) instead, for `ui`'s menus to mark a selected row with; see
+/// `gfx::font::ARROW`.
 const FIRST: u8 = 0x20;
-const LAST: u8 = 0x7E;
+const LAST: u8 = 0x7F;
+
+/// What `LAST` is rasterised from, since DEL itself has no glyph worth
+/// baking.
+const ARROW_SOURCE: char = '➤';
 
 /// Applied to coverage before it is stored.
 ///
@@ -83,7 +90,7 @@ fn bake(font: &FontVec, cell_w: usize, cell_h: usize) -> Baked {
 
     for code in FIRST..=LAST {
         cell.iter_mut().for_each(|p| *p = 0);
-        let ch = code as char;
+        let ch = if code == LAST { ARROW_SOURCE } else { code as char };
         let glyph = font.glyph_id(ch).with_scale_and_position(px, point(0.0, baseline));
 
         if let Some(outline) = font.outline_glyph(glyph) {
@@ -146,8 +153,14 @@ fn emit(out: &mut String, name: &str, baked: &Baked) {
 
     writeln!(out, "static {name}_GLYPHS: &[Glyph] = &[").unwrap();
     for (i, g) in glyphs.iter().enumerate() {
-        let ch = (FIRST + i as u8) as char;
-        let shown = if ch == '\'' || ch == '\\' { format!("{ch:?}") } else { format!("'{ch}'") };
+        let code = FIRST + i as u8;
+        let shown = if code == LAST {
+            format!("{ARROW_SOURCE:?} (arrow, baked over DEL)")
+        } else if code as char == '\'' || code as char == '\\' {
+            format!("{:?}", code as char)
+        } else {
+            format!("'{}'", code as char)
+        };
         writeln!(
             out,
             "    Glyph {{ x: {}, y: {}, w: {}, h: {}, off: {} }}, // {shown}",

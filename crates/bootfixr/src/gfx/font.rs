@@ -37,6 +37,14 @@ pub struct Font {
 /// is ASCII by construction, so this is a backstop, not a code path.
 const MISSING: char = '?';
 
+/// Marks a menu's selected row.
+///
+/// DEL (0x7F) is the one ASCII code point never emitted as text, so
+/// `tools/mkfont` bakes an arrow (U+27A4) into that slot instead of leaving
+/// it blank. Sending this through the console cell grid still fits: DEL is
+/// 7-bit, same as everything else this application draws.
+pub const ARROW: char = '\u{7f}';
+
 static BLANK: Glyph = Glyph { x: 0, y: 0, w: 0, h: 0, off: 0 };
 
 impl Font {
