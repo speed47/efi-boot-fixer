@@ -17,6 +17,15 @@ EFI        := $(EFI_CRATE)/target/$(TARGET)/release/bootfixr.efi
 PROBE      := $(EFI_CRATE)/target/$(TARGET)/release/efiprobe.efi
 EFI_DEBUG  := $(EFI_CRATE)/target/$(TARGET)/debug/bootfixr.efi
 
+# Built with its own --target-dir so it never clobbers the release build
+# above: same crate, same output filename, different feature set (see
+# docs/display.md). `make dist` is the only target that compresses it; set
+# UPX_BIN if `upx` is not the name on PATH (named UPX_BIN, not UPX, because
+# upx itself reads an environment variable called UPX for its own options).
+EFI_TINY_DIR := $(EFI_CRATE)/target-tiny
+EFI_TINY     := $(EFI_TINY_DIR)/$(TARGET)/release/bootfixr.efi
+UPX_BIN      ?= upx
+
 BUILD      ?= build
 DIST       := $(BUILD)/dist
 IMAGES     ?= $(BUILD)/images
@@ -38,14 +47,14 @@ FONT_DATA  := $(EFI_CRATE)/src/gfx/font_data.rs
 
 .PHONY: help build debug probe-esp test test-unit test-integration fmt fmt-check \
         clippy check size dist images qemu qemu-repair qemu-shots verify-image \
-        font install clean distclean
+        font tiny install clean distclean
 
 help: ## Show this help
 	@echo "bootfixr targets:"
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Variables: CORRUPTION=$(CORRUPTION)  SCRIPT=$(SCRIPT)  ESP=$(ESP)  IMAGES=$(IMAGES)"
+	@echo "Variables: CORRUPTION=$(CORRUPTION)  SCRIPT=$(SCRIPT)  ESP=$(ESP)  IMAGES=$(IMAGES)  UPX_BIN=$(UPX_BIN)"
 
 # ------------------------------------------------------------------ build
 
@@ -63,14 +72,24 @@ font: ## Re-bake the glyph bitmaps from $(FONT) (writes a specimen too)
 	  "$(abspath $(FONT))" "$(abspath $(FONT_DATA))" "$(abspath $(BUILD))/specimen-"
 	@echo "look at $(BUILD)/specimen-*.pgm before committing the result."
 
-size: build ## Report the binary size
-	@ls -l $(EFI) | awk '{printf "%s  %d bytes (%.1f KiB)\n", $$NF, $$5, $$5/1024}'
+tiny: ## Build bootfixr-tiny.efi (uncompressed): 12x24 only, for a tight ESP
+	cd $(EFI_CRATE) && $(UEFI_CARGO) build --release --target $(TARGET) \
+	  --target-dir target-tiny --no-default-features --features tiny
+	@echo "built $(EFI_TINY) ($$(stat -c %s $(EFI_TINY)) bytes)"
 
-dist: build ## Stage both binaries and a checksum in build/dist
+size: build tiny ## Report binary sizes (bootfixr-tiny.efi before UPX compression)
+	@ls -l $(EFI) $(EFI_TINY) \
+	  | awk '{printf "%s  %d bytes (%.1f KiB)\n", $$NF, $$5, $$5/1024}'
+
+dist: build tiny ## Stage all three binaries (bootfixr-tiny.efi UPX-compressed) and a checksum
 	@mkdir -p $(DIST)
 	cp $(EFI) $(DIST)/bootfixr.efi
 	cp $(PROBE) $(DIST)/efiprobe.efi
-	cd $(DIST) && sha256sum bootfixr.efi efiprobe.efi > SHA256SUMS
+	cp $(EFI_TINY) $(DIST)/bootfixr-tiny.efi
+	@command -v $(UPX_BIN) >/dev/null 2>&1 || { \
+	  echo "no '$(UPX_BIN)' in PATH; install upx-ucl (crazy-max/ghaction-upx in CI) or set UPX_BIN=/path/to/upx" >&2; exit 1; }
+	$(UPX_BIN) --lzma --best $(DIST)/bootfixr-tiny.efi
+	cd $(DIST) && sha256sum bootfixr.efi efiprobe.efi bootfixr-tiny.efi > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
 probe-esp: build ## Copy just the input probe to $(ESP)/EFI/BOOT/BOOTX64.EFI
@@ -104,6 +123,8 @@ fmt-check: ## Check formatting without writing
 clippy: ## Lint both workspaces, warnings are errors
 	$(CARGO) clippy --all-targets -- -D warnings
 	cd $(EFI_CRATE) && $(UEFI_CARGO) clippy --target $(TARGET) -- -D warnings
+	cd $(EFI_CRATE) && $(UEFI_CARGO) clippy --target $(TARGET) \
+	  --no-default-features --features tiny -- -D warnings
 
 check: fmt-check clippy test build ## Everything CI runs
 
@@ -155,6 +176,7 @@ install: build ## Copy the binary to $(ESP)/EFI (does NOT add a boot entry)
 clean: ## Remove build output and QEMU images
 	$(CARGO) clean
 	cd $(EFI_CRATE) && $(UEFI_CARGO) clean
+	rm -rf $(EFI_TINY_DIR)
 	rm -rf $(BUILD)
 
 distclean: clean ## Also remove Cargo.lock files

@@ -53,9 +53,9 @@ screen and no footer offers one.
 ## The font
 
 DejaVu Sans Mono, rasterised on the host by `tools/mkfont` into 8-bit coverage
-bitmaps at two cell sizes and committed as generated Rust. Each glyph is
+bitmaps at three cell sizes and committed as generated Rust. Each glyph is
 trimmed to its own bounding box, which halves the baked data; the whole font
-costs about 20 KB. Its licence is in [FONT-LICENSE](FONT-LICENSE).
+costs about 41 KB. Its licence is in [FONT-LICENSE](FONT-LICENSE).
 
 Which cell to use is chosen from the framebuffer. Taking the *largest* that
 clears the 80x25 the menus were laid out against was the obvious rule and the
@@ -68,13 +68,18 @@ lands where it should:
 | --- | --- | --- |
 | 1280x800 — a Deck, rotated | 12x24 | 106x33 |
 | 800x600 — OVMF's default | 8x16 | 100x37 |
+| 1920x1080 and up | 16x32 | 120x33 and up |
 
-There was a 16x32 above these, on the theory that a large display should get
-large text. Measured on the hardware it was simply too big: 12x24 reads
-comfortably at arm's length on a 7-inch panel, so nothing above it was earning
-the 22 KB it cost. Only sizes that still clear 80x25 are offered,
-automatically or on request, so no choice available on the display screen can
-leave the menus unable to lay out.
+Only sizes that still clear 80x25 are offered, automatically or on request,
+so no choice available on the display screen can leave the menus unable to
+lay out.
+
+`bootfixr-tiny.efi` (see [building.md](building.md)) is built with only the
+12x24 cell compiled in, for a Deck whose ESP has no room to spare: dropping
+8x16 and 16x32 saves about 28 KB before the binary is UPX-compressed on top
+of that. It never offers a text-size choice, since there is nothing to step
+to; the Display screen's UP/DOWN just report there is nothing further, same
+as running out of sizes on the full binary.
 
 ## Repainting
 

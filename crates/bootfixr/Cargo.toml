@@ -6,6 +6,12 @@ rust-version = "1.85"
 
 [workspace]
 
+[features]
+# Keeps only the 12x24 font cell, for a build small enough to UPX-compress
+# onto an ESP that has no room for both the full font and bootfixr.efi. See
+# crates/bootfixr/src/gfx/console.rs.
+tiny = []
+
 [dependencies]
 gptcore = { path = "../gptcore" }
 uefi-raw = "0.9"

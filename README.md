@@ -77,6 +77,10 @@ Grab `bootfixr.efi` and `SHA256SUMS` from the
 The `continuous` prerelease is a rolling build of the default branch; prefer a
 tagged release if one exists.
 
+If the ESP is too tight for `bootfixr.efi`, grab `bootfixr-tiny.efi` instead —
+the same tool, UPX-compressed and missing the two font sizes it doesn't need
+to lay the menus out. See [docs/display.md](docs/display.md).
+
 ```sh
 sha256sum -c SHA256SUMS
 ```

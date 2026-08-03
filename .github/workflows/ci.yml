@@ -75,12 +75,19 @@ jobs:
             .
             crates/bootfixr
 
+      # bootfixr-tiny.efi is UPX-compressed as part of `make dist`.
+      - uses: crazy-max/ghaction-upx@v4
+        with:
+          install-only: true
+
       - name: Build and stage
         run: make dist
 
       # The whole point of the stamp is that a binary someone is running months
       # later can be traced back to a commit, so a build that lost it should
-      # fail here rather than ship anonymously.
+      # fail here rather than ship anonymously. bootfixr-tiny.efi carries the
+      # same stamp but is not checked here: UPX compresses the string away,
+      # so grepping for it would fail on a correctly-built binary.
       - name: Check the binary names its commit
         run: |
           set -euo pipefail
@@ -97,10 +104,13 @@ jobs:
           done
 
       # Cheap guard against shipping something that is not a bootable EFI
-      # application, e.g. if the target or subsystem ever changes.
+      # application, e.g. if the target or subsystem ever changes. Covers
+      # bootfixr-tiny.efi too: UPX rewrites the PE header, and this is what
+      # catches it if that ever stopped landing on a valid one.
       - name: Verify PE32+ headers
         run: |
-          python3 - build/dist/bootfixr.efi <<'EOF'
+          for efi in build/dist/bootfixr.efi build/dist/bootfixr-tiny.efi; do
+            python3 - "$efi" <<'EOF'
           import struct, sys
           data = open(sys.argv[1], 'rb').read()
           assert data[:2] == b'MZ', "missing MZ magic"
@@ -112,8 +122,9 @@ jobs:
           assert machine == 0x8664, f"machine {machine:#x}, expected x86_64"
           assert magic == 0x20b, f"optional header {magic:#x}, expected PE32+"
           assert subsys == 10, f"subsystem {subsys}, expected 10 (EFI application)"
-          print(f"ok: PE32+ x86_64 EFI application, {len(data)} bytes")
+          print(f"ok: {sys.argv[1]}: PE32+ x86_64 EFI application, {len(data)} bytes")
           EOF
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -186,6 +197,11 @@ jobs:
           \`efiprobe.efi\` is attached too: it only reports what the firmware
           sees from each control, and writes nothing to any disk.
 
+          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
+          UPX-compressed build with only the 12x24 font cell baked in -
+          smaller on disk, at the cost of the text-size choice on the
+          Display screen.
+
           Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/README.md
           EOF
 
@@ -240,6 +256,11 @@ jobs:
 
           \`efiprobe.efi\` is attached too: it only reports what the firmware
           sees from each control, and writes nothing to any disk.
+
+          If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
+          UPX-compressed build with only the 12x24 font cell baked in -
+          smaller on disk, at the cost of the text-size choice on the
+          Display screen.
 
           Full instructions: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md
 

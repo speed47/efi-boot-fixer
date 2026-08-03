@@ -24,6 +24,10 @@
 
 pub mod console;
 pub mod font;
+// The `tiny` feature only reaches SMALL and LARGE through this module, not
+// through anything crate-visible, so dropping them leaves rustc unable to
+// see they are dead by design rather than by accident.
+#[cfg_attr(feature = "tiny", allow(dead_code))]
 mod font_data;
 
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};

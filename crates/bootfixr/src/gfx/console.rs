@@ -18,7 +18,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::font::Font;
-use super::font_data::{MEDIUM, SMALL};
+use super::font_data::MEDIUM;
+#[cfg(not(feature = "tiny"))]
+use super::font_data::{LARGE, SMALL};
 use super::{Framebuffer, Rgb, Rotation};
 use uefi::proto::console::text::Color;
 
@@ -69,13 +71,16 @@ pub fn rgb(color: Color) -> Rgb {
 /// not the test. [`automatic`] does not step at all: it scores every size
 /// that fits against [`TARGET_COLS`] and takes the closest.
 ///
-/// There was a 16x32 above these. Measured on a Steam Deck, 12x24 already
-/// reads comfortably at arm's length on a 7-inch panel, so the larger cell
-/// was only ever costing columns — and 22 KB of baked glyphs. With two
-/// entries left, that scoring loop decides between exactly two candidates;
-/// it stays written as a search because the sizes are a build-time choice
-/// and this is the code that would have to be right if a third returned.
-static FONTS: [&Font; 2] = [&MEDIUM, &SMALL];
+/// `bootfixr-tiny.efi` builds with the `tiny` feature, which keeps only
+/// 12x24: enough to lay out the menus on every screen this runs on, and the
+/// one size that has to stay whichever binary is on the ESP, so it is the
+/// size worth keeping alone. With one entry, `resize_text` simply never
+/// finds a next candidate and `automatic` always picks it — both fall out
+/// of the existing logic rather than needing a separate path.
+#[cfg(not(feature = "tiny"))]
+static FONTS: [&Font; 3] = [&LARGE, &MEDIUM, &SMALL];
+#[cfg(feature = "tiny")]
+static FONTS: [&Font; 1] = [&MEDIUM];
 
 /// The smallest grid the menus were laid out against. Nothing narrower or
 /// shorter is offered, automatically or on request.
@@ -88,8 +93,9 @@ const MIN_ROWS: usize = 25;
 /// and the wrong one: on any screen that cleared 80 columns by a little, it
 /// chose the coarsest size that fitted and left long device paths truncated
 /// and reports paginated that did not need to be. Aiming at a line length
-/// instead lands on 12x24 and 106x33 on a Deck, and drops to 8x16 only when
-/// the screen genuinely cannot carry more.
+/// instead lands on 12x24 and 106x33 on a Deck, drops to 8x16 only when the
+/// screen genuinely cannot carry more, and steps up to 16x32 only on a
+/// display large enough that 12x24 undershoots the target.
 const TARGET_COLS: usize = 104;
 
 /// Whether a cell size yields a grid the menus fit in.
