@@ -12,7 +12,7 @@ and no partition data is touched.
     sudo ./deck-corrupt.py save    /dev/nvme0n1 -o /esp/BOOTFIXR/gpt-before.bin
     sudo ./deck-corrupt.py break   /dev/nvme0n1 -o /esp/BOOTFIXR/gpt-before.bin
     sudo ./deck-corrupt.py restore /dev/nvme0n1 -i /esp/BOOTFIXR/gpt-before.bin
-    ./deck-corrupt.py show /esp/BOOTFIXR/gpt.001         # no root, no device
+    ./deck-corrupt.py show /esp/BOOTFIXR/gpt-001.bkp     # no root, no device
 
 `break` refuses to run unless it has first written a snapshot it can read
 back, and unless *both* tables and the protective MBR are healthy going in

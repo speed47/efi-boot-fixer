@@ -202,20 +202,20 @@ fn a_later_version_is_refused() {
 
 #[test]
 fn snapshot_names_count_up_and_never_fill_a_gap() {
-    assert_eq!(bootcfg::next_name(&[]).unwrap(), "boot.001");
-    assert_eq!(bootcfg::next_name(&[String::from("boot.001")]).unwrap(), "boot.002");
+    assert_eq!(bootcfg::next_name(&[]).unwrap(), "boot-001.bkp");
+    assert_eq!(bootcfg::next_name(&[String::from("boot-001.bkp")]).unwrap(), "boot-002.bkp");
     // The gap at 002 stays a gap, unlike a boot slot.
-    let taken = vec![String::from("boot.001"), String::from("boot.003")];
-    assert_eq!(bootcfg::next_name(&taken).unwrap(), "boot.004");
+    let taken = vec![String::from("boot-001.bkp"), String::from("boot-003.bkp")];
+    assert_eq!(bootcfg::next_name(&taken).unwrap(), "boot-004.bkp");
     // FAT may hand the name back upper-cased.
-    assert_eq!(bootcfg::next_name(&[String::from("BOOT.007")]).unwrap(), "boot.008");
+    assert_eq!(bootcfg::next_name(&[String::from("BOOT-007.BKP")]).unwrap(), "boot-008.bkp");
     // GPT snapshots share the directory and must not be counted.
-    assert_eq!(bootcfg::next_name(&[String::from("gpt.050")]).unwrap(), "boot.001");
+    assert_eq!(bootcfg::next_name(&[String::from("gpt-050.bkp")]).unwrap(), "boot-001.bkp");
 }
 
 #[test]
 fn the_snapshot_space_can_run_out_rather_than_wrap() {
-    let taken = vec![format!("boot.{}", bootcfg::MAX_SEQUENCE)];
+    let taken = vec![format!("boot-{}.bkp", bootcfg::MAX_SEQUENCE)];
     assert_eq!(bootcfg::next_name(&taken), None);
 }
 

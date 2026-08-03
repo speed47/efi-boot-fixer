@@ -28,8 +28,9 @@ use core::fmt;
 pub(crate) const MAGIC: [u8; 8] = *b"EFIBOOTC";
 pub const VERSION: u32 = 1;
 
-/// Snapshots are `boot.NNN`, alongside the GPT snapshots' `gpt.NNN`.
-pub(crate) const NAME_PREFIX: &str = "boot.";
+/// Snapshots are `boot-NNN.bkp`, alongside the GPT snapshots' `gpt-NNN.bkp`.
+pub(crate) const NAME_PREFIX: &str = "boot-";
+pub(crate) const NAME_SUFFIX: &str = ".bkp";
 pub const MAX_SEQUENCE: u32 = 999;
 
 /// Magic, version, timestamp, variable count.
@@ -230,17 +231,18 @@ pub fn decode(bytes: &[u8], crc: &impl Crc32) -> Result<Snapshot, DecodeError> {
     Ok(Snapshot { time, vars, meta })
 }
 
-/// The number in `boot.NNN`, case-insensitively: FAT may hand back
-/// `BOOT.001`.
+/// The number in `boot-NNN.bkp`, case-insensitively: FAT may hand back
+/// `BOOT-001.BKP`.
 pub fn sequence_of(name: &str) -> Option<u32> {
-    let mut chars = name.chars();
-    for expected in NAME_PREFIX.chars() {
-        if !chars.next()?.eq_ignore_ascii_case(&expected) {
-            return None;
-        }
+    if name.len() != NAME_PREFIX.len() + 3 + NAME_SUFFIX.len() {
+        return None;
     }
-    let digits: &str = &name[NAME_PREFIX.len()..];
-    if digits.len() != 3 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    let (prefix, rest) = name.split_at(NAME_PREFIX.len());
+    if !prefix.eq_ignore_ascii_case(NAME_PREFIX) {
+        return None;
+    }
+    let (digits, suffix) = rest.split_at(3);
+    if !suffix.eq_ignore_ascii_case(NAME_SUFFIX) || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     digits.parse().ok()
@@ -257,7 +259,7 @@ pub fn sequence_of(name: &str) -> Option<u32> {
 pub fn next_name(existing: &[String]) -> Option<String> {
     let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
     let next = highest + 1;
-    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}"))
+    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}{NAME_SUFFIX}"))
 }
 
 /// One line for a picker: when it was taken, and how much is in it.

@@ -285,7 +285,7 @@ drive() {
             keys "$A"
             keys "$B" "$B" ;;
         bootrestore)                                # put a saved copy back
-            # Wants a boot.NNN on the ESP, which only a run that changed
+            # Wants a boot-NNN.bkp on the ESP, which only a run that changed
             # NVRAM leaves behind: run 'bootregister' first against the same
             # images, with KEEP_VARS=1 here to see it undone.
             nvram_menu

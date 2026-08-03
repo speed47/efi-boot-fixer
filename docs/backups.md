@@ -1,12 +1,12 @@
 # Backup and restore
 
-Snapshots go to `\BOOTFIXR\gpt.001`, `gpt.002`, ... A sequence number rather
-than a timestamp for two reasons: it fits 8.3, so the name reads the same from
-firmware, Windows and Linux; and it does not depend on the clock, which
-firmware may decline to give. Numbering counts up from the highest present and
-never fills a gap — reusing the number of a deleted snapshot would make the
-ordering lie about which is newest. The date lives inside the file, where the
-picker shows it.
+Snapshots go to `\BOOTFIXR\gpt-001.bkp`, `gpt-002.bkp`, ... A sequence number
+rather than a timestamp for two reasons: it fits 8.3, so the name reads the
+same from firmware, Windows and Linux; and it does not depend on the clock,
+which firmware may decline to give. Numbering counts up from the highest
+present and never fills a gap — reusing the number of a deleted snapshot
+would make the ordering lie about which is newest. The date lives inside the
+file, where the picker shows it.
 
 > Upgrading from a build older than the rename: earlier versions kept their
 > snapshots in `\EFIGPTFIX`. Move them across or Restore will not offer them:
@@ -49,7 +49,7 @@ Saving to both writes **the same name to both places** — one snapshot, one
 number, wherever it ends up. The number is chosen from what is already in use
 on *every* volume the tool can see, not only on the ones being written to. Ask
 less than that and one name comes to mean two things: save to the stick now
-and to the ESP later, and each gets a `gpt.001` holding a different table,
+and to the ESP later, and each gets a `gpt-001.bkp` holding a different table,
 which is precisely the pair the restore screen cannot help you tell apart.
 
 A destination whose directory cannot be listed is **dropped, and the others
@@ -70,8 +70,8 @@ apart. A volume that will not open is reported as a rejection rather than
 emptying the screen — an unreadable stick must not stand between the operator
 and the snapshots sitting on the ESP.
 
-The same choice, and the same rules, apply to the `boot.NNN` snapshot of the
-NVRAM boot configuration; see [boot.md](boot.md).
+The same choice, and the same rules, apply to the `boot-NNN.bkp` snapshot of
+the NVRAM boot configuration; see [boot.md](boot.md).
 
 ## The file format
 
@@ -94,13 +94,11 @@ truncated or bit-rotted snapshot is rejected outright rather than
 half-restored. Files that fail to decode are listed as rejected and never
 offered as a choice.
 
-The listing matches `*.bin` as well as `gpt.NNN`, so that snapshots from
-older builds and from `deck-corrupt.py` stay visible. That glob now sweeps
-removable media the operator keeps their own files on, so anything over 4 MiB
-is rejected on sight rather than read: an unrelated `firmware.bin` of a few
-hundred MiB would otherwise be pulled into memory in full merely to be turned
-down, and an allocation the firmware refuses is not a rejection line — in
-`no_std` it is the allocation error handler.
+The listing now sweeps removable media the operator keeps their own files on,
+so anything over 4 MiB is rejected on sight rather than read: a coincidental
+namesake of a few hundred MiB would otherwise be pulled into memory in full
+merely to be turned down, and an allocation the firmware refuses is not a
+rejection line — in `no_std` it is the allocation error handler.
 
 The checksum is written by `gBS->CalculateCrc32` under firmware and verified
 by `gptcore`'s own implementation on the host; a snapshot taken under OVMF was
@@ -119,9 +117,9 @@ capacity and the health of the table when it was taken, and works out which of
 the attached disks each one belongs to:
 
 ```
-  gpt.001  2026-08-01 17:37:54  10 parts   64.0 GiB  healthy     <- highlighted
-   gpt.002  2026-08-01 17:38:15  10 parts   64.0 GiB  healthy
-   gpt.003  2026-08-01 17:43:11   1 parts   96.0 MiB  healthy
+  gpt-001.bkp  2026-08-01 17:37:54  10 parts   64.0 GiB  healthy     <- highlighted
+   gpt-002.bkp  2026-08-01 17:38:15  10 parts   64.0 GiB  healthy
+   gpt-003.bkp  2026-08-01 17:43:11   1 parts   96.0 MiB  healthy
 
   Belongs to: Disk 2 - 10 of 10 partitions still carry the same unique GUID
   disk GUID 0FBB6478-4344-4767-A49E-A95B8F30CCF8

@@ -703,13 +703,13 @@ impl Written {
 
 /// Choose a free name and write `bytes` under it on every destination.
 ///
-/// `pick` is the naming scheme — `gpt.NNN` or `boot.NNN` — and is handed
-/// every filename in use on **every volume the tool can see**, not merely
-/// on the ones being written to. Numbering from the wider view is what
-/// stops one name meaning two things: an operator who saves to the stick
-/// now and to the ESP later would otherwise get a `gpt.001` in each place
-/// holding a different table, and the restore screen would offer two rows
-/// that are impossible to tell apart by name.
+/// `pick` is the naming scheme — `gpt-NNN.bkp` or `boot-NNN.bkp` — and is
+/// handed every filename in use on **every volume the tool can see**, not
+/// merely on the ones being written to. Numbering from the wider view is
+/// what stops one name meaning two things: an operator who saves to the
+/// stick now and to the ESP later would otherwise get a `gpt-001.bkp` in
+/// each place holding a different table, and the restore screen would offer
+/// two rows that are impossible to tell apart by name.
 ///
 /// A destination whose directory cannot be listed is **dropped, not fatal**.
 /// Numbering from a listing that failed could collide with a snapshot nobody
@@ -766,22 +766,22 @@ fn write_snapshot(
     Ok(written)
 }
 
-/// The next free `gpt.NNN`, given every name already in use.
+/// The next free `gpt-NNN.bkp`, given every name already in use.
 fn gpt_name(taken: &[String]) -> Result<String, String> {
     backup::next_name(taken).ok_or_else(|| {
         format!(
-            "\\{}\\ already holds gpt.{}; delete some snapshots first",
+            "\\{}\\ already holds gpt-{}.bkp; delete some snapshots first",
             store::DIR,
             backup::MAX_SEQUENCE
         )
     })
 }
 
-/// The next free `boot.NNN`, given every name already in use.
+/// The next free `boot-NNN.bkp`, given every name already in use.
 fn boot_name(taken: &[String]) -> Result<String, String> {
     bootcfg::next_name(taken).ok_or_else(|| {
         format!(
-            "\\{}\\ already holds boot.{}; delete some first",
+            "\\{}\\ already holds boot-{}.bkp; delete some first",
             store::DIR,
             bootcfg::MAX_SEQUENCE
         )
@@ -929,7 +929,7 @@ fn warn_esp_may_be_gone() -> bool {
 struct Saved {
     name: String,
     /// The volume it was found on. Carried because two volumes can each
-    /// hold a `gpt.001`, and then the name alone names two files.
+    /// hold a `gpt-001.bkp`, and then the name alone names two files.
     source: String,
     archive: backup::Archive,
     /// The disk this most likely belongs to, and why we think so.

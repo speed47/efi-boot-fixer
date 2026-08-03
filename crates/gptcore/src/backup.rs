@@ -679,26 +679,29 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     Ok(RepairPlan { steps, header, entries })
 }
 
-/// Snapshots are named `gpt.001`, `gpt.002`, ...
+/// Snapshots are named `gpt-001.bkp`, `gpt-002.bkp`, ...
 ///
 /// A sequence number rather than a timestamp for two reasons. It fits 8.3,
 /// so the name reads the same from firmware, Windows and Linux. And it does
 /// not depend on the clock: firmware that will not give a sensible time
 /// would otherwise produce a pile of identically-named files, exactly when
 /// ambiguity is least welcome. The date lives inside the file.
-pub(crate) const NAME_PREFIX: &str = "gpt.";
+pub(crate) const NAME_PREFIX: &str = "gpt-";
+pub(crate) const NAME_SUFFIX: &str = ".bkp";
 pub const MAX_SEQUENCE: u32 = 999;
 
-/// The number in `gpt.NNN`, case-insensitively: FAT may hand back `GPT.001`.
+/// The number in `gpt-NNN.bkp`, case-insensitively: FAT may hand back
+/// `GPT-001.BKP`.
 pub fn sequence_of(name: &str) -> Option<u32> {
-    let mut chars = name.chars();
-    for expected in NAME_PREFIX.chars() {
-        if !chars.next()?.eq_ignore_ascii_case(&expected) {
-            return None;
-        }
+    if name.len() != NAME_PREFIX.len() + 3 + NAME_SUFFIX.len() {
+        return None;
     }
-    let digits: &str = &name[NAME_PREFIX.len()..];
-    if digits.len() != 3 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    let (prefix, rest) = name.split_at(NAME_PREFIX.len());
+    if !prefix.eq_ignore_ascii_case(NAME_PREFIX) {
+        return None;
+    }
+    let (digits, suffix) = rest.split_at(3);
+    if !suffix.eq_ignore_ascii_case(NAME_SUFFIX) || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     digits.parse().ok()
@@ -713,7 +716,7 @@ pub fn sequence_of(name: &str) -> Option<u32> {
 pub fn next_name(existing: &[String]) -> Option<String> {
     let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
     let next = highest + 1;
-    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}"))
+    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}{NAME_SUFFIX}"))
 }
 
 /// One-line summary for a list of saved backups.

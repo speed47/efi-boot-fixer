@@ -299,21 +299,21 @@ fn inspecting_a_snapshot_shows_what_identifies_it() {
 
 #[test]
 fn snapshot_names_count_up_and_never_reuse_a_number() {
-    assert_eq!(backup::next_name(&[]).as_deref(), Some("gpt.001"));
-    let taken = vec!["gpt.001".to_string(), "GPT.002".to_string(), "notes.txt".to_string()];
-    assert_eq!(backup::next_name(&taken).as_deref(), Some("gpt.003"));
+    assert_eq!(backup::next_name(&[]).as_deref(), Some("gpt-001.bkp"));
+    let taken = vec!["gpt-001.bkp".to_string(), "GPT-002.BKP".to_string(), "notes.txt".to_string()];
+    assert_eq!(backup::next_name(&taken).as_deref(), Some("gpt-003.bkp"));
 
-    // Deleting gpt.002 must not make the next one gpt.002 again: the
+    // Deleting gpt-002.bkp must not make the next one gpt-002.bkp again: the
     // numbering is what tells you which snapshot is newest.
-    let gapped = vec!["gpt.001".to_string(), "gpt.007".to_string()];
-    assert_eq!(backup::next_name(&gapped).as_deref(), Some("gpt.008"));
+    let gapped = vec!["gpt-001.bkp".to_string(), "gpt-007.bkp".to_string()];
+    assert_eq!(backup::next_name(&gapped).as_deref(), Some("gpt-008.bkp"));
 
-    assert_eq!(backup::sequence_of("gpt.042"), Some(42));
-    assert_eq!(backup::sequence_of("GPT.999"), Some(999));
-    assert_eq!(backup::sequence_of("gpt.1"), None);
-    assert_eq!(backup::sequence_of("gpt.abc"), None);
-    assert_eq!(backup::sequence_of("snapshot.001"), None);
+    assert_eq!(backup::sequence_of("gpt-042.bkp"), Some(42));
+    assert_eq!(backup::sequence_of("GPT-999.BKP"), Some(999));
+    assert_eq!(backup::sequence_of("gpt-1.bkp"), None);
+    assert_eq!(backup::sequence_of("gpt-abc.bkp"), None);
+    assert_eq!(backup::sequence_of("snapshot-001.bkp"), None);
 
-    let full = vec!["gpt.999".to_string()];
+    let full = vec!["gpt-999.bkp".to_string()];
     assert_eq!(backup::next_name(&full), None);
 }

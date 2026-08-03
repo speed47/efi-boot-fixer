@@ -140,17 +140,18 @@ Four operations write to NVRAM. None of them touches a disk.
 | Register a bootloader | `Boot####` then `BootOrder` | the firmware's own boot menu |
 | Set the default | `BootOrder` | the same screen |
 | Boot something once | `BootNext` | itself, as the firmware consumes it |
-| Restore the boot configuration | every variable in a `boot.NNN` | an earlier snapshot |
+| Restore the boot configuration | every variable in a `boot-NNN.bkp` | an earlier snapshot |
 
 ### The snapshot that comes first
 
 There is no second `BootOrder` at the far end of NVRAM the way there is a
 secondary GPT at the far end of a disk. The boot configuration is the only
 copy of itself. So before this session's first NVRAM write — whichever
-operation gets there first — the whole thing is saved to `\BOOTFIXR\boot.NNN`,
-next to the GPT snapshots and with the same choice of destination: the ESP,
-removable media, or both, asked once per session because that is how often
-the snapshot is taken. See [backups.md](backups.md).
+operation gets there first — the whole thing is saved to
+`\BOOTFIXR\boot-NNN.bkp`, next to the GPT snapshots and with the same choice
+of destination: the ESP, removable media, or both, asked once per session
+because that is how often the snapshot is taken. See
+[backups.md](backups.md).
 
 Variables go in as opaque name/bytes pairs and are never re-encoded. A
 `Boot####` this build cannot parse is exactly the one worth having an exact
@@ -164,7 +165,7 @@ and the snapshot is retried before the next write rather than marked done.
 
 ### Putting a snapshot back
 
-`bootcfg::plan_restore` turns a `boot.NNN` into the list of writes that puts
+`bootcfg::plan_restore` turns a `boot-NNN.bkp` into the list of writes that puts
 it back, in the order entries first, settings, `BootOrder`, `BootNext`. The
 first and third of those are the write-ordering rule below, applied on the
 way back. `BootNext` is last because it is the only variable here that
@@ -241,7 +242,7 @@ make qemu SCRIPT=bootregister  # adds an entry for a loader on the ESP
 make qemu SCRIPT=bootrestore   # writes a saved snapshot back
 ```
 
-`bootrestore` needs a `boot.NNN` on the ESP, which only a run that changed
+`bootrestore` needs a `boot-NNN.bkp` on the ESP, which only a run that changed
 something leaves behind: run `bootregister` first against the same images,
 then `KEEP_VARS=1 make qemu SCRIPT=bootrestore` to watch the entry it added
 be undone by the copy taken before it.

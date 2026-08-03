@@ -113,7 +113,7 @@ queued input first. See [docs/input.md](docs/input.md).
   them, in both repair and restore. A power cut must not leave a valid header
   describing garbage. The NVRAM side follows the same rule: `Boot####` is
   written before the `BootOrder` naming it, asserted in `tests/bootwrite.rs`.
-- The boot configuration is saved to `\BOOTFIXR\boot.NNN` before the
+- The boot configuration is saved to `\BOOTFIXR\boot-NNN.bkp` before the
   session's first NVRAM write. Its variables are stored as opaque bytes and
   never re-encoded — an entry this build cannot parse is the one most worth
   copying exactly.

@@ -242,10 +242,7 @@ impl Volume {
     /// *inside* each one — when it was taken, from what geometry, whether
     /// the table was healthy — and a filename cannot say that.
     pub fn list(&self) -> Result<Vec<Saved>, String> {
-        // `gpt.NNN` is what this build writes; `*.bin` is what earlier
-        // builds and tools/deck-corrupt.py write, and a snapshot must not
-        // become invisible because the naming scheme moved on.
-        self.list_matching(|name| name.starts_with("gpt.") || name.ends_with(".bin"))
+        self.list_matching(|name| gptcore::backup::sequence_of(name).is_some())
     }
 
     /// Read every boot configuration snapshot, sorted by name.
@@ -255,7 +252,7 @@ impl Volume {
     /// snapshot onto a disk, or a partition table into NVRAM, would be a
     /// picker with a bug in it.
     pub fn list_boot(&self) -> Result<Vec<Saved>, String> {
-        self.list_matching(|name| name.starts_with("boot."))
+        self.list_matching(|name| gptcore::bootcfg::sequence_of(name).is_some())
     }
 
     /// The files in the backup directory whose lowercased name `wanted`
@@ -392,11 +389,10 @@ fn name16(name: &str) -> Result<CString16, String> {
 ///
 /// Two orders of magnitude above the ~34 KiB a 512-byte-block disk produces,
 /// so nothing this tool writes can approach it. It exists because the
-/// listing matches `*.bin` for the sake of older builds, and now sweeps
-/// removable media the operator keeps their own files on: an unrelated
-/// `firmware.bin` of a few hundred MiB would otherwise be read in full
-/// merely to be rejected, and an allocation the firmware refuses is not a
-/// rejection line but the `no_std` allocation error handler.
+/// listing now sweeps removable media the operator keeps their own files
+/// on: a coincidental namesake of a few hundred MiB would otherwise be read
+/// in full merely to be rejected, and an allocation the firmware refuses is
+/// not a rejection line but the `no_std` allocation error handler.
 const MAX_FILE: u64 = 4 << 20;
 
 fn read(dir: &mut Directory, name: &str) -> Result<Vec<u8>, String> {
