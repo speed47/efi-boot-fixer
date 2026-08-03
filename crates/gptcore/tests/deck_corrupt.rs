@@ -13,7 +13,7 @@
 //! spec-violating entry-array location and then correctly resealed the
 //! header, so the only things standing between this disk and a "healthy"
 //! verdict are the partition-entry-array CRC and the explicit check that a
-//! primary header points at LBA 2.
+//! main GPT header points at LBA 2.
 //!
 //! The fixtures are the real sectors with the disk GUID and every unique
 //! partition GUID replaced by placeholders and the CRCs resealed, which
@@ -34,39 +34,39 @@ fn the_header_crc_is_valid_so_only_two_checks_catch_this() {
     let img = deck_corrupt_image();
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    let primary = analysis.primary.as_ref().unwrap();
+    let main = analysis.main.as_ref().unwrap();
 
     assert!(
-        !primary.defects.iter().any(|d| matches!(d, Defect::HeaderCrcMismatch { .. })),
+        !main.defects.iter().any(|d| matches!(d, Defect::HeaderCrcMismatch { .. })),
         "the real corruption has a VALID header CRC; a checker that only \
          verifies that would call this disk healthy: {:?}",
-        primary.defects
+        main.defects
     );
     assert!(
-        primary.defects.iter().any(|d| matches!(d, Defect::PrimaryEntryLbaNotTwo { found: 2016 })),
+        main.defects.iter().any(|d| matches!(d, Defect::MainEntryLbaNotTwo { found: 2016 })),
         "{:?}",
-        primary.defects
+        main.defects
     );
     assert!(
-        primary.defects.iter().any(|d| matches!(d, Defect::EntryArrayCrcMismatch { .. })),
+        main.defects.iter().any(|d| matches!(d, Defect::EntryArrayCrcMismatch { .. })),
         "{:?}",
-        primary.defects
+        main.defects
     );
-    assert!(!primary.is_valid());
+    assert!(!main.is_valid());
 }
 
 /// Everything else about the disk was intact, including the protective MBR
-/// and the backup, so the tool must not touch them.
+/// and the secondary GPT, so the tool must not touch them.
 #[test]
-fn only_the_primary_was_damaged() {
+fn only_the_main_gpt_was_damaged() {
     let img = deck_corrupt_image();
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
 
     assert_eq!(analysis.mbr, MbrStatus::Protective);
     assert!(!analysis.mbr.needs_repair());
-    assert!(analysis.backup.as_ref().unwrap().is_valid());
-    assert_eq!(analysis.verdict, Verdict::PrimaryRepairable, "{:?}", analysis.rejection);
+    assert!(analysis.secondary.as_ref().unwrap().is_valid());
+    assert_eq!(analysis.verdict, Verdict::MainRepairable, "{:?}", analysis.rejection);
 
     let repair = plan(&analysis, &CRC).unwrap();
     let touched: Vec<u64> = repair.writes().map(|(lba, _)| lba).collect();
@@ -113,6 +113,6 @@ fn repaired_disk_is_healthy_and_stays_healthy() {
     let second = analyze(&mut dev, &CRC).unwrap();
     assert_eq!(second.verdict, Verdict::Healthy);
     assert!(plan(&second, &CRC).is_none());
-    assert_eq!(second.primary.as_ref().unwrap().header.partition_entry_lba, 2);
+    assert_eq!(second.main.as_ref().unwrap().header.partition_entry_lba, 2);
     assert!(dev.writes().is_empty());
 }

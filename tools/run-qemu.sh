@@ -106,7 +106,7 @@ expected_effect() {
         *) want=skip ;;
     esac
 
-    # EDK II's PartitionDxe rebuilds an invalid primary GPT from the backup
+    # EDK II's PartitionDxe rebuilds an invalid main GPT from the secondary
     # when it connects the disk, before any application runs. Under those
     # corruptions the image changes whatever we do, so "nothing was
     # written" stops being an observation this script can make.

@@ -48,15 +48,15 @@ and a bare `cargo test` cannot compile it. The Makefile invokes it separately
 with an explicit `--target`, and prefers `~/.cargo/bin/cargo`, because distro
 cargo packages generally ship no std for the UEFI target. Use the Makefile.
 
-**`sgdisk -v` lies about a wrecked primary.** It transparently falls back to
-the backup and reports on the table it loaded, printing "No problems found".
+**`sgdisk -v` lies about a wrecked main GPT.** It transparently falls back to
+the secondary and reports on the table it loaded, printing "No problems found".
 Any check that uses it as an oracle must also require the absence of
 `Caution`/`Warning`/`ERROR` text.
 
-**OVMF repairs the primary GPT before the application runs.** EDK II's
+**OVMF repairs the main GPT before the application runs.** EDK II's
 `PartitionDxe` calls `PartitionRestoreGptTable()` at connect time. Under QEMU
 the `zero-header` and `zero-all` corruption modes are therefore already fixed
-by the time the tool loads, and `Primary GPT: OK` is correct, not a bug. Use
+by the time the tool loads, and `Main GPT: OK` is correct, not a bug. Use
 `CORRUPTION=bad-mbr` to exercise the write path under firmware; the repair
 itself is covered by host tests where no firmware sits in the way.
 
@@ -67,7 +67,7 @@ never be fatal. See [docs/internals.md](docs/internals.md).
 
 **The header CRC of the real corruption is valid.** A checker that validates
 only the header CRC calls the affected disk healthy. What catches it is the
-entry-array CRC plus an explicit check that a primary header points at LBA 2.
+entry-array CRC plus an explicit check that a main GPT header points at LBA 2.
 `tests/deck_corrupt.rs` asserts the *absence* of a header-CRC defect
 specifically so this check cannot be "simplified" away.
 
@@ -122,13 +122,18 @@ queued input first. See [docs/input.md](docs/input.md).
   purpose. Exclusive opens on it may cut off ESP access, so file operations
   happen before block writes.
 - Snapshot `decode` accepts version 1 and version 2; only `encode` moved on. A
-  backup a later build refuses is worthless.
+  snapshot a later build refuses is worthless.
 - Colour is decided where a line is written (`gptcore::style::Style`), never
   by inspecting text in the UEFI layer.
 - Snapshot names count up from the highest present and never fill a gap.
 
 ## Conventions
 
+- **"Backup" only ever means a file we saved.** The two GPTs on a disk are
+  the **main GPT** (LBA 1) and the **secondary GPT** (last LBA) —
+  `Analysis::main` / `Analysis::secondary`, `Role::Main*` / `Role::Secondary*`,
+  `Verdict::MainRepairable`. "Repair from backup" was ambiguous between the
+  end-of-disk copy and a snapshot in `\BOOTFIXR\`, so it is not said any more.
 - **A menu row carries its action, never its index.** `Menu<A>` in `main.rs`
   pairs each row with an enum variant, so reordering a menu is one edit
   rather than an edit to a list and a matching edit to a `match` on numbers

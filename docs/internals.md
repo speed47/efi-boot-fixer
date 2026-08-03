@@ -53,5 +53,5 @@ sectors to find out.
 So matching is now by partition **name**, with the type GUID compared and
 reported but never fatal. A hardcoded type table is precisely the kind of
 thing that goes stale across an OS release, and being strict about it turns a
-recovery tool into a brick. A stale or foreign backup is still caught, because
+recovery tool into a brick. A stale or foreign table is still caught, because
 its names will not line up either.

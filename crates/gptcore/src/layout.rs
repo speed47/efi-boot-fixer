@@ -3,9 +3,9 @@
 //! Two independent questions, kept separate on purpose:
 //!
 //! * [`check_structure`] — is the table internally coherent? Overlapping
-//!   or out-of-range partitions mean the backup is garbage, and that is a
+//!   or out-of-range partitions mean the table is garbage, and that is a
 //!   hard refusal.
-//! * [`recognize`] — does it look like a SteamOS install? A backup that
+//! * [`recognize`] — does it look like a SteamOS install? A table that
 //!   parses perfectly but describes a layout from two reinstalls ago is
 //!   exactly the failure this is meant to catch. It can only ever lower
 //!   confidence and demand a closer look from the operator; it never
@@ -266,7 +266,7 @@ pub enum Confidence {
     SteamOs,
     /// Some SteamOS partitions present, but not the full set.
     Partial,
-    /// Nothing recognisable. Could be a stale backup, or a disk this tool
+    /// Nothing recognisable. Could be a stale table, or a disk this tool
     /// was never meant to touch.
     Unrecognized,
 }
@@ -292,7 +292,7 @@ pub struct Recognition {
 /// disagreement is reported, but does not count as a miss: a hardcoded type
 /// table is exactly the kind of thing that goes stale across an OS release,
 /// and being strict about it turns this tool into a brick on the disk it
-/// was meant to save. A stale or foreign backup is still caught, because
+/// was meant to save. A stale or foreign table is still caught, because
 /// its names will not line up either.
 pub fn recognize(entries: &[PartitionEntry]) -> Recognition {
     let used: Vec<(usize, &PartitionEntry)> =
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn partition_past_the_end_of_the_disk_is_caught() {
-        // The signature of a stale backup restored onto a smaller disk.
+        // The signature of a stale table restored onto a smaller disk.
         let issues = check_structure(&steamos_table(), 2048, 5000);
         assert!(
             issues.iter().any(|i| matches!(i, StructuralIssue::OutsideUsableRange { .. })),

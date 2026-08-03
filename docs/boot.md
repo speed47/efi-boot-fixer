@@ -143,8 +143,8 @@ Four operations write to NVRAM. None of them touches a disk.
 
 ### The snapshot that comes first
 
-There is no backup `BootOrder` at the far end of NVRAM the way there is a
-backup GPT at the far end of a disk. The boot configuration is the only
+There is no second `BootOrder` at the far end of NVRAM the way there is a
+secondary GPT at the far end of a disk. The boot configuration is the only
 copy of itself. So before this session's first NVRAM write — whichever
 operation gets there first — the whole thing is saved to `\BOOTFIXR\boot.NNN`
 on the ESP, next to the GPT snapshots.
@@ -205,7 +205,7 @@ New entries take the **lowest free** slot, which is what firmware and
 `efibootmgr` both do. That is deliberately the opposite of
 `bootcfg::next_name` and `backup::next_name`, which count up from the
 highest and never fill a gap. The two rules differ because the things they
-name differ: reusing a snapshot *filename* would destroy a backup nobody
+name differ: reusing a snapshot *filename* would destroy a snapshot nobody
 can get back, whereas a freed boot slot holds nothing at all.
 
 ### Why `BootNext` is gated like the others

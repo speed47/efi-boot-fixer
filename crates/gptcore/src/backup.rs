@@ -80,30 +80,30 @@ impl core::fmt::Display for Timestamp {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Mbr,
-    PrimaryEntries,
-    PrimaryHeader,
-    BackupEntries,
-    BackupHeader,
+    MainEntries,
+    MainHeader,
+    SecondaryEntries,
+    SecondaryHeader,
 }
 
 impl Role {
     fn code(self) -> u32 {
         match self {
             Role::Mbr => 1,
-            Role::PrimaryEntries => 2,
-            Role::PrimaryHeader => 3,
-            Role::BackupEntries => 4,
-            Role::BackupHeader => 5,
+            Role::MainEntries => 2,
+            Role::MainHeader => 3,
+            Role::SecondaryEntries => 4,
+            Role::SecondaryHeader => 5,
         }
     }
 
     fn from_code(code: u32) -> Option<Role> {
         Some(match code {
             1 => Role::Mbr,
-            2 => Role::PrimaryEntries,
-            3 => Role::PrimaryHeader,
-            4 => Role::BackupEntries,
-            5 => Role::BackupHeader,
+            2 => Role::MainEntries,
+            3 => Role::MainHeader,
+            4 => Role::SecondaryEntries,
+            5 => Role::SecondaryHeader,
             _ => return None,
         })
     }
@@ -111,10 +111,10 @@ impl Role {
     pub fn describe(self) -> &'static str {
         match self {
             Role::Mbr => "protective MBR",
-            Role::PrimaryEntries => "primary partition entry array",
-            Role::PrimaryHeader => "primary GPT header",
-            Role::BackupEntries => "backup partition entry array",
-            Role::BackupHeader => "backup GPT header",
+            Role::MainEntries => "main partition entry array",
+            Role::MainHeader => "main GPT header",
+            Role::SecondaryEntries => "secondary partition entry array",
+            Role::SecondaryHeader => "secondary GPT header",
         }
     }
 }
@@ -137,14 +137,14 @@ impl Chunk {
 
 /// How the table looked when the snapshot was taken.
 ///
-/// Stored so restore can say so. A backup of a broken table is still worth
+/// Stored so restore can say so. A snapshot of a broken table is still worth
 /// keeping — it is evidence — but putting it back is not a repair.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Health {
     Healthy,
     MbrOnly,
-    PrimaryCorrupt,
-    BackupCorrupt,
+    MainCorrupt,
+    SecondaryCorrupt,
     BothCorrupt,
     Other,
 }
@@ -154,8 +154,8 @@ impl Health {
         match self {
             Health::Healthy => 0,
             Health::MbrOnly => 1,
-            Health::PrimaryCorrupt => 2,
-            Health::BackupCorrupt => 3,
+            Health::MainCorrupt => 2,
+            Health::SecondaryCorrupt => 3,
             Health::BothCorrupt => 4,
             Health::Other => 5,
         }
@@ -165,8 +165,8 @@ impl Health {
         match code {
             0 => Health::Healthy,
             1 => Health::MbrOnly,
-            2 => Health::PrimaryCorrupt,
-            3 => Health::BackupCorrupt,
+            2 => Health::MainCorrupt,
+            3 => Health::SecondaryCorrupt,
             4 => Health::BothCorrupt,
             _ => Health::Other,
         }
@@ -176,10 +176,8 @@ impl Health {
         match verdict {
             Verdict::Healthy => Health::Healthy,
             Verdict::MbrOnly => Health::MbrOnly,
-            Verdict::PrimaryRepairable | Verdict::RefusedImplausibleBackup => {
-                Health::PrimaryCorrupt
-            }
-            Verdict::BackupDegraded => Health::BackupCorrupt,
+            Verdict::MainRepairable | Verdict::RefusedImplausibleSecondary => Health::MainCorrupt,
+            Verdict::SecondaryDegraded => Health::SecondaryCorrupt,
             Verdict::Unrecoverable => Health::BothCorrupt,
             Verdict::RefusedHybridMbr => Health::Other,
         }
@@ -210,8 +208,8 @@ impl Health {
         match self {
             Health::Healthy => "healthy",
             Health::MbrOnly => "tables healthy, protective MBR wrong",
-            Health::PrimaryCorrupt => "PRIMARY WAS CORRUPT",
-            Health::BackupCorrupt => "BACKUP WAS CORRUPT",
+            Health::MainCorrupt => "MAIN GPT WAS CORRUPT",
+            Health::SecondaryCorrupt => "SECONDARY GPT WAS CORRUPT",
             Health::BothCorrupt => "BOTH TABLES WERE CORRUPT",
             Health::Other => "unusual (hybrid MBR or similar)",
         }
@@ -250,8 +248,8 @@ impl Archive {
     }
 
     /// The header the restore would install at LBA 1, if it can be parsed.
-    pub(crate) fn primary_header(&self) -> Option<GptHeader> {
-        GptHeader::parse(&self.chunk(Role::PrimaryHeader)?.data)
+    pub(crate) fn main_header(&self) -> Option<GptHeader> {
+        GptHeader::parse(&self.chunk(Role::MainHeader)?.data)
     }
 
     pub fn meta_get(&self, key: &str) -> Option<&str> {
@@ -260,18 +258,18 @@ impl Archive {
 
     /// The partitions this snapshot would restore.
     ///
-    /// Parsed from the primary entry array, falling back to the backup
+    /// Parsed from the main entry array, falling back to the secondary
     /// copy: the two are identical on a healthy disk, and when they are not
     /// the surviving one is still worth showing.
     pub fn entries(&self) -> Vec<PartitionEntry> {
         let Some(header) = self
-            .primary_header()
-            .or_else(|| GptHeader::parse(&self.chunk(Role::BackupHeader)?.data))
+            .main_header()
+            .or_else(|| GptHeader::parse(&self.chunk(Role::SecondaryHeader)?.data))
         else {
             return Vec::new();
         };
         let Some(array) =
-            self.chunk(Role::PrimaryEntries).or_else(|| self.chunk(Role::BackupEntries))
+            self.chunk(Role::MainEntries).or_else(|| self.chunk(Role::SecondaryEntries))
         else {
             return Vec::new();
         };
@@ -306,52 +304,52 @@ pub fn capture<D: BlockDevice + ?Sized>(
     let mut chunks = Vec::new();
     chunks.push(Chunk { role: Role::Mbr, lba: 0, data: analysis.mbr_raw.clone() });
 
-    // Primary: its own array pointer if the header parsed, else LBA 2.
-    let (primary_lba, primary_blocks) = match analysis.primary.as_ref() {
+    // Main GPT: its own array pointer if the header parsed, else LBA 2.
+    let (main_lba, main_blocks) = match analysis.main.as_ref() {
         Ok(t) => (
             t.header.partition_entry_lba,
             t.header.entry_array_blocks(block_size).unwrap_or(fallback),
         ),
         Err(_) => (2, fallback),
     };
-    if let Ok(data) = read_lbas(dev, primary_lba, primary_blocks) {
-        chunks.push(Chunk { role: Role::PrimaryEntries, lba: primary_lba, data });
+    if let Ok(data) = read_lbas(dev, main_lba, main_blocks) {
+        chunks.push(Chunk { role: Role::MainEntries, lba: main_lba, data });
     }
     chunks.push(Chunk {
-        role: Role::PrimaryHeader,
+        role: Role::MainHeader,
         lba: 1,
-        data: match analysis.primary.as_ref() {
+        data: match analysis.main.as_ref() {
             Ok(t) => t.raw.clone(),
             Err(_) => read_lbas(dev, 1, 1)?,
         },
     });
 
-    // Backup: its array sits immediately below its header at the end.
-    let (backup_lba, backup_blocks) = match analysis.backup.as_ref() {
+    // Secondary GPT: its array sits immediately below its header at the end.
+    let (secondary_lba, secondary_blocks) = match analysis.secondary.as_ref() {
         Ok(t) => (
             t.header.partition_entry_lba,
             t.header.entry_array_blocks(block_size).unwrap_or(fallback),
         ),
         Err(_) => (last_block.saturating_sub(fallback), fallback),
     };
-    if let Ok(data) = read_lbas(dev, backup_lba, backup_blocks) {
-        chunks.push(Chunk { role: Role::BackupEntries, lba: backup_lba, data });
+    if let Ok(data) = read_lbas(dev, secondary_lba, secondary_blocks) {
+        chunks.push(Chunk { role: Role::SecondaryEntries, lba: secondary_lba, data });
     }
     chunks.push(Chunk {
-        role: Role::BackupHeader,
+        role: Role::SecondaryHeader,
         lba: last_block,
-        data: match analysis.backup.as_ref() {
+        data: match analysis.secondary.as_ref() {
             Ok(t) => t.raw.clone(),
             Err(_) => read_lbas(dev, last_block, 1)?,
         },
     });
 
     let disk_guid = analysis
-        .primary
+        .main
         .as_ref()
         .ok()
         .filter(|t| t.is_valid())
-        .or_else(|| analysis.backup.as_ref().ok().filter(|t| t.is_valid()))
+        .or_else(|| analysis.secondary.as_ref().ok().filter(|t| t.is_valid()))
         .map(|t| t.header.disk_guid)
         .unwrap_or(Guid::ZERO);
 
@@ -586,12 +584,12 @@ impl core::fmt::Display for Mismatch {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Mismatch::BlockSize { archive, disk } => {
-                write!(f, "backup is from a {archive}-byte-block disk, this one uses {disk}")
+                write!(f, "snapshot is from a {archive}-byte-block disk, this one uses {disk}")
             }
             Mismatch::LastBlock { archive, disk } => {
                 write!(
                     f,
-                    "backup is from a disk of {} blocks, this one has {}",
+                    "snapshot is from a disk of {} blocks, this one has {}",
                     archive + 1,
                     disk + 1
                 )
@@ -602,7 +600,7 @@ impl core::fmt::Display for Mismatch {
             Mismatch::Unaligned { lba, len } => {
                 write!(f, "the section for LBA {lba} is {len} bytes, not a whole number of blocks")
             }
-            Mismatch::Incomplete => write!(f, "the backup does not contain both GPT headers"),
+            Mismatch::Incomplete => write!(f, "the snapshot does not contain both GPT headers"),
         }
     }
 }
@@ -610,8 +608,8 @@ impl core::fmt::Display for Mismatch {
 /// Build the ordered restore for `archive` onto the disk `analysis` came
 /// from.
 ///
-/// Geometry must match exactly. A backup from a different-sized disk
-/// describes partitions that are not there, and a backup GPT header names
+/// Geometry must match exactly. A snapshot from a different-sized disk
+/// describes partitions that are not there, and a secondary GPT header names
 /// an LBA that only exists on the disk it came from.
 pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan, Mismatch> {
     if archive.block_size != analysis.block_size {
@@ -636,8 +634,8 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
         }
     }
 
-    let primary_header = archive.chunk(Role::PrimaryHeader).ok_or(Mismatch::Incomplete)?;
-    let backup_header = archive.chunk(Role::BackupHeader).ok_or(Mismatch::Incomplete)?;
+    let main_header = archive.chunk(Role::MainHeader).ok_or(Mismatch::Incomplete)?;
+    let secondary_header = archive.chunk(Role::SecondaryHeader).ok_or(Mismatch::Incomplete)?;
 
     fn push(steps: &mut Vec<Step>, archive: &Archive, role: Role) {
         if let Some(c) = archive.chunk(role) {
@@ -652,24 +650,24 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     // Same rule as a repair: an array must be durable before any header
     // claims it is there with a given CRC.
     let mut steps = Vec::new();
-    push(&mut steps, archive, Role::PrimaryEntries);
-    push(&mut steps, archive, Role::BackupEntries);
+    push(&mut steps, archive, Role::MainEntries);
+    push(&mut steps, archive, Role::SecondaryEntries);
     steps
         .push(Step::Flush { why: "entry arrays must be durable before the headers point at them" });
     push(&mut steps, archive, Role::Mbr);
-    push(&mut steps, archive, Role::PrimaryHeader);
-    push(&mut steps, archive, Role::BackupHeader);
+    push(&mut steps, archive, Role::MainHeader);
+    push(&mut steps, archive, Role::SecondaryHeader);
     steps.push(Step::Flush { why: "commit headers" });
 
-    // The report needs a header and a table to show. Prefer the primary
-    // copy; fall back to the backup so a snapshot with a damaged primary
-    // still renders something.
-    let header = GptHeader::parse(&primary_header.data)
-        .or_else(|| GptHeader::parse(&backup_header.data))
+    // The report needs a header and a table to show. Prefer the main
+    // copy; fall back to the secondary so a snapshot with a damaged main
+    // GPT still renders something.
+    let header = GptHeader::parse(&main_header.data)
+        .or_else(|| GptHeader::parse(&secondary_header.data))
         .ok_or(Mismatch::Incomplete)?;
     let entries = archive
-        .chunk(Role::PrimaryEntries)
-        .or_else(|| archive.chunk(Role::BackupEntries))
+        .chunk(Role::MainEntries)
+        .or_else(|| archive.chunk(Role::SecondaryEntries))
         .map(|c| {
             parse_array(&c.data, header.number_of_partition_entries, header.size_of_partition_entry)
         })
@@ -708,7 +706,7 @@ pub fn sequence_of(name: &str) -> Option<u32> {
 /// Counts from the highest rather than filling gaps: reusing the number of
 /// a snapshot someone deleted would make the ordering lie about which is
 /// newest. `None` once the space is exhausted — better to say so than to
-/// overwrite somebody's oldest backup.
+/// overwrite somebody's oldest snapshot.
 pub fn next_name(existing: &[String]) -> Option<String> {
     let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
     let next = highest + 1;
@@ -901,7 +899,7 @@ pub fn inspect(archive: &Archive, against: Option<(&str, &Comparison)>) -> Vec<L
         archive.block_size,
         crate::report::human_size(archive.capacity())
     )));
-    if let Some(h) = archive.primary_header() {
+    if let Some(h) = archive.main_header() {
         out.push(line(format!("    Usable range  {}..{}", h.first_usable_lba, h.last_usable_lba)));
         out.push(line(format!(
             "    Entry array   {} entries x {} B at LBA {}",
@@ -975,8 +973,8 @@ mod tests {
             meta: alloc::vec![(String::from("tool"), String::from("test"))],
             chunks: alloc::vec![
                 Chunk { role: Role::Mbr, lba: 0, data: alloc::vec![0xAA; 512] },
-                Chunk { role: Role::PrimaryEntries, lba: 2, data: alloc::vec![0x11; 512 * 32] },
-                Chunk { role: Role::PrimaryHeader, lba: 1, data: alloc::vec![0x22; 512] },
+                Chunk { role: Role::MainEntries, lba: 2, data: alloc::vec![0x11; 512 * 32] },
+                Chunk { role: Role::MainHeader, lba: 1, data: alloc::vec![0x22; 512] },
             ],
         }
     }
@@ -992,7 +990,7 @@ mod tests {
         assert_eq!(b.time, a.time);
         assert_eq!(b.health, a.health);
         assert_eq!(b.chunks.len(), 3);
-        assert_eq!(b.chunk(Role::PrimaryEntries).unwrap().data, alloc::vec![0x11; 512 * 32]);
+        assert_eq!(b.chunk(Role::MainEntries).unwrap().data, alloc::vec![0x11; 512 * 32]);
     }
 
     #[test]

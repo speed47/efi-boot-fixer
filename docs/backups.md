@@ -15,8 +15,8 @@ date lives inside the file, where the picker shows it.
 ## The file format
 
 The file is not a `dd` of the first 34 sectors. Each structure is stored as a
-separate chunk with a role — protective MBR, primary entry array, primary
-header, backup entry array, backup header — alongside the geometry it came
+separate chunk with a role — protective MBR, main entry array, main header,
+secondary entry array, secondary header — alongside the geometry it came
 from, the disk GUID, and the health of the table at the time. That buys three
 things a raw dump does not:
 
@@ -99,6 +99,6 @@ section, and on Linux it can record the drive model and serial from sysfs —
 which UEFI will not give for NVMe. `deck-corrupt.py show <file>` prints all of
 it without root or a device.
 
-**Version 1 snapshots stay readable.** A backup is worthless if a later build
+**Version 1 snapshots stay readable.** A snapshot is worthless if a later build
 refuses it, so `decode` accepts both layouts and only `encode` moved on; there
 is a test that downgrades a snapshot to version 1 and restores from it.

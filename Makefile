@@ -22,7 +22,7 @@ DIST       := $(BUILD)/dist
 IMAGES     ?= $(BUILD)/images
 
 # Corruption applied to the QEMU test disk. Note that OVMF repairs a broken
-# primary GPT by itself before any application runs, so 'bad-mbr' is the
+# main GPT by itself before any application runs, so 'bad-mbr' is the
 # mode that actually reaches this tool under QEMU. See docs/testing.md.
 CORRUPTION ?= bad-mbr
 

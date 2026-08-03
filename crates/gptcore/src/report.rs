@@ -40,27 +40,31 @@ pub fn verdict_line(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::Healthy => "healthy, nothing to do",
         Verdict::MbrOnly => "only the protective MBR needs rewriting",
-        Verdict::PrimaryRepairable => "primary GPT is repairable from the backup",
-        Verdict::BackupDegraded => "primary is fine; the BACKUP is damaged (not repaired here)",
+        Verdict::MainRepairable => "main GPT is repairable from the secondary GPT",
+        Verdict::SecondaryDegraded => {
+            "main GPT is fine; the SECONDARY GPT is damaged (not repaired here)"
+        }
         Verdict::Unrecoverable => "both tables are damaged - a rescue USB is required",
         Verdict::RefusedHybridMbr => "hybrid MBR present - refusing to touch this disk",
-        Verdict::RefusedImplausibleBackup => "backup failed sanity checks - refusing to write",
+        Verdict::RefusedImplausibleSecondary => {
+            "secondary GPT failed sanity checks - refusing to write"
+        }
     }
 }
 
 /// How serious a verdict is.
 ///
-/// `PrimaryRepairable` is `Warn` rather than `Bad` on purpose: the disk is
+/// `MainRepairable` is `Warn` rather than `Bad` on purpose: the disk is
 /// damaged, but this is the case the tool exists to fix and there is a
 /// known-good source for the repair. Reserving `Bad` for the states with no
 /// way out keeps it meaningful.
 pub fn verdict_style(verdict: Verdict) -> Style {
     match verdict {
         Verdict::Healthy => Style::Good,
-        Verdict::MbrOnly | Verdict::PrimaryRepairable | Verdict::BackupDegraded => Style::Warn,
-        Verdict::Unrecoverable | Verdict::RefusedHybridMbr | Verdict::RefusedImplausibleBackup => {
-            Style::Bad
-        }
+        Verdict::MbrOnly | Verdict::MainRepairable | Verdict::SecondaryDegraded => Style::Warn,
+        Verdict::Unrecoverable
+        | Verdict::RefusedHybridMbr
+        | Verdict::RefusedImplausibleSecondary => Style::Bad,
     }
 }
 
@@ -110,8 +114,8 @@ pub fn render_analysis(analysis: &Analysis) -> Vec<Line> {
 
     let (mbr_text, mbr_style) = describe_mbr(analysis.mbr);
     out.push(Line::new(format!("  {:<14}: {}", "Protective MBR", mbr_text), mbr_style));
-    push_defects(&mut out, "Primary GPT", &analysis.primary);
-    push_defects(&mut out, "Backup GPT", &analysis.backup);
+    push_defects(&mut out, "Main GPT", &analysis.main);
+    push_defects(&mut out, "Secondary GPT", &analysis.secondary);
 
     if let Some(rec) = &analysis.recognition {
         let (verdict, style) = match rec.confidence {
@@ -232,7 +236,7 @@ pub fn render_plan(plan: &RepairPlan) -> Vec<Line> {
 pub fn render(analysis: &Analysis, plan: Option<&RepairPlan>) -> Vec<Line> {
     let mut out = render_analysis(analysis);
     if let Some(plan) = plan {
-        if analysis.verdict == Verdict::PrimaryRepairable {
+        if analysis.verdict == Verdict::MainRepairable {
             out.extend(render_table(plan, analysis.block_size));
         }
         out.extend(render_plan(plan));
@@ -259,11 +263,11 @@ mod tests {
         for v in [
             Verdict::Healthy,
             Verdict::MbrOnly,
-            Verdict::PrimaryRepairable,
-            Verdict::BackupDegraded,
+            Verdict::MainRepairable,
+            Verdict::SecondaryDegraded,
             Verdict::Unrecoverable,
             Verdict::RefusedHybridMbr,
-            Verdict::RefusedImplausibleBackup,
+            Verdict::RefusedImplausibleSecondary,
         ] {
             assert!(!verdict_line(v).is_empty());
         }
@@ -274,7 +278,7 @@ mod tests {
         assert_eq!(verdict_style(Verdict::Healthy), Style::Good);
         // The case the tool exists for: damaged, but fixable from a
         // known-good source.
-        assert_eq!(verdict_style(Verdict::PrimaryRepairable), Style::Warn);
+        assert_eq!(verdict_style(Verdict::MainRepairable), Style::Warn);
         assert_eq!(verdict_style(Verdict::Unrecoverable), Style::Bad);
         assert_eq!(verdict_style(Verdict::RefusedHybridMbr), Style::Bad);
     }

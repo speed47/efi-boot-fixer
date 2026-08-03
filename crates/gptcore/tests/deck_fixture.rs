@@ -27,11 +27,11 @@ fn fixture_reads_back_as_a_healthy_disk() {
     assert_eq!(analysis.verdict, Verdict::Healthy);
     assert!(dev.writes().is_empty());
 
-    let primary = analysis.primary.as_ref().unwrap();
-    assert_eq!(primary.header.first_usable_lba, 2048);
-    assert_eq!(primary.header.last_usable_lba, 1_953_525_134);
-    assert_eq!(primary.header.number_of_partition_entries, 128);
-    assert_eq!(primary.header.size_of_partition_entry, 128);
+    let main = analysis.main.as_ref().unwrap();
+    assert_eq!(main.header.first_usable_lba, 2048);
+    assert_eq!(main.header.last_usable_lba, 1_953_525_134);
+    assert_eq!(main.header.number_of_partition_entries, 128);
+    assert_eq!(main.header.size_of_partition_entry, 128);
     assert_eq!(analysis.last_block, 1_953_525_167);
 }
 
@@ -43,16 +43,16 @@ fn entry_array_gap_before_first_usable_is_accepted() {
     let img = deck_image();
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    let header = &analysis.primary.as_ref().unwrap().header;
+    let header = &analysis.main.as_ref().unwrap().header;
     let blocks = header.entry_array_blocks(512).unwrap();
     assert_eq!(blocks, 32);
     assert!(2 + blocks < header.first_usable_lba, "expected a gap, not a tight fit");
 }
 
-/// The check that matters: with the primary destroyed, is the real backup
+/// The check that matters: with the main GPT destroyed, is the real secondary
 /// accepted as a repair source?
 #[test]
-fn real_deck_backup_is_accepted_as_a_repair_source() {
+fn real_deck_secondary_gpt_is_accepted_as_a_repair_source() {
     let img = deck_image();
     img.zero_lba(1, 1);
 
@@ -60,7 +60,7 @@ fn real_deck_backup_is_accepted_as_a_repair_source() {
     let analysis = analyze(&mut dev, &CRC).unwrap();
     assert_eq!(
         analysis.verdict,
-        Verdict::PrimaryRepairable,
+        Verdict::MainRepairable,
         "refused the real disk: {:?}",
         analysis.rejection
     );
@@ -73,7 +73,7 @@ fn real_deck_backup_is_accepted_as_a_repair_source() {
 
 /// End to end on the real layout, judged by sgdisk.
 #[test]
-fn real_deck_primary_is_repaired() {
+fn real_deck_main_gpt_is_repaired() {
     let img = deck_image();
     let before = img.print();
 
@@ -115,7 +115,7 @@ fn every_type_guid_on_the_real_disk_is_known() {
     let img = deck_image();
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    let table = analysis.primary.as_ref().unwrap();
+    let table = analysis.main.as_ref().unwrap();
 
     let mut unknown = Vec::new();
     for (i, e) in table.used_entries() {
@@ -163,8 +163,8 @@ fn closing_the_gap_leaves_the_disk_healthy_and_the_table_unchanged() {
     let mut dev = img.disk();
     let after = analyze(&mut dev, &CRC).unwrap();
     assert_eq!(after.verdict, Verdict::Healthy);
-    assert_eq!(after.primary.as_ref().unwrap().header.first_usable_lba, 34);
-    assert_eq!(after.backup.as_ref().unwrap().header.first_usable_lba, 34);
+    assert_eq!(after.main.as_ref().unwrap().header.first_usable_lba, 34);
+    assert_eq!(after.secondary.as_ref().unwrap().header.first_usable_lba, 34);
 }
 
 #[test]
@@ -210,8 +210,8 @@ fn a_hybrid_mbr_is_refused_for_prevention_though_both_gpts_are_healthy() {
 
     // The precondition that makes this test worth having: both tables are
     // fine, so nothing but the MBR check stands between us and a write.
-    assert!(analysis.primary.as_ref().unwrap().is_valid());
-    assert!(analysis.backup.as_ref().unwrap().is_valid());
+    assert!(analysis.main.as_ref().unwrap().is_valid());
+    assert!(analysis.secondary.as_ref().unwrap().is_valid());
 
     assert_eq!(
         gptcore::prevent::assess(&analysis),
@@ -221,7 +221,7 @@ fn a_hybrid_mbr_is_refused_for_prevention_though_both_gpts_are_healthy() {
     assert!(dev.writes().is_empty());
 }
 
-/// A disk whose primary is broken must be repaired first; this operation
+/// A disk whose main GPT is broken must be repaired first; this operation
 /// rewrites healthy headers and has no business guessing at a damaged one.
 #[test]
 fn a_damaged_disk_is_refused_for_prevention() {

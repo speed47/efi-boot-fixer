@@ -1,9 +1,9 @@
 //! Saving the whole boot configuration to a file before changing it.
 //!
 //! `BootOrder` and the `Boot####` entries are small — a few hundred bytes
-//! all told — and they are the only copy. There is no backup `BootOrder`
-//! at the far end of NVRAM the way there is a backup GPT at the far end of
-//! a disk, so an edit made from a screen with no keyboard has nothing
+//! all told — and they are the only copy. There is no second `BootOrder`
+//! at the far end of NVRAM the way there is a secondary GPT at the far end
+//! of a disk, so an edit made from a screen with no keyboard has nothing
 //! behind it unless something puts a copy somewhere first.
 //!
 //! This is that copy: every global variable the boot process depends on,

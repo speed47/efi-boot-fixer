@@ -17,7 +17,7 @@ The upgrade to Windows 24H2 is especially infamous with this, symptoms are eithe
 - Dropping you to a `grub>` prompt after attempting to boot
 - Verbose boot logs ending in `ERROR: Mounting /dev/disk/bypartuuid/<UUIDOFYOURPARTITION> failed.`
 
-This precise upgrade is known to corrupt the primary GPT, this is what this tool
+This precise upgrade is known to corrupt the main GPT, this is what this tool
 was written for, but it now supports more features to (hopefully) always be able to salvage
 your Steam Deck that no longer boots, even if you're on the go and don't have any
 USB keyboard at hand, and no USB recovery key.
@@ -33,7 +33,7 @@ All driven with the D-pad, from one read-only summary and two submenus:
 | Check a disk's GPT | never | reads both tables and reports every defect |
 | Back up both GPTs | ESP file | snapshots both tables to `\BOOTFIXR\` on the ESP |
 | Restore GPTs | disk | writes a saved snapshot back |
-| Repair primary GPT | disk | rebuilds a corrupt primary from the backup table |
+| Repair main GPT | disk | rebuilds a corrupt main GPT from the secondary GPT |
 | Prevent recurrence | disk | closes the `FirstUsableLBA` gap that causes the damage |
 | *Boot entries (NVRAM)* | | |
 | View the boot entries | never | the firmware's boot list, including entries that have fallen out of it |
@@ -50,13 +50,13 @@ All driven with the D-pad, from one read-only summary and two submenus:
   shows exactly which LBAs it will overwrite and then requires a five-press
   confirmation sequence. See [docs/using.md](docs/using.md).
 - **It refuses more than it accepts.** No removable or read-only media, no
-  hybrid MBRs, no implausible backup tables, no mismatched snapshots.
+  hybrid MBRs, no implausible secondary GPTs, no mismatched snapshots.
   See [docs/safety.md](docs/safety.md).
 - **Snapshots you can still read years later.** Structured, checksummed,
   self-describing archives on the ESP, attributed back to the right disk by
   per-partition GUIDs. See [docs/backups.md](docs/backups.md).
 - **A theory about the cause, and a fix for it.** The infamous Windows 24H2 upgrade
-  damage on the primary GPT is two bytes, and the arithmetic that produces them is reproducible.
+  damage on the main GPT is two bytes, and the arithmetic that produces them is reproducible.
   See [docs/corruption.md](docs/corruption.md).
 - **It can tell you the partition table was never the problem.** A machine
   that boots to nothing may have an intact disk and an emptied `BootOrder`

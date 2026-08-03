@@ -36,7 +36,7 @@ Partition tables (GPT)          Boot entries (NVRAM)
   Check a disk's GPT              View the boot entries
   Back up both GPTs to the ESP    Scan the ESPs for bootloaders
   Restore GPTs from a saved copy  Register a bootloader
-  Repair primary GPT              Set the default boot entry
+  Repair main GPT                 Set the default boot entry
   Prevent recurrence              Boot something once
                                   Restore the boot configuration
 Reboot / Exit
@@ -82,7 +82,7 @@ Choosing an operation opens a disk picker when there is more than one disk,
 which is where the identifying detail lives:
 
 ```
-Repair primary GPT
+Repair main GPT
 ------------------------------------------------------------------
   Choose a disk. Removable media is not listed.
   [boot] carries the volume this program came from.
@@ -92,7 +92,7 @@ Repair primary GPT
 
   PciRoot(0x0)/Pci(0x3,0x0)/NVMe(0x1,...)
   1953525168 blocks x 512 B
-  GPT: primary GPT is repairable from the backup
+  GPT: main GPT is repairable from the secondary GPT
 ```
 
 `[SteamOS]` is inferred from the table itself: an ESP plus either two Linux

@@ -4,7 +4,7 @@
 //! 2016, which is `FirstUsableLBA - 32` on that disk, 32 being the size of
 //! the entry array. In other words the writer placed the array immediately
 //! below the first usable block instead of at LBA 2, where the spec pins
-//! the primary copy.
+//! the main copy.
 //!
 //! On a conventionally formatted disk `FirstUsableLBA` is 34, and that same
 //! arithmetic gives `34 - 32 = 2`, which is correct. It only goes wrong
@@ -18,7 +18,8 @@
 //! **This is a hypothesis that fits the arithmetic exactly, not a diagnosis
 //! of the writer.** It is offered as a separate, separately-confirmed
 //! operation for that reason: a repair restores a table that is known-good
-//! because the backup already holds it, whereas this modifies a healthy
+//! because the secondary GPT already holds it, whereas this modifies a
+//! healthy
 //! table on a theory. Callers must present it as such.
 
 use crate::crc::Crc32;
@@ -41,13 +42,13 @@ pub enum Blocker {
     HybridMbr,
     /// One of the two tables is not currently valid. Repair first.
     TableNotHealthy,
-    /// The primary entry array is not at LBA 2, so the disk has a problem
+    /// The main entry array is not at LBA 2, so the disk has a problem
     /// this operation is not the answer to.
-    PrimaryEntryLbaNotTwo { found: u64 },
+    MainEntryLbaNotTwo { found: u64 },
     /// The declared entry geometry is unusable.
     GeometryUnknown,
-    /// Primary and backup disagree about FirstUsableLBA already.
-    HeadersDisagree { primary: u64, backup: u64 },
+    /// The two GPTs disagree about FirstUsableLBA already.
+    HeadersDisagree { main: u64, secondary: u64 },
     /// A partition starts below where FirstUsableLBA would move to, so
     /// lowering it would describe a disk whose partitions precede the
     /// usable area.
@@ -63,12 +64,12 @@ impl core::fmt::Display for Blocker {
             Blocker::TableNotHealthy => {
                 write!(f, "the GPT is not currently healthy; repair it first")
             }
-            Blocker::PrimaryEntryLbaNotTwo { found } => {
-                write!(f, "primary entry array is at LBA {found}, not 2")
+            Blocker::MainEntryLbaNotTwo { found } => {
+                write!(f, "main entry array is at LBA {found}, not 2")
             }
             Blocker::GeometryUnknown => write!(f, "the entry array geometry is unusable"),
-            Blocker::HeadersDisagree { primary, backup } => {
-                write!(f, "primary says FirstUsableLBA {primary}, backup says {backup}")
+            Blocker::HeadersDisagree { main, secondary } => {
+                write!(f, "main GPT says FirstUsableLBA {main}, secondary says {secondary}")
             }
             Blocker::PartitionBelowProposed { index, start, proposed } => write!(
                 f,
@@ -110,36 +111,36 @@ pub fn assess(analysis: &Analysis) -> Verdict {
     if analysis.mbr == MbrStatus::Hybrid {
         return Verdict::Refused(Blocker::HybridMbr);
     }
-    let (Ok(primary), Ok(backup)) = (&analysis.primary, &analysis.backup) else {
+    let (Ok(main), Ok(secondary)) = (&analysis.main, &analysis.secondary) else {
         return Verdict::Refused(Blocker::TableNotHealthy);
     };
-    if !primary.is_valid() || !backup.is_valid() {
+    if !main.is_valid() || !secondary.is_valid() {
         return Verdict::Refused(Blocker::TableNotHealthy);
     }
-    if primary.header.partition_entry_lba != 2 {
-        return Verdict::Refused(Blocker::PrimaryEntryLbaNotTwo {
-            found: primary.header.partition_entry_lba,
+    if main.header.partition_entry_lba != 2 {
+        return Verdict::Refused(Blocker::MainEntryLbaNotTwo {
+            found: main.header.partition_entry_lba,
         });
     }
-    let Some(blocks) = primary.header.entry_array_blocks(analysis.block_size) else {
+    let Some(blocks) = main.header.entry_array_blocks(analysis.block_size) else {
         return Verdict::Refused(Blocker::GeometryUnknown);
     };
 
     // The entry array occupies LBA 2..=(1 + blocks), so the first block
     // that can legitimately be used is the one after it.
     let proposed = 2 + blocks;
-    let current = primary.header.first_usable_lba;
+    let current = main.header.first_usable_lba;
 
-    if primary.header.first_usable_lba != backup.header.first_usable_lba {
+    if main.header.first_usable_lba != secondary.header.first_usable_lba {
         return Verdict::Refused(Blocker::HeadersDisagree {
-            primary: primary.header.first_usable_lba,
-            backup: backup.header.first_usable_lba,
+            main: main.header.first_usable_lba,
+            secondary: secondary.header.first_usable_lba,
         });
     }
     if current <= proposed {
         return Verdict::AlreadyMinimal { current };
     }
-    for (i, e) in primary.used_entries() {
+    for (i, e) in main.used_entries() {
         if e.starting_lba < proposed {
             return Verdict::Refused(Blocker::PartitionBelowProposed {
                 index: i,
@@ -154,7 +155,7 @@ pub fn assess(analysis: &Analysis) -> Verdict {
 /// Rewrite both headers with the lowered `FirstUsableLBA`.
 ///
 /// Only the two header blocks change; both entry arrays are already correct
-/// and are left alone. The primary goes first because it is what firmware
+/// and are left alone. The main GPT goes first because it is what firmware
 /// and the kernel actually read: if power is cut between the two writes,
 /// the authoritative copy is the updated one, and re-running the operation
 /// simply finishes the job.
@@ -162,30 +163,30 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
     let Verdict::Applicable { proposed, .. } = assess(analysis) else {
         return None;
     };
-    let primary = analysis.primary.as_ref().ok()?;
-    let backup = analysis.backup.as_ref().ok()?;
+    let main = analysis.main.as_ref().ok()?;
+    let secondary = analysis.secondary.as_ref().ok()?;
 
-    let mut new_primary = primary.header;
-    new_primary.first_usable_lba = proposed;
-    let mut new_backup = backup.header;
-    new_backup.first_usable_lba = proposed;
+    let mut new_main = main.header;
+    new_main.first_usable_lba = proposed;
+    let mut new_secondary = secondary.header;
+    new_secondary.first_usable_lba = proposed;
 
     let steps = alloc::vec![
         Step::Write {
             lba: 1,
-            data: new_primary.to_block(analysis.block_size, crc),
-            what: String::from("primary GPT header (FirstUsableLBA lowered)"),
+            data: new_main.to_block(analysis.block_size, crc),
+            what: String::from("main GPT header (FirstUsableLBA lowered)"),
         },
-        Step::Flush { why: "commit primary header" },
+        Step::Flush { why: "commit main GPT header" },
         Step::Write {
             lba: analysis.last_block,
-            data: new_backup.to_block(analysis.block_size, crc),
-            what: String::from("backup GPT header (FirstUsableLBA lowered)"),
+            data: new_secondary.to_block(analysis.block_size, crc),
+            what: String::from("secondary GPT header (FirstUsableLBA lowered)"),
         },
-        Step::Flush { why: "commit backup header" },
+        Step::Flush { why: "commit secondary GPT header" },
     ];
 
-    Some(RepairPlan { steps, header: new_primary, entries: primary.entries.clone() })
+    Some(RepairPlan { steps, header: new_main, entries: main.entries.clone() })
 }
 
 /// Lines describing the proposal, for the operator.
@@ -203,10 +204,10 @@ pub fn describe(verdict: Verdict) -> Vec<Line> {
                 &mut out,
                 Style::Dim,
                 &[
-                    "  WHY: the corruption seen on this hardware set the primary",
-                    "  entry array to FirstUsableLBA minus its own length, which",
-                    "  is correct only when no gap exists. Closing the gap should",
-                    "  make that arithmetic produce the right answer.",
+                    "  WHY: the corruption seen on this hardware set the main",
+                    "  GPT's entry array to FirstUsableLBA minus its own length,",
+                    "  which is correct only when no gap exists. Closing the gap",
+                    "  should make that arithmetic produce the right answer.",
                 ],
             );
             out.push(Line::blank());

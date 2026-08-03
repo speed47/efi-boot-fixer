@@ -71,21 +71,21 @@ def main() -> int:
         raise SystemExit(f"tail.bin is {len(tail)} bytes, expected {TAIL_SECTORS * SECTOR}")
 
     if do_scrub:
-        # Primary: header at LBA 1, entries at LBA 2..33.
-        p_header = bytearray(head[SECTOR : 2 * SECTOR])
-        p_entries = bytearray(head[2 * SECTOR :])
-        scrub(p_header, p_entries)
-        reseal(p_header, p_entries)
-        head[SECTOR : 2 * SECTOR] = p_header
-        head[2 * SECTOR :] = p_entries
+        # Main GPT: header at LBA 1, entries at LBA 2..33.
+        m_header = bytearray(head[SECTOR : 2 * SECTOR])
+        m_entries = bytearray(head[2 * SECTOR :])
+        scrub(m_header, m_entries)
+        reseal(m_header, m_entries)
+        head[SECTOR : 2 * SECTOR] = m_header
+        head[2 * SECTOR :] = m_entries
 
-        # Backup: entries first, header in the final LBA.
-        b_entries = bytearray(tail[: 32 * SECTOR])
-        b_header = bytearray(tail[32 * SECTOR :])
-        scrub(b_header, b_entries)
-        reseal(b_header, b_entries)
-        tail[: 32 * SECTOR] = b_entries
-        tail[32 * SECTOR :] = b_header
+        # Secondary GPT: entries first, header in the final LBA.
+        s_entries = bytearray(tail[: 32 * SECTOR])
+        s_header = bytearray(tail[32 * SECTOR :])
+        scrub(s_header, s_entries)
+        reseal(s_header, s_entries)
+        tail[: 32 * SECTOR] = s_entries
+        tail[32 * SECTOR :] = s_header
 
     with open(out, "wb") as f:
         f.truncate(sectors * SECTOR)

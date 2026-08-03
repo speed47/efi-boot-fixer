@@ -6,10 +6,10 @@ Applied in order, before anything is written:
 - never removable media, never read-only media — so the SD card and USB
   sticks never appear as repair targets
 - never a disk with a hybrid MBR (some legacy OS depends on that view)
-- never a backup table that fails structural checks (overlaps, ranges outside
+- never a secondary GPT that fails structural checks (overlaps, ranges outside
   the usable area, inverted extents) or whose entry array would collide with
   the first usable LBA
-- never a table without an `esp` and a `rootfs-A`, which is the stale-backup
+- never a table without an `esp` and a `rootfs-A`, which is the stale-table
   guard
 - never a saved snapshot whose block size or disk size does not match
 - never without the operator entering the confirmation sequence, on a screen
@@ -53,7 +53,7 @@ result screen says which happened. This path is exercised under OVMF by
 ## Write ordering and checksums
 
 The repair rewrites `MyLBA`, `AlternateLBA` and `PartitionEntryLBA` field by
-field rather than copying the backup block, and recomputes both CRCs. The
+field rather than copying the secondary GPT's block, and recomputes both CRCs. The
 entry array is written and flushed *before* the header that points at it, so a
 power cut cannot leave a valid header describing garbage.
 

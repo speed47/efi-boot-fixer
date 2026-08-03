@@ -90,28 +90,29 @@ pub enum Verdict {
     Healthy,
     /// Both tables valid but the protective MBR needs regenerating.
     MbrOnly,
-    /// Primary bad, backup good and plausible. The case this tool exists
-    /// for.
-    PrimaryRepairable,
-    /// Primary good, backup bad. Not what breaks booting, so out of scope
-    /// here, but worth telling the operator about.
-    BackupDegraded,
+    /// Main GPT bad, secondary good and plausible. The case this tool
+    /// exists for.
+    MainRepairable,
+    /// Main GPT good, secondary bad. Not what breaks booting, so out of
+    /// scope here, but worth telling the operator about.
+    SecondaryDegraded,
     /// Neither table is usable. A rescue USB is the only option left.
     Unrecoverable,
     /// A hybrid MBR is present. Some legacy OS depends on that view and
     /// we will not touch the disk.
     RefusedHybridMbr,
-    /// The backup parses, but the table it describes fails sanity checks.
-    RefusedImplausibleBackup,
+    /// The secondary GPT parses, but the table it describes fails sanity
+    /// checks.
+    RefusedImplausibleSecondary,
 }
 
 impl Verdict {
     pub fn will_write(&self) -> bool {
-        matches!(self, Verdict::MbrOnly | Verdict::PrimaryRepairable)
+        matches!(self, Verdict::MbrOnly | Verdict::MainRepairable)
     }
 }
 
-/// Why a backup was rejected as a repair source.
+/// Why the secondary GPT was rejected as a repair source.
 #[derive(Clone, Debug)]
 pub enum Implausible {
     Structure(Vec<StructuralIssue>),
@@ -132,8 +133,8 @@ pub struct Analysis {
     pub last_block: u64,
     pub mbr_raw: Vec<u8>,
     pub mbr: MbrStatus,
-    pub primary: Result<TableView, IoError>,
-    pub backup: Result<TableView, IoError>,
+    pub main: Result<TableView, IoError>,
+    pub secondary: Result<TableView, IoError>,
     pub verdict: Verdict,
     /// Sanity results for whichever table would be the repair source.
     pub recognition: Option<Recognition>,
@@ -143,18 +144,18 @@ pub struct Analysis {
 impl Analysis {
     /// Whichever table is worth believing, for purposes that only want to
     /// look at the partitions — identifying the disk in a picker, say.
-    /// Prefers the primary, falls back to the backup, and settles for a
-    /// damaged primary rather than nothing.
+    /// Prefers the main GPT, falls back to the secondary, and settles for
+    /// a damaged main rather than nothing.
     pub fn best_view(&self) -> Option<&TableView> {
-        let primary = self.primary.as_ref().ok();
-        let backup = self.backup.as_ref().ok();
-        primary.filter(|t| t.is_valid()).or(backup.filter(|t| t.is_valid())).or(primary).or(backup)
+        let main = self.main.as_ref().ok();
+        let secondary = self.secondary.as_ref().ok();
+        main.filter(|t| t.is_valid()).or(secondary.filter(|t| t.is_valid())).or(main).or(secondary)
     }
 
     /// The table a repair would be built from.
     pub fn source(&self) -> Option<&TableView> {
         match self.verdict {
-            Verdict::PrimaryRepairable => self.backup.as_ref().ok(),
+            Verdict::MainRepairable => self.secondary.as_ref().ok(),
             _ => None,
         }
     }
@@ -171,39 +172,39 @@ pub fn analyze<D: BlockDevice + ?Sized>(
     let mbr_raw = read_lbas(dev, 0, 1)?;
     let mbr_status = mbr::inspect(&mbr_raw, last_block);
 
-    let primary = read_table(dev, 1, crc);
-    let backup = read_table(dev, last_block, crc);
+    let main = read_table(dev, 1, crc);
+    let secondary = read_table(dev, last_block, crc);
 
-    let primary_ok = primary.as_ref().is_ok_and(|t| t.is_valid());
-    let backup_ok = backup.as_ref().is_ok_and(|t| t.is_valid());
+    let main_ok = main.as_ref().is_ok_and(|t| t.is_valid());
+    let secondary_ok = secondary.as_ref().is_ok_and(|t| t.is_valid());
 
     let mut recognition = None;
     let mut rejection = None;
 
     let verdict = if mbr_status == MbrStatus::Hybrid {
         Verdict::RefusedHybridMbr
-    } else if primary_ok && backup_ok {
+    } else if main_ok && secondary_ok {
         if mbr_status.needs_repair() {
             Verdict::MbrOnly
         } else {
             Verdict::Healthy
         }
-    } else if primary_ok {
-        Verdict::BackupDegraded
-    } else if backup_ok {
-        // Safe to unwrap: backup_ok implies Ok.
-        let src = backup.as_ref().expect("backup_ok implies Ok");
+    } else if main_ok {
+        Verdict::SecondaryDegraded
+    } else if secondary_ok {
+        // Safe to unwrap: secondary_ok implies Ok.
+        let src = secondary.as_ref().expect("secondary_ok implies Ok");
         match assess(src, block_size) {
             Ok(rec) => {
                 recognition = Some(rec);
-                Verdict::PrimaryRepairable
+                Verdict::MainRepairable
             }
             Err(why) => {
                 if let Implausible::Unrecognized(rec) = &why {
                     recognition = Some(rec.as_ref().clone());
                 }
                 rejection = Some(why);
-                Verdict::RefusedImplausibleBackup
+                Verdict::RefusedImplausibleSecondary
             }
         }
     } else {
@@ -215,8 +216,8 @@ pub fn analyze<D: BlockDevice + ?Sized>(
         last_block,
         mbr_raw,
         mbr: mbr_status,
-        primary,
-        backup,
+        main,
+        secondary,
         verdict,
         recognition,
         rejection,
@@ -234,7 +235,7 @@ fn assess(src: &TableView, block_size: u32) -> Result<Recognition, Implausible> 
         return Err(Implausible::Structure(issues));
     }
 
-    // The primary entry array lands at LBA 2. If it would run into the
+    // The main entry array lands at LBA 2. If it would run into the
     // first partition, writing it would destroy data.
     let entry_blocks = src.header.entry_array_blocks(block_size).unwrap_or(u64::MAX);
     if 2u64.saturating_add(entry_blocks) > src.header.first_usable_lba {
@@ -301,12 +302,12 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
                 },
                 Step::Flush { why: "commit protective MBR" },
             ],
-            header: analysis.primary.as_ref().ok()?.header,
-            entries: analysis.primary.as_ref().ok()?.entries.clone(),
+            header: analysis.main.as_ref().ok()?.header,
+            entries: analysis.main.as_ref().ok()?.entries.clone(),
         }),
 
-        Verdict::PrimaryRepairable => {
-            let src = analysis.backup.as_ref().ok()?;
+        Verdict::MainRepairable => {
+            let src = analysis.secondary.as_ref().ok()?;
             let block_size = analysis.block_size;
             let entry_blocks = src.header.entry_array_blocks(block_size)?;
 
@@ -318,7 +319,7 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
             entries_raw.resize(padded_len, 0);
 
             // Rebuild the header field by field rather than copying the
-            // backup's block, so every LBA is one we chose.
+            // secondary's block, so every LBA is one we chose.
             let header = GptHeader {
                 signature: src.header.signature,
                 revision: src.header.revision,
@@ -359,9 +360,9 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
             steps.push(Step::Write {
                 lba: 1,
                 data: header.to_block(block_size, crc),
-                what: String::from("primary GPT header"),
+                what: String::from("main GPT header"),
             });
-            steps.push(Step::Flush { why: "commit primary GPT header" });
+            steps.push(Step::Flush { why: "commit main GPT header" });
 
             Some(RepairPlan { steps, header, entries: src.entries.clone() })
         }

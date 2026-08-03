@@ -5,7 +5,7 @@
 //! corruption that was found in the wild, that the snapshot it writes is
 //! readable by the application that has to restore it when the machine
 //! will not boot, and that both recovery routes — restore the snapshot, or
-//! repair from the backup GPT — put the disk back byte for byte.
+//! repair from the secondary GPT — put the disk back byte for byte.
 //!
 //! Skipped if python3 is unavailable rather than failing: the script is a
 //! testing aid, not part of the product.
@@ -67,18 +67,18 @@ fn it_reproduces_the_corruption_that_was_found_in_the_wild() {
     // And gptcore agrees this is the failure it was written for.
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
-    assert_eq!(analysis.verdict, Verdict::PrimaryRepairable);
-    let primary = analysis.primary.as_ref().expect("primary readable");
+    assert_eq!(analysis.verdict, Verdict::MainRepairable);
+    let main = analysis.main.as_ref().expect("main GPT readable");
     assert!(
-        primary.defects.contains(&Defect::PrimaryEntryLbaNotTwo { found: 2016 }),
+        main.defects.contains(&Defect::MainEntryLbaNotTwo { found: 2016 }),
         "{:?}",
-        primary.defects
+        main.defects
     );
     // The header CRC still verifies, which is what makes this nasty.
     assert!(
-        !primary.defects.iter().any(|d| matches!(d, Defect::HeaderCrcMismatch { .. })),
+        !main.defects.iter().any(|d| matches!(d, Defect::HeaderCrcMismatch { .. })),
         "{:?}",
-        primary.defects
+        main.defects
     );
 
     let _ = std::fs::remove_file(&snap);
@@ -100,9 +100,9 @@ fn the_snapshot_it_writes_is_readable_by_the_application() {
     assert_eq!(archive.last_block, img.last_block());
     assert_eq!(archive.health, Health::Healthy);
     assert_eq!(archive.chunks.len(), 5);
-    assert_eq!(archive.chunk(Role::PrimaryEntries).unwrap().lba, 2);
-    assert_eq!(archive.chunk(Role::BackupHeader).unwrap().lba, img.last_block());
-    assert_eq!(archive.chunk(Role::PrimaryHeader).unwrap().data, img.read_lba(1, 1));
+    assert_eq!(archive.chunk(Role::MainEntries).unwrap().lba, 2);
+    assert_eq!(archive.chunk(Role::SecondaryHeader).unwrap().lba, img.last_block());
+    assert_eq!(archive.chunk(Role::MainHeader).unwrap().data, img.read_lba(1, 1));
 
     // The script records its own provenance in the same key/value section
     // the application reads, so a snapshot taken from Linux is as
@@ -145,7 +145,7 @@ fn restoring_the_scripts_snapshot_undoes_the_break() {
 }
 
 #[test]
-fn repairing_from_the_backup_undoes_the_break_too() {
+fn repairing_from_the_secondary_gpt_undoes_the_break_too() {
     if python().is_none() {
         return;
     }
@@ -156,7 +156,7 @@ fn repairing_from_the_backup_undoes_the_break_too() {
     run(&["break", img.path.to_str().unwrap(), "-o", snap.to_str().unwrap(), "--yes"]);
 
     // No snapshot involved: this is the path that has to work when the
-    // only thing left is the backup table at the end of the disk.
+    // only thing left is the secondary GPT at the end of the disk.
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
     let repair = plan(&analysis, &CRC).expect("a repair plan");
@@ -233,14 +233,14 @@ fn a_damaged_snapshot_is_refused_by_the_scripts_restore() {
 }
 
 #[test]
-fn it_refuses_when_the_backup_gpt_could_not_repair_the_damage() {
+fn it_refuses_when_the_secondary_gpt_could_not_repair_the_damage() {
     if python().is_none() {
         return;
     }
     let img = deck_image();
     let snap = snapshot_path("nobackup");
 
-    // Destroy the backup header. Breaking the primary now would leave
+    // Destroy the secondary GPT header. Breaking the main GPT now would leave
     // nothing to recover from, which is the one outcome this script must
     // never produce.
     img.zero_lba(img.last_block(), 1);
@@ -250,13 +250,13 @@ fn it_refuses_when_the_backup_gpt_could_not_repair_the_damage() {
         .args(["break", img.path.to_str().unwrap(), "-o", snap.to_str().unwrap(), "--yes"])
         .output()
         .expect("run");
-    assert!(!out.status.success(), "breaking a disk with no usable backup must be refused");
+    assert!(!out.status.success(), "breaking a disk with no usable secondary GPT must be refused");
     let text = String::from_utf8_lossy(&out.stderr);
-    assert!(text.contains("BACKUP GPT does not verify"), "{text}");
+    assert!(text.contains("SECONDARY GPT does not verify"), "{text}");
 
-    // And it really did not touch the primary, nor leave a snapshot behind.
+    // And it really did not touch the main GPT, nor leave a snapshot behind.
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
-    assert_eq!(analysis.primary.as_ref().unwrap().header.partition_entry_lba, 2);
+    assert_eq!(analysis.main.as_ref().unwrap().header.partition_entry_lba, 2);
     assert!(!snap.exists(), "a refused break must not leave a snapshot");
 }

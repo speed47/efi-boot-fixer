@@ -44,7 +44,7 @@ impl FileDisk {
     }
 
     /// Open while pretending the device is smaller than the file, to model
-    /// a backup GPT recovered onto a disk it does not fit.
+    /// a secondary GPT recovered onto a disk it does not fit.
     pub fn open_truncated(path: &Path, blocks: u64) -> std::io::Result<Self> {
         let mut d = Self::open(path)?;
         d.blocks = blocks;
@@ -108,8 +108,8 @@ fn run(cmd: &mut Command) -> String {
 
 /// stdout and stderr together. sgdisk sends its corruption warnings to
 /// stderr while stdout still says "No problems found" about the table it
-/// silently loaded from the backup, so judging health on stdout alone
-/// would call a wrecked primary healthy.
+/// silently loaded from the secondary GPT, so judging health on stdout alone
+/// would call a wrecked main GPT healthy.
 fn run_combined(cmd: &mut Command) -> String {
     let out = cmd.output().expect("failed to run sgdisk - is gdisk installed?");
     format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout))
@@ -166,10 +166,10 @@ impl Image {
         run_combined(sgdisk().arg("-v").arg(&self.path))
     }
 
-    /// True only if sgdisk read the on-disk primary without complaint.
+    /// True only if sgdisk read the on-disk main GPT without complaint.
     ///
     /// "No problems found" alone is not enough: sgdisk prints that after
-    /// transparently falling back to the backup. A genuinely healthy disk
+    /// transparently falling back to the secondary GPT. A genuinely healthy disk
     /// produces no Caution/Warning/ERROR text at all.
     pub fn is_clean(&self) -> bool {
         let out = strip_benign_warnings(&self.verify());
@@ -178,7 +178,7 @@ impl Image {
     }
 
     /// True if sgdisk explicitly flagged the *main* header or table as bad.
-    pub fn primary_flagged_bad(&self) -> bool {
+    pub fn main_flagged_bad(&self) -> bool {
         let out = self.verify();
         out.contains("Main header: ERROR")
             || out.contains("Main partition table: ERROR")
@@ -242,7 +242,7 @@ pub fn deck_image() -> Image {
     image_from_dumps("tests/data/deck", "head.bin", "deck")
 }
 
-/// The disk in the state it was actually found in: the primary header has
+/// The disk in the state it was actually found in: the main GPT header has
 /// a valid CRC but points its entry array at LBA 2016 instead of 2.
 pub fn deck_corrupt_image() -> Image {
     image_from_dumps("tests/data/deck-corrupt", "head-broken.bin", "deckbad")

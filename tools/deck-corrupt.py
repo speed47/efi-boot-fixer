@@ -3,7 +3,7 @@
 
 This exists so the repair path in bootfixr can be tested against the real
 failure rather than a synthetic one. The damage it inflicts is exactly what
-was found on the affected disk: `PartitionEntryLBA` in the primary header
+was found on the affected disk: `PartitionEntryLBA` in the main GPT header
 moved from 2 to `FirstUsableLBA - entry_array_blocks`, with the header CRC
 recomputed so the header still verifies. Six bytes. Nothing else changes,
 and no partition data is touched.
@@ -16,7 +16,7 @@ and no partition data is touched.
 
 `break` refuses to run unless it has first written a snapshot it can read
 back, and unless *both* tables and the protective MBR are healthy going in
--- there is no point corrupting a disk whose backup GPT could not repair it
+-- there is no point corrupting a disk whose secondary GPT could not repair it
 afterwards.
 
 The snapshot is written in bootfixr's own archive format, so it can be
@@ -46,7 +46,7 @@ MAGIC = b"EFIGPTBK"
 VERSION = 2          # 2 added the metadata section; 1 is still readable
 MIN_VERSION = 1
 FIXED_LEN = 52
-ROLE_MBR, ROLE_PRI_ENTRIES, ROLE_PRI_HEADER, ROLE_BAK_ENTRIES, ROLE_BAK_HEADER = 1, 2, 3, 4, 5
+ROLE_MBR, ROLE_MAIN_ENTRIES, ROLE_MAIN_HEADER, ROLE_SEC_ENTRIES, ROLE_SEC_HEADER = 1, 2, 3, 4, 5
 HEALTH_HEALTHY, HEALTH_MBR_ONLY = 0, 1
 
 # Header field offsets, UEFI spec table 5.5.
@@ -283,13 +283,15 @@ def decode_meta(raw):
     return out
 
 
-def build_archive(disk, primary, backup, health):
+def build_archive(disk, main_gpt, secondary_gpt, health):
+    main_entries = disk.read(main_gpt.entry_lba, main_gpt.array_blocks)
+    sec_entries = disk.read(secondary_gpt.entry_lba, secondary_gpt.array_blocks)
     chunks = [
         (ROLE_MBR, 0, disk.read(0, 1)),
-        (ROLE_PRI_ENTRIES, primary.entry_lba, disk.read(primary.entry_lba, primary.array_blocks)),
-        (ROLE_PRI_HEADER, 1, primary.raw),
-        (ROLE_BAK_ENTRIES, backup.entry_lba, disk.read(backup.entry_lba, backup.array_blocks)),
-        (ROLE_BAK_HEADER, disk.last_block, backup.raw),
+        (ROLE_MAIN_ENTRIES, main_gpt.entry_lba, main_entries),
+        (ROLE_MAIN_HEADER, 1, main_gpt.raw),
+        (ROLE_SEC_ENTRIES, secondary_gpt.entry_lba, sec_entries),
+        (ROLE_SEC_HEADER, disk.last_block, secondary_gpt.raw),
     ]
 
     import time
@@ -300,7 +302,7 @@ def build_archive(disk, primary, backup, health):
     out += struct.pack("<I", VERSION)
     out += struct.pack("<I", SECTOR)
     out += struct.pack("<Q", disk.last_block)
-    out += primary.disk_guid
+    out += main_gpt.disk_guid
     out += struct.pack("<H", t.tm_year)
     out += bytes([t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, health])
     out += struct.pack("<I", len(chunks))
@@ -377,68 +379,68 @@ def parse_archive(blob):
 HEALTH_NAMES = {
     0: "healthy",
     1: "tables healthy, protective MBR wrong",
-    2: "PRIMARY WAS CORRUPT",
-    3: "BACKUP WAS CORRUPT",
+    2: "MAIN GPT WAS CORRUPT",
+    3: "SECONDARY GPT WAS CORRUPT",
     4: "BOTH TABLES WERE CORRUPT",
     5: "unusual (hybrid MBR or similar)",
 }
 
 ROLE_NAMES = {
     ROLE_MBR: "protective MBR",
-    ROLE_PRI_ENTRIES: "primary partition entry array",
-    ROLE_PRI_HEADER: "primary GPT header",
-    ROLE_BAK_ENTRIES: "backup partition entry array",
-    ROLE_BAK_HEADER: "backup GPT header",
+    ROLE_MAIN_ENTRIES: "main partition entry array",
+    ROLE_MAIN_HEADER: "main GPT header",
+    ROLE_SEC_ENTRIES: "secondary partition entry array",
+    ROLE_SEC_HEADER: "secondary GPT header",
 }
 
 
 def survey(disk):
-    """Read and check everything. Returns (primary, backup, mbr_ok, mbr_text)."""
-    primary = Header(disk.read(1), 1, disk.last_block)
-    backup = Header(disk.read(disk.last_block), disk.last_block, disk.last_block)
-    for h in (primary, backup):
+    """Read and check everything. Returns (main, secondary, mbr_ok, mbr_text)."""
+    main_gpt = Header(disk.read(1), 1, disk.last_block)
+    secondary_gpt = Header(disk.read(disk.last_block), disk.last_block, disk.last_block)
+    for h in (main_gpt, secondary_gpt):
         if h.valid_shape:
             h.check_array(disk)
     mbr_ok, mbr_text = mbr_health(disk.read(0), disk.last_block)
-    return primary, backup, mbr_ok, mbr_text
+    return main_gpt, secondary_gpt, mbr_ok, mbr_text
 
 
-def print_survey(disk, primary, backup, mbr_ok, mbr_text):
+def print_survey(disk, main_gpt, secondary_gpt, mbr_ok, mbr_text):
     print("Device:       %s" % disk.path)
     print("Sectors:      %d x %d B = %.1f GiB" % (disk.last_block + 1, SECTOR, disk.size / 2**30))
     print("Protective MBR: %s" % mbr_text)
-    for name, h in (("Primary GPT", primary), ("Backup GPT", backup)):
+    for name, h in (("Main GPT", main_gpt), ("Secondary GPT", secondary_gpt)):
         if h.ok:
             print("%-14s: OK" % name)
         else:
             print("%-14s: PROBLEMS" % name)
             for p in h.problems:
                 print("    - %s" % p)
-    if primary.valid_shape:
+    if main_gpt.valid_shape:
         print()
-        print("Disk GUID:        %s" % guid_str(primary.disk_guid))
-        print("FirstUsableLBA:   %d" % primary.first_usable)
-        print("PartitionEntryLBA: %d" % primary.entry_lba)
+        print("Disk GUID:        %s" % guid_str(main_gpt.disk_guid))
+        print("FirstUsableLBA:   %d" % main_gpt.first_usable)
+        print("PartitionEntryLBA: %d" % main_gpt.entry_lba)
         print(
             "Entry array:      %d entries x %d B = %d sectors"
-            % (primary.num_entries, primary.entry_size, primary.array_blocks)
+            % (main_gpt.num_entries, main_gpt.entry_size, main_gpt.array_blocks)
         )
 
 
-def target_entry_lba(primary):
+def target_entry_lba(main_gpt):
     """The value the real corruption produced: FirstUsableLBA - array size."""
-    return primary.first_usable - primary.array_blocks
+    return main_gpt.first_usable - main_gpt.array_blocks
 
 
 def cmd_inspect(args):
     disk = Disk(args.device)
     try:
-        primary, backup, mbr_ok, mbr_text = survey(disk)
-        print_survey(disk, primary, backup, mbr_ok, mbr_text)
-        if primary.valid_shape:
+        main_gpt, secondary_gpt, mbr_ok, mbr_text = survey(disk)
+        print_survey(disk, main_gpt, secondary_gpt, mbr_ok, mbr_text)
+        if main_gpt.valid_shape:
             print()
-            proposed = target_entry_lba(primary)
-            if primary.entry_lba != 2:
+            proposed = target_entry_lba(main_gpt)
+            if main_gpt.entry_lba != 2:
                 print("This disk is ALREADY corrupted in the way 'break' would corrupt it.")
                 print("Use 'restore', or bootfixr's repair, to fix it.")
             elif proposed == 2:
@@ -455,8 +457,8 @@ def cmd_inspect(args):
 def snapshot(disk, path, allow_same_disk):
     """Write a verified snapshot, or raise. Nothing else touches the disk
     until this has succeeded and been read back."""
-    primary, backup, mbr_ok, mbr_text = survey(disk)
-    if not primary.ok or not backup.ok:
+    main_gpt, secondary_gpt, mbr_ok, mbr_text = survey(disk)
+    if not main_gpt.ok or not secondary_gpt.ok:
         raise Fatal(
             "refusing to snapshot a disk whose tables do not verify -- "
             "run 'inspect' to see what is wrong"
@@ -476,7 +478,7 @@ def snapshot(disk, path, allow_same_disk):
         )
 
     health = HEALTH_HEALTHY if mbr_ok else HEALTH_MBR_ONLY
-    blob = build_archive(disk, primary, backup, health)
+    blob = build_archive(disk, main_gpt, secondary_gpt, health)
 
     with open(path, "wb") as f:
         f.write(blob)
@@ -495,7 +497,7 @@ def snapshot(disk, path, allow_same_disk):
         print("    LBA %-12d %s (%d sectors)" % (lba, ROLE_NAMES.get(role, role), len(data) // SECTOR))
     if not mbr_ok:
         print("    note: protective MBR was not correct (%s) and is saved as found" % mbr_text)
-    return primary, backup
+    return main_gpt, secondary_gpt
 
 
 def same_disk(directory, device):
@@ -523,50 +525,50 @@ def cmd_save(args):
 def cmd_break(args):
     disk = Disk(args.device, write=not args.dry_run)
     try:
-        primary, backup, mbr_ok, mbr_text = survey(disk)
-        print_survey(disk, primary, backup, mbr_ok, mbr_text)
+        main_gpt, secondary_gpt, mbr_ok, mbr_text = survey(disk)
+        print_survey(disk, main_gpt, secondary_gpt, mbr_ok, mbr_text)
         print()
 
-        if not primary.ok:
-            raise Fatal("the primary GPT is already not healthy; nothing to reproduce here")
-        if not backup.ok:
+        if not main_gpt.ok:
+            raise Fatal("the main GPT is already not healthy; nothing to reproduce here")
+        if not secondary_gpt.ok:
             raise Fatal(
-                "the BACKUP GPT does not verify.\n"
-                "Corrupting the primary would leave nothing to repair from. Refusing."
+                "the SECONDARY GPT does not verify.\n"
+                "Corrupting the main GPT would leave nothing to repair from. Refusing."
             )
         if not mbr_ok:
             raise Fatal("the protective MBR is not right (%s). Refusing." % mbr_text)
-        if primary.entry_lba != 2:
-            raise Fatal("PartitionEntryLBA is already %d, not 2" % primary.entry_lba)
+        if main_gpt.entry_lba != 2:
+            raise Fatal("PartitionEntryLBA is already %d, not 2" % main_gpt.entry_lba)
 
-        proposed = target_entry_lba(primary)
+        proposed = target_entry_lba(main_gpt)
         if proposed == 2:
             raise Fatal(
                 "FirstUsableLBA is %d and the entry array is %d sectors, so the\n"
                 "arithmetic that caused the real corruption gives 2 -- the correct\n"
                 "answer. This disk cannot exhibit that failure."
-                % (primary.first_usable, primary.array_blocks)
+                % (main_gpt.first_usable, main_gpt.array_blocks)
             )
 
-        primary_snapshot, _ = snapshot(disk, args.output, args.allow_same_disk)
+        main_snapshot, _ = snapshot(disk, args.output, args.allow_same_disk)
         print()
 
-        block = bytearray(primary.raw)
+        block = bytearray(main_gpt.raw)
         struct.pack_into("<Q", block, OFF_ENTRY_LBA, proposed)
         struct.pack_into("<I", block, OFF_HEADER_CRC, 0)
-        size = max(92, min(primary.header_size, SECTOR))
+        size = max(92, min(main_gpt.header_size, SECTOR))
         struct.pack_into("<I", block, OFF_HEADER_CRC, crc32(bytes(block[:size])))
 
-        changed = [i for i in range(SECTOR) if block[i] != primary.raw[i]]
+        changed = [i for i in range(SECTOR) if block[i] != main_gpt.raw[i]]
         print("About to change %d bytes in LBA 1 of %s:" % (len(changed), disk.path))
-        print("    PartitionEntryLBA  %d -> %d   (offset 72)" % (primary.entry_lba, proposed))
+        print("    PartitionEntryLBA  %d -> %d   (offset 72)" % (main_gpt.entry_lba, proposed))
         print(
             "    HeaderCRC32        %#010x -> %#010x   (offset 16)"
-            % (primary.stored_crc, struct.unpack_from("<I", block, OFF_HEADER_CRC)[0])
+            % (main_gpt.stored_crc, struct.unpack_from("<I", block, OFF_HEADER_CRC)[0])
         )
         print()
         print("The header will still verify. The entry array is untouched at LBA 2,")
-        print("and the backup GPT is untouched, so bootfixr can repair this.")
+        print("and the secondary GPT is untouched, so bootfixr can repair this.")
         print("No partition or filesystem is modified.")
         print()
 
@@ -623,8 +625,8 @@ def cmd_show(args):
         print("    nothing: format version %d predates provenance" % archive["version"])
 
     by_role = {role: (lba, data) for role, lba, data in archive["chunks"]}
-    header = by_role.get(ROLE_PRI_HEADER, by_role.get(ROLE_BAK_HEADER))
-    array = by_role.get(ROLE_PRI_ENTRIES, by_role.get(ROLE_BAK_ENTRIES))
+    header = by_role.get(ROLE_MAIN_HEADER, by_role.get(ROLE_SEC_HEADER))
+    array = by_role.get(ROLE_MAIN_ENTRIES, by_role.get(ROLE_SEC_ENTRIES))
     if header and array:
         block = header[1]
         count = struct.unpack_from("<I", block, OFF_NUM_ENTRIES)[0]
@@ -672,13 +674,13 @@ def cmd_restore(args):
             print("WARNING: this snapshot was taken from a table that was already damaged.")
 
         by_role = {role: (lba, data) for role, lba, data in archive["chunks"]}
-        for role in (ROLE_PRI_HEADER, ROLE_BAK_HEADER):
+        for role in (ROLE_MAIN_HEADER, ROLE_SEC_HEADER):
             if role not in by_role:
                 raise Fatal("snapshot does not contain both GPT headers")
 
         # Same ordering rule the tool uses: an entry array must be on the
         # medium before any header claims it is there with a given CRC.
-        order = [ROLE_PRI_ENTRIES, ROLE_BAK_ENTRIES, None, ROLE_MBR, ROLE_PRI_HEADER, ROLE_BAK_HEADER]
+        order = [ROLE_MAIN_ENTRIES, ROLE_SEC_ENTRIES, None, ROLE_MBR, ROLE_MAIN_HEADER, ROLE_SEC_HEADER]
         for role in order:
             if role is None:
                 if not args.dry_run:
@@ -702,9 +704,9 @@ def cmd_restore(args):
             return 0
 
         print()
-        primary, backup, mbr_ok, mbr_text = survey(disk)
-        print_survey(disk, primary, backup, mbr_ok, mbr_text)
-        if primary.ok and backup.ok:
+        main_gpt, secondary_gpt, mbr_ok, mbr_text = survey(disk)
+        print_survey(disk, main_gpt, secondary_gpt, mbr_ok, mbr_text)
+        if main_gpt.ok and secondary_gpt.ok:
             print()
             print("Restored.")
     finally:

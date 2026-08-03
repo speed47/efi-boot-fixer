@@ -10,8 +10,8 @@ cargo test              # needs gdisk installed
 ```
 
 Note that `sgdisk -v` prints "No problems found" on a disk with a wrecked
-primary, because it transparently falls back to the backup and reports on the
-table it loaded. The harness therefore also requires the absence of any
+main GPT, because it transparently falls back to the secondary and reports on
+the table it loaded. The harness therefore also requires the absence of any
 `Caution`/`Warning`/`ERROR` text before calling a disk healthy.
 
 ## Under QEMU and OVMF
@@ -74,23 +74,23 @@ under firmware.
 resealing the CRCs, so the QEMU disk has the same shape as the Deck's: sgdisk
 writes 34, and the gap is the whole subject of the prevention operation.
 
-### OVMF repairs the primary GPT before your application runs
+### OVMF repairs the main GPT before your application runs
 
 Worth knowing before you spend an afternoon on it: EDK II's `PartitionDxe`
 calls `PartitionRestoreGptTable()` at connect time, which **rewrites an
-invalid primary GPT from a valid backup** before any application is loaded. So
+invalid main GPT from a valid secondary** before any application is loaded. So
 under OVMF the `zero-header` and `zero-all` modes produce a disk that is
 already fixed by the time this tool runs, and it will correctly report
-`Primary GPT: OK`. That is the firmware working, not a false negative.
+`Main GPT: OK`. That is the firmware working, not a false negative.
 
 Use `bad-mbr` to exercise the write path in QEMU, since the protective MBR is
 not restored that way. The GPT repair itself is covered by the host
 integration tests, where no firmware sits between the code and the image.
 
 This also implies something about the Deck: its firmware evidently does *not*
-do this restore, or the primary would come back healthy on its own and this
+do this restore, or the main GPT would come back healthy on its own and this
 tool would be unnecessary. If you ever run this on the Deck and it reports a
-healthy primary immediately after a failed boot, that assumption is what
+healthy main GPT immediately after a failed boot, that assumption is what
 changed.
 
 ## Testing against real hardware

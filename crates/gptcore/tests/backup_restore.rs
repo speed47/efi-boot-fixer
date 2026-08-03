@@ -49,22 +49,22 @@ fn a_healthy_deck_is_captured_whole() {
     assert_eq!(
         roles,
         vec![
-            "backup GPT header",
-            "backup partition entry array",
-            "primary GPT header",
-            "primary partition entry array",
+            "main GPT header",
+            "main partition entry array",
             "protective MBR",
+            "secondary GPT header",
+            "secondary partition entry array",
         ]
     );
 
-    let primary = archive.chunk(Role::PrimaryEntries).expect("primary array");
-    assert_eq!(primary.lba, 2);
-    assert_eq!(primary.data.len(), 32 * 512);
-    assert_eq!(archive.chunk(Role::BackupHeader).unwrap().lba, img.last_block());
+    let main = archive.chunk(Role::MainEntries).expect("main array");
+    assert_eq!(main.lba, 2);
+    assert_eq!(main.data.len(), 32 * 512);
+    assert_eq!(archive.chunk(Role::SecondaryHeader).unwrap().lba, img.last_block());
 
     // The bytes are the disk's, not a reconstruction.
-    assert_eq!(primary.data, img.read_lba(2, 32));
-    assert_eq!(archive.chunk(Role::PrimaryHeader).unwrap().data, img.read_lba(1, 1));
+    assert_eq!(main.data, img.read_lba(2, 32));
+    assert_eq!(archive.chunk(Role::MainHeader).unwrap().data, img.read_lba(1, 1));
 }
 
 #[test]
@@ -83,18 +83,18 @@ fn restoring_onto_an_untouched_disk_changes_nothing() {
 }
 
 #[test]
-fn a_wrecked_primary_is_put_back_exactly() {
+fn a_wrecked_main_gpt_is_put_back_exactly() {
     let img = deck_image();
     let before_head = img.read_lba(0, 34);
     let before_print = img.print();
     let archive = snapshot(&img);
 
-    // Destroy the primary header and its entry array outright.
+    // Destroy the main GPT header and its entry array outright.
     img.zero_lba(1, 33);
     {
         let mut disk = img.disk();
         let analysis = analyze(&mut disk, &CRC).expect("analyze");
-        assert!(analysis.primary.as_ref().is_ok_and(|t| !t.is_valid()));
+        assert!(analysis.main.as_ref().is_ok_and(|t| !t.is_valid()));
     }
 
     let mut disk = img.disk();
@@ -135,14 +135,14 @@ fn a_snapshot_of_the_real_corruption_records_that_it_was_corrupt() {
     let img = deck_corrupt_image();
     let archive = snapshot(&img);
 
-    assert_eq!(archive.health, Health::PrimaryCorrupt);
+    assert_eq!(archive.health, Health::MainCorrupt);
     assert!(!archive.health.is_clean());
     // The array really was at 2016 on this disk; the snapshot follows the
     // header rather than assuming LBA 2.
-    assert_eq!(archive.chunk(Role::PrimaryEntries).unwrap().lba, 2016);
+    assert_eq!(archive.chunk(Role::MainEntries).unwrap().lba, 2016);
 
     let text = gptcore::style::plain(&backup::describe(&archive));
-    assert!(text.contains("PRIMARY WAS CORRUPT"), "{text}");
+    assert!(text.contains("MAIN GPT WAS CORRUPT"), "{text}");
     assert!(text.contains("Restoring it reinstates the damage"), "{text}");
 }
 
@@ -190,7 +190,7 @@ fn a_restore_names_every_write_before_it_happens() {
     let described: Vec<String> = plan.writes().map(|(lba, what)| format!("{lba} {what}")).collect();
     assert_eq!(described.len(), 5, "{described:?}");
     assert!(described.iter().any(|d| d.contains("protective MBR")));
-    assert!(described.iter().any(|d| d.starts_with("1 primary GPT header")));
+    assert!(described.iter().any(|d| d.starts_with("1 main GPT header")));
 }
 
 /// A genuine version-1 file: encode with no metadata, then strip the

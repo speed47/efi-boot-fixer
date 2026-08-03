@@ -105,10 +105,10 @@ pub enum Defect {
         blocks: u64,
         last_block: u64,
     },
-    /// The primary entry array must start at LBA 2. Observed in the wild
+    /// The main entry array must start at LBA 2. Observed in the wild
     /// at 2016 (FirstUsableLBA - 32) with a correctly recomputed header
     /// CRC, so nothing but this check and the array CRC catches it.
-    PrimaryEntryLbaNotTwo {
+    MainEntryLbaNotTwo {
         found: u64,
     },
 }
@@ -158,8 +158,8 @@ impl fmt::Display for Defect {
                 "entry array at LBA {} spanning {} blocks does not fit before block {}",
                 entry_lba, blocks, last_block
             ),
-            Defect::PrimaryEntryLbaNotTwo { found } => {
-                write!(f, "primary PartitionEntryLBA is {}, must be 2", found)
+            Defect::MainEntryLbaNotTwo { found } => {
+                write!(f, "main PartitionEntryLBA is {}, must be 2", found)
             }
         }
     }
@@ -266,10 +266,10 @@ impl GptHeader {
                 last_block,
             });
         }
-        // Only the primary is pinned to LBA 2; the backup's array sits
-        // just below its header at the end of the disk.
+        // Only the main GPT is pinned to LBA 2; the secondary's array
+        // sits just below its header at the end of the disk.
         if read_from == 1 && self.partition_entry_lba != 2 {
-            out.push(Defect::PrimaryEntryLbaNotTwo { found: self.partition_entry_lba });
+            out.push(Defect::MainEntryLbaNotTwo { found: self.partition_entry_lba });
         }
         if let Some(blocks) = self.entry_array_blocks(block_size) {
             let end = self.partition_entry_lba.checked_add(blocks);

@@ -8,8 +8,8 @@ HeaderCRC32:               recomputed so the header still verifies
 ```
 
 Nothing else differs. The protective MBR, the entire entry array at LBA 2-33,
-and the backup GPT are all untouched — `gptbackup` and `gptbackupfixed` are
-byte-identical, so gdisk's repair only rewrote the primary header.
+and the secondary GPT are all untouched — `gptbackup` and `gptbackupfixed`
+are byte-identical, so gdisk's repair only rewrote the main GPT header.
 
 Two things follow, and they shaped the code:
 
@@ -17,7 +17,7 @@ Two things follow, and they shaped the code:
 GPT checker that validates only the header CRC — which is the obvious thing to
 write — reports this disk as perfectly healthy. What catches it is the
 partition-entry-array CRC (the array is read from 2016, finds nothing, and
-fails to match) and an explicit check that a primary header points at LBA 2.
+fails to match) and an explicit check that a main GPT header points at LBA 2.
 `tests/deck_corrupt.rs` asserts both, and asserts the *absence* of a header
 CRC defect so nobody later "simplifies" the check away.
 
@@ -38,8 +38,8 @@ since the first one starts at 2048 either way.
 ## Prevent recurrence
 
 That is what the "prevent recurrence" operation does. It rewrites only the two
-header blocks, and refuses unless both tables are healthy, the primary array
-is at LBA 2, the headers agree on `FirstUsableLBA`, and no partition starts
+header blocks, and refuses unless both tables are healthy, the main entry
+array is at LBA 2, the headers agree on `FirstUsableLBA`, and no partition starts
 below the proposed value. It is presented on screen as a **theory that fits
 the observed numbers exactly, not a diagnosis**, with its own separate
 confirmation, because unlike a repair it modifies a healthy table on a
@@ -65,8 +65,9 @@ sudo ./tools/deck-corrupt.py restore /dev/nvme0n1 -i /esp/BOOTFIXR/gpt-before.bi
 
 `break` refuses unless it has first written a snapshot and read it back
 through its own parser, and unless both tables *and* the protective MBR verify
-going in. The important one is the backup GPT: corrupting the primary when the
-backup could not repair it is the one outcome the script must never produce,
+going in. The important one is the secondary GPT: corrupting the main GPT when
+the secondary could not repair it is the one outcome the script must never
+produce,
 and there is a test for that refusal.
 
 The snapshot is written in bootfixr's own archive format, so it can be put
@@ -77,14 +78,14 @@ a disk image first.
 
 `tests/corrupt_script.rs` runs the script against the real Deck fixture and
 asserts that the changed bytes are exactly `512+16..19` and `512+72..73`, that
-gptcore's verdict is `PrimaryRepairable` with a `PrimaryEntryLbaNotTwo` defect
+gptcore's verdict is `MainRepairable` with a `MainEntryLbaNotTwo` defect
 and *no* header CRC defect, that the snapshot decodes with `backup::decode`,
 and that both recovery routes restore the first 34 sectors byte for byte.
 
 A snapshot written by the script has been read off an ESP and restored by the
 EFI application under OVMF. Note what that run does and does not show: it
 proves the archive is portable between the two, but not that the restore
-repaired the corruption, because OVMF had already rebuilt the primary from the
-backup before the application was loaded (see [testing.md](testing.md)). The
+repaired the corruption, because OVMF had already rebuilt the main GPT from
+the secondary before the application was loaded (see [testing.md](testing.md)). The
 byte-exact recovery is proven by the host tests, where no firmware sits in the
 way.

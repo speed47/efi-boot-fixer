@@ -12,7 +12,7 @@
 //! * whole disks only (`Media->LogicalPartition == FALSE`)
 //! * never removable media, never read-only media
 //! * never a disk carrying a hybrid MBR
-//! * never a backup table that fails structural or layout sanity checks
+//! * never a secondary GPT that fails structural or layout sanity checks
 //! * never a saved backup whose geometry does not match the disk
 //! * never a write without the operator entering the confirmation sequence
 //!
@@ -396,7 +396,7 @@ fn run_overview(boot_device: &BootDevice) {
                         "  Disk {} has a defect this tool can fix.",
                         disk.number
                     )));
-                    next.push(dim("    Partition tables (GPT) -> Repair primary GPT"));
+                    next.push(dim("    Partition tables (GPT) -> Repair main GPT"));
                 }
             }
             Err(e) => lines.push(bad(format!("      GPT: could not be read - {e}"))),
@@ -519,9 +519,9 @@ fn run_check(boot_device: &BootDevice) {
     ui::page("Check GPT (read only)", &lines);
 }
 
-/// Rebuild a corrupt primary GPT from the backup table.
+/// Rebuild a corrupt main GPT from the secondary GPT.
 fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
-    let Some(disk) = pick_disk("Repair primary GPT", boot_device) else {
+    let Some(disk) = pick_disk("Repair main GPT", boot_device) else {
         return;
     };
     let _on = ui::working_on(disk.label());
@@ -531,7 +531,7 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     };
 
     let repair = plan(analysis, &CRC);
-    if !ui::page("Repair primary GPT", &report::render(analysis, repair.as_ref())) {
+    if !ui::page("Repair main GPT", &report::render(analysis, repair.as_ref())) {
         return;
     }
     let Some(repair) = repair else {
@@ -548,7 +548,7 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     } else {
         alloc::vec![
             bad("  This REWRITES the partition table on this disk."),
-            line("  The proposed table came from the backup GPT and was"),
+            line("  The proposed table came from the secondary GPT and was"),
             line("  shown on the previous screen."),
         ]
     };
@@ -1683,8 +1683,8 @@ fn run_gpt_menu(boot_device: &BootDevice, esp_lost: &mut bool) {
         ),
         row(
             Gpt::Repair,
-            "Repair primary GPT from the backup",
-            &["Rebuild a corrupt primary table from the backup", "at the end of the disk."]
+            "Repair main GPT from the secondary",
+            &["Rebuild a corrupt main table from the secondary GPT", "at the end of the disk."]
         ),
         row(
             Gpt::Prevent,

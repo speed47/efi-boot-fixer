@@ -10,9 +10,9 @@ use gptcore::BlockDevice;
 
 const CRC: SoftCrc32 = SoftCrc32;
 
-/// Rewrite the backup table through a mutator, keeping both CRCs correct
-/// so the backup still validates and reaches the plausibility checks.
-fn patch_backup_entries(img: &Image, mutate: impl FnOnce(&mut [u8])) {
+/// Rewrite the secondary GPT through a mutator, keeping both CRCs correct
+/// so it still validates and reaches the plausibility checks.
+fn patch_secondary_entries(img: &Image, mutate: impl FnOnce(&mut [u8])) {
     let last = img.last_block();
     let raw = img.read_lba(last, 1);
     let header = GptHeader::parse(&raw).unwrap();
@@ -36,18 +36,18 @@ fn set_entry_u64(entries: &mut [u8], index: usize, field_off: usize, value: u64)
 const STARTING_LBA: usize = 32;
 const ENDING_LBA: usize = 40;
 
-/// Corrupt the primary, repair it, and assert sgdisk is satisfied and the
+/// Corrupt the main GPT, repair it, and assert sgdisk is satisfied and the
 /// table came back identical.
 fn assert_repairs(img: &Image, corrupt: impl FnOnce(&Image)) {
     let before = img.print();
     assert!(img.is_clean(), "fixture should start clean");
 
     corrupt(img);
-    assert!(!img.is_clean(), "corruption did not actually break the primary");
+    assert!(!img.is_clean(), "corruption did not actually break the main GPT");
 
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    assert_eq!(analysis.verdict, Verdict::PrimaryRepairable, "{:?}", analysis.verdict);
+    assert_eq!(analysis.verdict, Verdict::MainRepairable, "{:?}", analysis.verdict);
 
     let p = plan(&analysis, &CRC).expect("a repairable verdict must yield a plan");
     // The fields we promised to rewrite rather than copy.
@@ -73,19 +73,19 @@ fn healthy_image_needs_no_repair_and_is_not_written_to() {
 }
 
 #[test]
-fn zeroed_primary_header_is_repaired() {
+fn zeroed_main_header_is_repaired() {
     let img = steamos_image();
     assert_repairs(&img, |i| i.zero_lba(1, 1));
 }
 
 #[test]
-fn zeroed_primary_header_and_entry_array_is_repaired() {
+fn zeroed_main_header_and_entry_array_is_repaired() {
     let img = steamos_image();
     assert_repairs(&img, |i| i.zero_lba(1, 33));
 }
 
 #[test]
-fn corrupted_primary_entry_array_is_repaired() {
+fn corrupted_main_entry_array_is_repaired() {
     let img = steamos_image();
     assert_repairs(&img, |i| i.write_lba(2, &[0x5A; 512]));
 }
@@ -111,7 +111,7 @@ fn flipped_header_crc_is_repaired() {
 }
 
 #[test]
-fn primary_header_claiming_the_wrong_lba_is_repaired() {
+fn main_header_claiming_the_wrong_lba_is_repaired() {
     let img = steamos_image();
     assert_repairs(&img, |i| {
         // MyLBA says 5. Every CRC still checks out, so only the
@@ -178,13 +178,13 @@ fn both_tables_destroyed_is_unrecoverable() {
 }
 
 #[test]
-fn damaged_backup_alone_is_reported_but_not_repaired() {
+fn a_damaged_secondary_gpt_alone_is_reported_but_not_repaired() {
     let img = steamos_image();
     img.zero_lba(img.last_block(), 1);
 
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    assert_eq!(analysis.verdict, Verdict::BackupDegraded);
+    assert_eq!(analysis.verdict, Verdict::SecondaryDegraded);
     assert!(plan(&analysis, &CRC).is_none());
 }
 
@@ -195,23 +195,23 @@ fn a_disk_that_is_not_steamos_is_refused() {
 
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleBackup);
+    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleSecondary);
     assert!(matches!(analysis.rejection, Some(Implausible::Unrecognized(_))));
     assert!(plan(&analysis, &CRC).is_none());
     assert!(dev.writes().is_empty());
 }
 
 #[test]
-fn backup_with_overlapping_partitions_is_refused() {
+fn a_secondary_gpt_with_overlapping_partitions_is_refused() {
     let img = steamos_image();
-    // Drag rootfs-A back over efi-B. CRCs are fixed up, so the backup
+    // Drag rootfs-A back over efi-B. CRCs are fixed up, so the secondary GPT
     // header itself still validates: only the structural check sees this.
-    patch_backup_entries(&img, |e| set_entry_u64(e, 3, STARTING_LBA, 657_408));
+    patch_secondary_entries(&img, |e| set_entry_u64(e, 3, STARTING_LBA, 657_408));
     img.zero_lba(1, 1);
 
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleBackup);
+    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleSecondary);
     assert!(
         matches!(analysis.rejection, Some(Implausible::Structure(_))),
         "{:?}",
@@ -221,15 +221,15 @@ fn backup_with_overlapping_partitions_is_refused() {
 }
 
 #[test]
-fn backup_describing_a_partition_past_the_end_of_the_disk_is_refused() {
+fn a_secondary_gpt_describing_a_partition_past_the_end_of_the_disk_is_refused() {
     let img = steamos_image();
     let last = img.last_block();
-    patch_backup_entries(&img, |e| set_entry_u64(e, 9, ENDING_LBA, last + 4096));
+    patch_secondary_entries(&img, |e| set_entry_u64(e, 9, ENDING_LBA, last + 4096));
     img.zero_lba(1, 1);
 
     let mut dev = img.disk();
     let analysis = analyze(&mut dev, &CRC).unwrap();
-    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleBackup);
+    assert_eq!(analysis.verdict, Verdict::RefusedImplausibleSecondary);
     assert!(
         matches!(analysis.rejection, Some(Implausible::Structure(_))),
         "{:?}",
@@ -239,7 +239,7 @@ fn backup_describing_a_partition_past_the_end_of_the_disk_is_refused() {
 }
 
 #[test]
-fn hybrid_mbr_is_refused_even_though_the_primary_is_broken() {
+fn hybrid_mbr_is_refused_even_though_the_main_gpt_is_broken() {
     let img = steamos_image();
     let mut mbr = img.read_lba(0, 1);
     // A real NTFS record beside the protective one.

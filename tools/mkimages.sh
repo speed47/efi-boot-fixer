@@ -2,7 +2,7 @@
 # Build the two images the QEMU harness boots:
 #
 #   boot.img - GPT disk with an ESP holding the application
-#   test.img - SteamOS-shaped disk whose primary GPT we deliberately break
+#   test.img - SteamOS-shaped disk whose main GPT we deliberately break
 #
 # The app must exclude boot.img (it booted from it) and repair test.img.
 # No root required: the FAT filesystem is built in its own file and dd'd
@@ -97,7 +97,7 @@ case "$CORRUPTION" in
   zero-header)  dd if=/dev/zero of="$TEST" bs=512 seek=1 count=1  conv=notrunc status=none ;;
   zero-all)     dd if=/dev/zero of="$TEST" bs=512 seek=1 count=33 conv=notrunc status=none ;;
   bad-crc)      printf '\xff\xff\xff\xff' | dd of="$TEST" bs=1 seek=$((512+16)) conv=notrunc status=none ;;
-  # Protective MBR SizeInLBA (offset 446+12). Unlike a broken primary GPT,
+  # Protective MBR SizeInLBA (offset 446+12). Unlike a broken main GPT,
   # EDK II does not silently restore this, so it is the corruption that
   # actually reaches the application under OVMF. See the note below.
   bad-mbr)      printf '\x39\x30\x00\x00' | dd of="$TEST" bs=1 seek=458 conv=notrunc status=none ;;
@@ -112,7 +112,7 @@ case "$CORRUPTION" in
 esac
 
 # NOTE: OVMF (EDK II PartitionDxe, PartitionRestoreGptTable) rewrites an
-# invalid primary GPT from a valid backup at connect time, before any
+# invalid main GPT from a valid secondary at connect time, before any
 # application runs. So under OVMF the 'zero-header' modes are repaired by
 # the firmware and our app correctly reports a healthy disk. Use 'bad-mbr'
 # to exercise the write path in QEMU; the GPT repair itself is covered by
