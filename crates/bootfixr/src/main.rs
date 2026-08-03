@@ -21,7 +21,7 @@
 //! labelled `[boot]` in the picker instead.
 //!
 //! The interface is a D-pad menu because the target hardware has no
-//! keyboard; `docs/efiprobe-deck.log` records what its buttons actually
+//! keyboard; `docs/steamdeck-input.log` records what its buttons actually
 //! report.
 
 #![no_std]

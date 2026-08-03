@@ -14,7 +14,6 @@ UEFI_CARGO ?= $(if $(wildcard $(HOME)/.cargo/bin/cargo),$(HOME)/.cargo/bin/cargo
 TARGET     := x86_64-unknown-uefi
 EFI_CRATE  := crates/bootfixr
 EFI        := $(EFI_CRATE)/target/$(TARGET)/release/bootfixr.efi
-PROBE      := $(EFI_CRATE)/target/$(TARGET)/release/efiprobe.efi
 EFI_DEBUG  := $(EFI_CRATE)/target/$(TARGET)/debug/bootfixr.efi
 
 # Built with its own --target-dir so it never clobbers the release build
@@ -45,7 +44,7 @@ ESP        ?= /boot/efi
 FONT       ?= /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 FONT_DATA  := $(EFI_CRATE)/src/gfx/font_data.rs
 
-.PHONY: help build debug probe-esp test test-unit test-integration fmt fmt-check \
+.PHONY: help build debug test test-unit test-integration fmt fmt-check \
         clippy check size dist images qemu qemu-repair qemu-shots verify-image \
         font tiny install clean distclean
 
@@ -58,10 +57,9 @@ help: ## Show this help
 
 # ------------------------------------------------------------------ build
 
-build: ## Build both EFI binaries (release)
+build: ## Build the EFI application (release)
 	cd $(EFI_CRATE) && $(UEFI_CARGO) build --release --target $(TARGET)
 	@echo "built $(EFI) ($$(stat -c %s $(EFI)) bytes)"
-	@echo "built $(PROBE) ($$(stat -c %s $(PROBE)) bytes)"
 
 debug: ## Build the EFI application (debug, unstripped)
 	cd $(EFI_CRATE) && $(UEFI_CARGO) build --target $(TARGET)
@@ -81,23 +79,15 @@ size: build tiny ## Report binary sizes (bootfixr-tiny.efi before UPX compressio
 	@ls -l $(EFI) $(EFI_TINY) \
 	  | awk '{printf "%s  %d bytes (%.1f KiB)\n", $$NF, $$5, $$5/1024}'
 
-dist: build tiny ## Stage all three binaries (bootfixr-tiny.efi UPX-compressed) and a checksum
+dist: build tiny ## Stage both binaries (bootfixr-tiny.efi UPX-compressed) and a checksum
 	@mkdir -p $(DIST)
 	cp $(EFI) $(DIST)/bootfixr.efi
-	cp $(PROBE) $(DIST)/efiprobe.efi
 	cp $(EFI_TINY) $(DIST)/bootfixr-tiny.efi
 	@command -v $(UPX_BIN) >/dev/null 2>&1 || { \
 	  echo "no '$(UPX_BIN)' in PATH; install upx-ucl (crazy-max/ghaction-upx in CI) or set UPX_BIN=/path/to/upx" >&2; exit 1; }
 	$(UPX_BIN) --lzma --best $(DIST)/bootfixr-tiny.efi
-	cd $(DIST) && sha256sum bootfixr.efi efiprobe.efi bootfixr-tiny.efi > SHA256SUMS
+	cd $(DIST) && sha256sum bootfixr.efi bootfixr-tiny.efi > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
-
-probe-esp: build ## Copy just the input probe to $(ESP)/EFI/BOOT/BOOTX64.EFI
-	@test -d "$(ESP)" || { echo "no ESP mounted at $(ESP); set ESP=..." >&2; exit 1; }
-	install -D -m 0644 $(PROBE) "$(ESP)/EFI/efiprobe.efi"
-	@echo "installed $(ESP)/EFI/efiprobe.efi"
-	@echo "run it from the firmware's 'boot from file' menu;"
-	@echo "it writes efiprobe.log to the root of that same ESP." 
 
 # ------------------------------------------------------------------- test
 

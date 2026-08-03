@@ -97,11 +97,9 @@ jobs:
             exit 0
           fi
           short=$(git rev-parse --short=7 HEAD)
-          for efi in build/dist/bootfixr.efi build/dist/efiprobe.efi; do
-            grep -qa "g$short" "$efi" \
-              || { echo "$efi does not mention commit $short" >&2; exit 1; }
-            echo "ok: $efi names commit $short"
-          done
+          grep -qa "g$short" build/dist/bootfixr.efi \
+            || { echo "build/dist/bootfixr.efi does not mention commit $short" >&2; exit 1; }
+          echo "ok: build/dist/bootfixr.efi names commit $short"
 
       # Cheap guard against shipping something that is not a bootable EFI
       # application, e.g. if the target or subsystem ever changes. Covers
@@ -194,9 +192,6 @@ jobs:
           LBAs first. The disk this image was launched from is a valid target -
           that is the whole point - and is labelled \`[boot]\` in the picker.
 
-          \`efiprobe.efi\` is attached too: it only reports what the firmware
-          sees from each control, and writes nothing to any disk.
-
           If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
           UPX-compressed build with only the 12x24 font cell baked in -
           smaller on disk, at the cost of the text-size choice on the
@@ -253,9 +248,6 @@ jobs:
           sequence (LEFT RIGHT LEFT RIGHT A), and every write names the exact
           LBAs first. The disk this image was launched from is a valid target -
           that is the whole point - and is labelled \`[boot]\` in the picker.
-
-          \`efiprobe.efi\` is attached too: it only reports what the firmware
-          sees from each control, and writes nothing to any disk.
 
           If the ESP has no room to spare, \`bootfixr-tiny.efi\` is a
           UPX-compressed build with only the 12x24 font cell baked in -

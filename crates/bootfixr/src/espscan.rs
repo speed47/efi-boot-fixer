@@ -50,7 +50,6 @@ const KNOWN: &[(&str, &str)] = &[
     // this list is the one deciding where to install it, or looking for the
     // copy they installed last time.
     ("bootfixr.efi", "EFI Boot Fixer (this program)"),
-    ("efiprobe.efi", "EFI Boot Fixer input probe"),
 ];
 
 fn describe_file(name: &str) -> &'static str {

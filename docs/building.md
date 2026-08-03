@@ -17,9 +17,8 @@ already express, keep the older spelling and add a narrow
 `#[allow(unknown_lints, clippy::the_new_lint_name)]` at the call site rather
 than raising `rust-version`.
 
-`make dist` stages all three binaries — `bootfixr.efi`, `efiprobe.efi` (see
-[input.md](input.md) for what the second one is for) and `bootfixr-tiny.efi`
-— plus a `SHA256SUMS` in `build/dist`, and `make install ESP=/boot/efi`
+`make dist` stages both binaries — `bootfixr.efi` and `bootfixr-tiny.efi` —
+plus a `SHA256SUMS` in `build/dist`, and `make install ESP=/boot/efi`
 copies `bootfixr.efi` onto a mounted ESP without touching NVRAM. `make check`
 runs the same `fmt-check`, `clippy` and test suite as CI's `test` job; the
 `build` job does a bit more than `make build` alone, see the CI table below.
@@ -51,7 +50,7 @@ specimen image next to the result; see [display.md](display.md).
 | Job | Trigger | What it does |
 | --- | --- | --- |
 | `test` | every push and PR | `fmt-check`, `clippy -D warnings`, full test suite (installs `gdisk`) |
-| `build` | every push and PR | builds all three `.efi` binaries (`make dist`), asserts `bootfixr.efi` really is a PE32+ x86_64 EFI application, checks that `bootfixr.efi` and `efiprobe.efi` are stamped with the commit they were built from (`git describe` — `bootfixr-tiny.efi` is skipped, since UPX compresses that string away), uploads them as artifacts |
+| `build` | every push and PR | builds both `.efi` binaries (`make dist`), asserts `bootfixr.efi` really is a PE32+ x86_64 EFI application, checks that `bootfixr.efi` is stamped with the commit it was built from (`git describe` — `bootfixr-tiny.efi` is skipped, since UPX compresses that string away), uploads them as artifacts |
 | `continuous` | push to the default branch | deletes and recreates the `continuous` **prerelease** with the binary attached |
 | `release` | tag `v*` | creates a **draft** release with the binary attached |
 

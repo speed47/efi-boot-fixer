@@ -15,8 +15,6 @@ crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/store.rs       the tool's own snapshots, on the ESP and on any
                      removable volume attached
   src/fwcrc.rs       CRC-32 via the firmware's CalculateCrc32, with a fallback
-  src/bin/efiprobe.rs  a second EFI_APPLICATION that reports raw input/display
-                     capabilities instead of touching disks; see input.md
 tools/               image builders, the QEMU harness, the font rasteriser
 ```
 

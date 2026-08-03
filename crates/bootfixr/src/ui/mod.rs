@@ -1,7 +1,7 @@
 //! Screen handling and the operator's side of the conversation.
 //!
 //! Built for a Steam Deck in firmware, which means: no keyboard, no
-//! scrollback, and the measured input set from `docs/efiprobe-deck.log` —
+//! scrollback, and the measured input set from `docs/steamdeck-input.log` —
 //! a D-pad, A (CR), B (ESCAPE), View (TAB), and a relative pointer. Every
 //! screen therefore has to fit the display and be navigable with a D-pad.
 //!
@@ -405,7 +405,7 @@ impl Item {
 /// Lines moved by one press of up or down in a report.
 ///
 /// Not one. The Deck's D-pad repeats at about 1.8/s while held — measured,
-/// in `docs/efiprobe-deck.log` — so a line at a time makes a long report a
+/// in `docs/steamdeck-input.log` — so a line at a time makes a long report a
 /// chore to walk. Three is enough to make progress without losing your
 /// place, and left and right still move a whole screen for getting
 /// somewhere else entirely.

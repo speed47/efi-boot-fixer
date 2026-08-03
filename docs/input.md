@@ -6,36 +6,20 @@ few people have a USB-C keyboard to hand. The buttons, sticks, trackpads and
 touchscreen are the only realistic inputs, and how the firmware exposes them
 is not something to guess at.
 
-`efiprobe.efi` answers that empirically. It enumerates the input protocols the
-firmware publishes and logs every event it sees:
+That was answered empirically, by walking a scripted list of controls on real
+hardware and logging every event the firmware's input protocols reported for
+each one:
 
-| Protocol | What it would give us |
+| Protocol | What it gives us |
 | --- | --- |
 | `EFI_SIMPLE_TEXT_INPUT_PROTOCOL` | scan codes and Unicode chars, i.e. buttons mapped to keys |
 | `EFI_SIMPLE_POINTER_PROTOCOL` | relative motion from trackpads or a mouse |
 | `EFI_ABSOLUTE_POINTER_PROTOCOL` | the touchscreen, with its coordinate range |
 
-Everything goes to `efiprobe.log` **on the ESP it was launched from**, flushed
-after every line, as well as to the screen. The screen scrolls and cannot be
-copied off the device; the file can be read from Linux afterwards, and cutting
-the power keeps whatever was logged up to that moment. The probe walks 30
-guided steps at 6 seconds each plus a 20-second free-form phase, then exits on
-its own after roughly 200 seconds, because without a keyboard there may be no
-way to tell it to stop.
-
-```sh
-make probe-esp ESP=/path/to/esp     # installs EFI/efiprobe.efi
-# boot menu -> boot from file -> efiprobe.efi
-# press each control in turn, then read EFI/../efiprobe.log
-```
-
-Verified end to end under OVMF, including recovering the log file from the ESP
-afterwards.
-
 ## What a Steam Deck actually reports
 
 Measured on real hardware, firmware `Valve rev 0x10033`, UEFI 2.70. The raw
-capture is in [efiprobe-deck.log](efiprobe-deck.log).
+capture is in [steamdeck-input.log](steamdeck-input.log).
 
 | Control | Event |
 | --- | --- |
