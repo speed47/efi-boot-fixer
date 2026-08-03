@@ -26,25 +26,64 @@ USB keyboard at hand, and no USB recovery key.
 
 All driven with the D-pad, no keyboard required:
 
-- **Diagnose at a glance** — one read-only page covering every disk's
+- **Diagnose at a glance**: one read-only page covering every disk's
   partition table, the boot list and the loaders found on the ESPs.
-- **Repair a corrupt GPT** — rebuilds a broken main GPT from the secondary
+- **Repair a corrupt GPT**: rebuilds a broken main GPT from the secondary
   one, the fix for the infamous Windows 24H2 dual-boot corruption.
-- **Back up and restore GPTs** — snapshot both partition tables to the ESP,
+- **Back up and restore GPTs**: snapshot both partition tables to the ESP,
   a USB stick or an SD card, and write them back later.
-- **Inspect and fix NVRAM boot entries** — view the firmware's boot list
+- **Inspect and fix NVRAM boot entries**: view the firmware's boot list
   (including entries that fell out of it), scan the ESPs for loaders,
   register a missing one, change the default, boot something once without
   committing to it, or restore a saved boot configuration.
-- **Prevent the Windows 24H2 corruption from recurring** (experimental) — modifies
-  the primary GPT so that on the next upgrade, Windows doesn't break it (hopefully).
+- **Prevent the Windows 24H2 corruption from recurring** (experimental): modifies
+  the primary GPT so that on the next upgrade, Windows doesn't break it (hopefully),
+  more information available about the rationale behind this in [docs/corruption.md](docs/corruption.md).
+  Note that this theory might end up being wrong (Windows is closed source),
+  and it has just been tested on my hardware. You're welcome to test it, but
+  you've been warned.
+
+## Screenshots
+
+### The main menu
+
+![Main menu](docs/img/main-menu.png)
+
+### Check this machine
+
+One read-only screen checking every disk's GPT, the firmware's boot list, and
+the loaders found on the ESPs, pointing to the proper other menus if there's
+anything to fix:
+
+![Check this machine](docs/img/check-machine.png)
+
+### Repairing a corrupt GPT
+
+`PartitionEntryLBA` pointing at 2016 instead of 2 is the exact Windows 24H2
+damage described in [docs/corruption.md](docs/corruption.md). The tool reads
+both tables, says precisely what's wrong, and proposes a plan rebuilt from
+the secondary GPT:
+
+![Diagnosis: main GPT corrupt, repairable from the secondary](docs/img/repair-diagnosis.png)
+
+Nothing writes without the five-press confirmation gate:
+
+![The five-press confirmation gate](docs/img/repair-confirm.png)
+
+After confirmation, the repair is done:
+
+![Repair written and flushed](docs/img/repair-done.png)
+
+### Boot entries in NVRAM
+
+![Boot entries in NVRAM](docs/img/boot-entries.png)
 
 ## Principles
 
-- **No keyboard needed.** The Deck's buttons are the only input; the menus,
-  reports and prompts are built for a D-pad and two buttons.
-  See [docs/input.md](docs/input.md).
-- **Nothing is written by accident.** Every operation that touches a disk
+- **No keyboard needed.** The Steam Deck's buttons are the only input; the menus,
+  reports and prompts are built for a D-pad and two buttons. Because of course,
+  corruption always happens when you're not home. See [docs/input.md](docs/input.md).
+- **Conservative about modifying stuff.** Every operation that touches a disk
   shows exactly which LBAs it will overwrite and then requires a five-press
   confirmation sequence. See [docs/using.md](docs/using.md).
 - **It refuses more than it accepts.** No removable or read-only disks to
@@ -52,19 +91,8 @@ All driven with the D-pad, no keyboard required:
   snapshots. See [docs/safety.md](docs/safety.md).
 - **Snapshots you can still read years later.** Structured, checksummed,
   self-describing archives, attributed back to the right disk by
-  per-partition GUIDs. They go on the ESP, and — when a USB stick or an SD
-  card is plugged in — onto that too, which is the copy that survives losing
-  the disk. See [docs/backups.md](docs/backups.md).
-- **A theory about the cause, and a fix for it.** The infamous Windows 24H2 upgrade
-  damage on the main GPT is two bytes, and the arithmetic that produces them is reproducible.
-  See [docs/corruption.md](docs/corruption.md).
-- **It can tell you the partition table was never the problem.** A machine
-  that boots to nothing may have an intact disk and an emptied `BootOrder`
-  instead, so the tool shows the firmware's boot entries — including the ones
-  that have fallen out of the list and gone invisible — alongside the loaders
-  actually present on the ESPs, and can put a missing one back. The whole
-  boot configuration is saved to the ESP before the first change.
-  See [docs/boot.md](docs/boot.md).
+  per-partition GUIDs. They go on the ESP, and optionally on a USB stick if you
+  have one. See [docs/backups.md](docs/backups.md).
 
 ## Getting it running
 
@@ -78,6 +106,8 @@ tagged release for stability.
 If the ESP is too tight for `bootfixr.efi`, grab `bootfixr-tiny.efi` instead,
 it's the same tool, same features, but UPX-compressed and with only one font
 size. See [docs/display.md](docs/display.md).
+
+If you want to verify your download:
 
 ```sh
 sha256sum -c SHA256SUMS
