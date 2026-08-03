@@ -187,7 +187,10 @@ pub fn encode(opt: &LoadOption) -> Vec<u8> {
 
 /// Decode a `BootOrder` variable: a bare array of little-endian slots.
 pub fn decode_order(bytes: &[u8]) -> Result<Vec<u16>, DecodeError> {
-    if !bytes.len().is_multiple_of(2) {
+    // is_multiple_of() needs rustc 1.87; MSRV is 1.85, so keep the older
+    // spelling and silence the newer clippy lint that flags it.
+    #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+    if bytes.len() % 2 != 0 {
         return Err(DecodeError::OddOrderLength { len: bytes.len() });
     }
     Ok((0..bytes.len() / 2).map(|i| le_u16(bytes, i * 2)).collect())

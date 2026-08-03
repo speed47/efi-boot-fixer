@@ -66,14 +66,18 @@ impl BlockDevice for FileDisk {
     }
 
     fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), IoError> {
-        if !buf.len().is_multiple_of(self.block_size as usize) {
+        // is_multiple_of() needs rustc 1.87; MSRV is 1.85, so keep the older
+        // spelling and silence the newer clippy lint that flags it.
+        #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+        if buf.len() % self.block_size as usize != 0 {
             return Err(IoError::Unaligned);
         }
         self.file.read_exact_at(buf, lba * self.block_size as u64).map_err(|_| IoError::DeviceError)
     }
 
     fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> Result<(), IoError> {
-        if !buf.len().is_multiple_of(self.block_size as usize) {
+        #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+        if buf.len() % self.block_size as usize != 0 {
             return Err(IoError::Unaligned);
         }
         self.file

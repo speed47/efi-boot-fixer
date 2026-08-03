@@ -8,6 +8,15 @@ make build          # -> crates/bootfixr/target/x86_64-unknown-uefi/release/boot
 make                # list every target
 ```
 
+Both workspaces declare `rust-version = "1.85"`. CI's `test`/`build` jobs
+build against whatever `stable` currently is, which drifts forward every six
+weeks or so — so code that only compiles on a *recent* stable is a trap: it
+passes CI and then fails to build for anyone still on 1.85. When a newer
+stdlib API would be clippy's preferred spelling of something 1.85 can
+already express, keep the older spelling and add a narrow
+`#[allow(unknown_lints, clippy::the_new_lint_name)]` at the call site rather
+than raising `rust-version`.
+
 `make dist` stages both binaries — `bootfixr.efi` and `efiprobe.efi`, see
 [input.md](input.md) for what the second one is for — plus a `SHA256SUMS` in
 `build/dist`, and `make install ESP=/boot/efi` copies `bootfixr.efi` onto a

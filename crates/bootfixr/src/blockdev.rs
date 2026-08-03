@@ -19,7 +19,10 @@ impl UefiDisk {
             return Err("no media present");
         }
         let block_size = media.block_size();
-        if block_size < 512 || !block_size.is_multiple_of(512) || block_size > 65536 {
+        // is_multiple_of() needs rustc 1.87; MSRV is 1.85, so keep the older
+        // spelling and silence the newer clippy lint that flags it.
+        #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+        if block_size < 512 || block_size % 512 != 0 || block_size > 65536 {
             return Err("implausible block size");
         }
         // Buffers come from the global allocator, which is backed by
@@ -49,7 +52,8 @@ impl BlockDevice for UefiDisk {
     }
 
     fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), IoError> {
-        if !buf.len().is_multiple_of(self.block_size as usize) {
+        #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+        if buf.len() % self.block_size as usize != 0 {
             return Err(IoError::Unaligned);
         }
         self.io.read_blocks(self.media_id, lba, buf).map_err(|_| IoError::DeviceError)
@@ -59,7 +63,8 @@ impl BlockDevice for UefiDisk {
         if self.read_only {
             return Err(IoError::ReadOnly);
         }
-        if !buf.len().is_multiple_of(self.block_size as usize) {
+        #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+        if buf.len() % self.block_size as usize != 0 {
             return Err(IoError::Unaligned);
         }
         self.io.write_blocks(self.media_id, lba, buf).map_err(|_| IoError::DeviceError)

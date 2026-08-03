@@ -498,7 +498,10 @@ pub fn decode(bytes: &[u8], crc: &impl Crc32) -> Result<Archive, DecodeError> {
     }
 
     let block_size = le_u32(bytes, 12);
-    if block_size < 512 || !block_size.is_multiple_of(512) || block_size > 65536 {
+    // is_multiple_of() needs rustc 1.87; MSRV is 1.85, so keep the older
+    // spelling and silence the newer clippy lint that flags it.
+    #[allow(unknown_lints, clippy::manual_is_multiple_of)]
+    if block_size < 512 || block_size % 512 != 0 || block_size > 65536 {
         return Err(DecodeError::BadGeometry);
     }
     let last_block = le_u64(bytes, 16);

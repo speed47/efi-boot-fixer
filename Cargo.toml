@@ -9,3 +9,7 @@ exclude = ["crates/bootfixr"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+# Keep this buildable on the toolchain the dev sandbox pins (1.85), not just
+# on whatever CI's `stable` has drifted to. Code that needs a newer stdlib
+# API gets the older spelling plus a targeted clippy allow instead.
+rust-version = "1.85"
