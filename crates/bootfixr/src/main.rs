@@ -396,7 +396,9 @@ fn run_overview(boot_device: &BootDevice) {
                         "  Disk {} has a defect this tool can fix.",
                         disk.number
                     )));
-                    next.push(dim("    Partition tables (GPT) -> Repair main GPT from the secondary"));
+                    next.push(dim(
+                        "    Partition tables (GPT) -> Repair main GPT from the secondary",
+                    ));
                 }
             }
             Err(e) => lines.push(bad(format!("      GPT: could not be read - {e}"))),
