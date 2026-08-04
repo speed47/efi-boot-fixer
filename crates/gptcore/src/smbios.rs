@@ -225,6 +225,28 @@ fn mask_guid(guid: Guid) -> String {
     out
 }
 
+/// The product names Valve has shipped a Steam Deck under.
+const STEAM_DECK_PRODUCTS: [&str; 2] = ["Jupiter", "Galileo"];
+
+/// Whether the System Information structure names this machine a Steam Deck.
+///
+/// Checked on both manufacturer and product, not either alone: "Valve" by
+/// itself also matches a dock or other Valve peripheral that happens to
+/// publish its own table, and the product name by itself is not
+/// vendor-scoped at all. Used to decide whether the UI can promise buttons
+/// that only a Deck has — the D-pad, A, B, View — or has to name what a
+/// keyboard sends instead.
+pub fn is_steam_deck(bytes: &[u8]) -> bool {
+    let Some(system) = structures(bytes).into_iter().find(|s| s.kind == 1) else {
+        return false;
+    };
+    let is_valve = system.string_at(0x04).is_some_and(|m| m.eq_ignore_ascii_case("valve"));
+    let is_deck_product = system
+        .string_at(0x05)
+        .is_some_and(|p| STEAM_DECK_PRODUCTS.iter().any(|name| p.eq_ignore_ascii_case(name)));
+    is_valve && is_deck_product
+}
+
 /// Everything worth putting in a report, from a structure table.
 pub fn render(bytes: &[u8]) -> Vec<Line> {
     let all = structures(bytes);
@@ -351,6 +373,35 @@ mod tests {
         for wanted in ["Valve", "Jupiter", "F7A0131", "03/26/2024", "SKU9"] {
             assert!(text.contains(wanted), "no {wanted:?} in:\n{text}");
         }
+    }
+
+    #[test]
+    fn a_valve_jupiter_is_a_steam_deck() {
+        assert!(is_steam_deck(&table()));
+    }
+
+    #[test]
+    fn a_valve_galileo_is_also_a_steam_deck() {
+        let mut system = vec![1u8, 2, 3, 4];
+        system.extend_from_slice(&[0xAA; 16]);
+        system.extend_from_slice(&[6, 5, 6]);
+        let table = structure(1, 0x0100, &system, &["Valve", "Galileo", "1", "SERIAL123", "SKU9"]);
+        assert!(is_steam_deck(&table));
+    }
+
+    #[test]
+    fn a_pc_is_not_a_steam_deck() {
+        let mut system = vec![1u8, 2, 3, 4];
+        system.extend_from_slice(&[0xAA; 16]);
+        system.extend_from_slice(&[6, 5, 6]);
+        let table =
+            structure(1, 0x0100, &system, &["ASUS", "PRIME B550", "1", "SERIAL123", "SKU9"]);
+        assert!(!is_steam_deck(&table));
+
+        // Valve's own name on a product it did not put in a Deck should not
+        // match either.
+        let table = structure(1, 0x0100, &system, &["Valve", "Steam Controller", "1", "", ""]);
+        assert!(!is_steam_deck(&table));
     }
 
     /// The serial is the one field a stranger reading the thread could use

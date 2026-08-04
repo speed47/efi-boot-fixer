@@ -857,7 +857,10 @@ fn run_report(boot_device: &BootDevice, esp_lost: bool) {
     review.push(Line::blank());
     review.push(dim("  A plain text file, meant to be attached to a forum post."));
     review.push(dim("  Writing it changes nothing else on this machine."));
-    review.push(dim("  If you don't want to save it, hit [B] to abort."));
+    review.push(dim(format!(
+        "  If you don't want to save it, hit [{}] to abort.",
+        ui::key_label("B")
+    )));
     review.extend(attach_hint(&dests));
     if !ui::page(TITLE, &review) {
         return;
@@ -2182,9 +2185,8 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
 /// by an acknowledgement and not by the confirmation sequence — that is for
 /// writes.
 fn run_reboot() {
-    let lines = alloc::vec![
-        warn("  Press [A] to restart the machine now."),
-    ];
+    let lines =
+        alloc::vec![warn(format!("  Press [{}] to restart the machine now.", ui::key_label("A")))];
     if !ui::page("Reboot", &lines) {
         return;
     }
@@ -2199,9 +2201,10 @@ fn run_reboot() {
 /// Same reasoning as [`run_reboot`]: nothing is written on the way out, so
 /// an acknowledgement is enough and the confirmation sequence is not needed.
 fn run_shutdown() {
-    let lines = alloc::vec![
-        warn("  Press [A] to power off the machine now."),
-    ];
+    let lines = alloc::vec![warn(format!(
+        "  Press [{}] to power off the machine now.",
+        ui::key_label("A")
+    ))];
     if !ui::page("Shutdown", &lines) {
         return;
     }
@@ -2292,9 +2295,12 @@ fn main() -> Status {
     // up on the default entry. A timeout of zero disarms it; codes below 0x10000
     // belong to the firmware, so the code here is one of ours.
     let _ = boot::set_watchdog_timer(0, 0x1_0000, None);
+    // Whether the footer can promise a D-pad and an A, B and View button, or
+    // has to name what a keyboard sends instead.
+    let is_steam_deck = smbios::table().is_some_and(|t| gptcore::smbios::is_steam_deck(&t));
     // Settles which screen the menus are drawn on, and which way up, before
     // anything is drawn on it.
-    ui::init();
+    ui::init(is_steam_deck);
 
     let boot_device = BootDevice::resolve();
     let menu = main_menu();

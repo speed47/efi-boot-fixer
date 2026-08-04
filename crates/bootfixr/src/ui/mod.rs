@@ -31,6 +31,7 @@ pub(crate) mod term;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 use gptcore::style::{Line, Style};
 use term::{out, outln};
 use uefi::boot;
@@ -335,6 +336,38 @@ const fn hint<'a>(key: &'a str, action: &'a str) -> Hint<'a> {
     Hint { key, action }
 }
 
+/// Whether this session is running on a Steam Deck, as [`init`] settled it.
+///
+/// A Deck has a D-pad and an A, B and View button and no keyboard; anything
+/// else that reaches this firmware has a keyboard and none of those. Set
+/// once, since the SMBIOS table a machine reports does not change mid-boot.
+static STEAM_DECK: AtomicBool = AtomicBool::new(false);
+
+/// What the footer calls a button, on this machine.
+///
+/// [`poll`] already folds a keyboard's Enter, Escape, Tab and arrow keys
+/// into the same [`Input`] the Deck's pad sends, so the two are
+/// interchangeable everywhere but here: the one place that tells the
+/// operator what to press has to name what they actually have in hand.
+/// Anything not named below — `LEFT/RIGHT`, `UP/DOWN` — reads the same on
+/// both, so it passes through.
+///
+/// Public within the crate as well as used by [`footer`]: a few screens
+/// name a button in their own body text rather than only in the footer, and
+/// those have to agree with it.
+pub(crate) fn key_label(key: &str) -> &str {
+    if STEAM_DECK.load(Ordering::Relaxed) {
+        return key;
+    }
+    match key {
+        "A" => "Enter",
+        "B" => "Escape",
+        "View" => "Tab",
+        "D-pad" => "Arrows",
+        other => other,
+    }
+}
+
 /// The configure display screen's hint, where View leads there at all.
 ///
 /// On the firmware's own text console the orientation and the font belong to
@@ -368,10 +401,11 @@ fn footer(rows: usize, hints: &[Hint]) {
     body();
     let mut used = 0usize;
     for (i, hint) in hints.iter().enumerate() {
+        let key = key_label(hint.key);
         // The margin before the first, the gap between the rest, then
         // "[key] action".
         let gap = if i == 0 { 2 } else { 3 };
-        let width = gap + hint.key.chars().count() + 3 + hint.action.chars().count();
+        let width = gap + key.chars().count() + 3 + hint.action.chars().count();
         if used + width > limit {
             break;
         }
@@ -379,7 +413,7 @@ fn footer(rows: usize, hints: &[Hint]) {
             out!(" ");
         }
         paint(HINT_KEY);
-        out!("[{}]", hint.key);
+        out!("[{}]", key);
         body();
         out!(" {}", hint.action);
         used += width;
@@ -757,13 +791,17 @@ pub fn confirm_sequence(title: &str, warning: &[Line]) -> bool {
 
 // ----------------------------------------------------------------- display
 
-/// Choose a backend, and settle which way up the screen goes.
+/// Choose a backend, settle which way up the screen goes, and remember
+/// whether SMBIOS named this machine a Steam Deck.
 ///
 /// Call once, before anything else draws. The orientation guessed from the
 /// framebuffer's shape is taken as the answer and the session opens on the
 /// menu; [`display`] is where it gets argued with, at whatever point the
-/// operator decides it is wrong.
-pub fn init() {
+/// operator decides it is wrong. `is_steam_deck` settles [`key_label`] the
+/// same way, for the whole session.
+pub fn init(is_steam_deck: bool) {
+    STEAM_DECK.store(is_steam_deck, Ordering::Relaxed);
+
     // Before taking the framebuffer, not after: the firmware's console is
     // about to have its screen drawn on, and anything it puts there on the
     // way out should land where our first fill will wipe it.
