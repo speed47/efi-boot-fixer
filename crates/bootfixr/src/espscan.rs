@@ -32,9 +32,6 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::media::partition::{GptPartitionType, PartitionInfo};
 use uefi::{CString16, Handle, Identify};
 
-/// Paths a one-level sweep of `\EFI` cannot reach.
-const NESTED: &[&str] = &["\\EFI\\Microsoft\\Boot\\bootmgfw.efi"];
-
 /// What a filename means, when we recognise it.
 const KNOWN: &[(&str, &str)] = &[
     ("bootx64.efi", "default loader"),
@@ -178,68 +175,60 @@ fn file_size(root: &mut Directory, path: &str) -> Option<u64> {
     Some(file.get_boxed_info::<FileInfo>().ok()?.file_size())
 }
 
-/// Every `*.efi` directly inside `dir`, as full paths.
-fn efi_files(root: &mut Directory, dir: &str) -> Vec<String> {
-    let Some(name) = name16(dir) else {
-        return Vec::new();
-    };
-    let Ok(handle) = root.open(&name, FileMode::Read, FileAttribute::empty()) else {
-        return Vec::new();
-    };
-    let Some(mut handle) = handle.into_directory() else {
-        return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    while let Ok(Some(info)) = handle.read_entry_boxed() {
-        if info.attribute().contains(FileAttribute::DIRECTORY) {
-            continue;
-        }
-        let file = info.file_name().to_string();
-        if file.to_ascii_lowercase().ends_with(".efi") {
-            out.push(format!("{dir}\\{file}"));
-        }
+/// `dir\name`, without doubling the separator when `dir` is the root.
+fn join_path(dir: &str, name: &str) -> String {
+    if dir == "\\" {
+        format!("\\{name}")
+    } else {
+        format!("{dir}\\{name}")
     }
-    out
 }
 
-/// The directories one level under `\EFI`.
-fn vendor_dirs(root: &mut Directory) -> Vec<String> {
-    let Ok(handle) =
-        root.open(&name16("\\EFI").expect("literal"), FileMode::Read, FileAttribute::empty())
-    else {
-        return Vec::new();
+/// Every `.efi` file under `dir`, and under its subdirectories up to `depth`
+/// levels further down.
+///
+/// Called from [`probe`] with `dir = "\\"` and `depth = 3`, which is enough
+/// to reach `\EFI\Microsoft\Boot\bootmgfw.efi` — three directories deep —
+/// without that path needing to be spelled out anywhere. An ESP is not
+/// expected to have a directory tree deep or wide enough for this to be
+/// costly.
+fn efi_files_recursive(root: &mut Directory, dir: &str, depth: u32, out: &mut Vec<String>) {
+    let Some(name) = name16(dir) else {
+        return;
     };
-    let Some(mut efi) = handle.into_directory() else {
-        return Vec::new();
+    let Ok(handle) = root.open(&name, FileMode::Read, FileAttribute::empty()) else {
+        return;
+    };
+    let Some(mut handle) = handle.into_directory() else {
+        return;
     };
 
-    let mut out = Vec::new();
-    while let Ok(Some(info)) = efi.read_entry_boxed() {
-        if !info.attribute().contains(FileAttribute::DIRECTORY) {
+    let mut subdirs = Vec::new();
+    while let Ok(Some(info)) = handle.read_entry_boxed() {
+        let file = info.file_name().to_string();
+        if info.attribute().contains(FileAttribute::DIRECTORY) {
+            if file != "." && file != ".." && depth > 0 {
+                subdirs.push(file);
+            }
             continue;
         }
-        let name = info.file_name().to_string();
-        if name == "." || name == ".." {
-            continue;
+        if file.to_ascii_lowercase().ends_with(".efi") {
+            out.push(join_path(dir, &file));
         }
-        out.push(format!("\\EFI\\{name}"));
     }
-    out
+    // Dropped before recursing, so at most one directory handle from this
+    // volume is open at a time.
+    drop(handle);
+
+    for subdir in subdirs {
+        efi_files_recursive(root, &join_path(dir, &subdir), depth - 1, out);
+    }
 }
 
 /// Everything bootable-looking on one volume.
 fn probe(root: &mut Directory) -> Vec<(String, u64)> {
-    let mut paths: Vec<String> = Vec::new();
-    for dir in vendor_dirs(root) {
-        paths.extend(efi_files(root, &dir));
-    }
-    for nested in NESTED {
-        // The sweep only goes one level, so Windows' loader needs naming.
-        if !paths.iter().any(|p| p.eq_ignore_ascii_case(nested)) {
-            paths.push(nested.to_string());
-        }
-    }
+    let mut paths = Vec::new();
+    efi_files_recursive(root, "\\", 3, &mut paths);
 
     let mut out = Vec::new();
     for path in paths {
