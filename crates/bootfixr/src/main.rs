@@ -52,12 +52,14 @@ use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan};
 use gptcore::style::{bad, dim, good, key, line, title, warn, Line, Style};
 use gptcore::{bootcfg, bootopt, layout, prevent, report};
 use selfdev::BootDevice;
-use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
+use uefi::boot::{
+    self, LoadImageSource, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType,
+};
 use uefi::prelude::*;
 use uefi::proto::device_path::text::{AllowShortcuts, DisplayOnly};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::media::block::BlockIO;
-use uefi::proto::ProtocolPointer;
+use uefi::proto::{BootPolicy, ProtocolPointer};
 use uefi::Identify;
 
 const CRC: FirmwareCrc32 = FirmwareCrc32;
@@ -2214,12 +2216,116 @@ fn run_shutdown() {
     uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None);
 }
 
+/// Load and start a loader found on an ESP, right now, in this session.
+///
+/// The other way to leave: [`run_reboot`] and [`run_shutdown`] hand the
+/// machine to the firmware to sort out on the next power-up, and "Exit to
+/// the firmware" hands it to the firmware's own boot manager immediately.
+/// This hands it directly to one specific program instead, which is what
+/// "just chainload the thing I found" actually means - and it needs
+/// neither a reboot nor a NVRAM entry to do it. Nothing is written to NVRAM
+/// or to disk either way; the risk is entirely in what the loaded program
+/// itself then does, which is exactly the risk the firmware's own boot menu
+/// carries and no more.
+fn run_boot_now(boot_device: &BootDevice) {
+    const TITLE: &str = "Boot a loader now (chainloading)";
+    let state = nvram::read();
+    let scan = espscan::scan(boot_device, &known_paths(&state));
+
+    if scan.candidates.is_empty() {
+        return ui::message(
+            TITLE,
+            &alloc::vec![
+                warn("  No EFI binaries were found on any ESP."),
+                Line::blank(),
+                dim("  \"Scan the ESPs for bootloaders\" says why, if a"),
+                dim("  volume could not be read."),
+            ],
+        );
+    }
+
+    let items: Vec<ui::Item> = scan
+        .candidates
+        .iter()
+        .map(|c| {
+            let detail = alloc::vec![
+                dim(format!("  on ESP {}, {}", c.esp + 1, report::human_size(c.size))),
+                match c.registered {
+                    Some(slot) => good(format!("  registered as {}", bootopt::slot_name(slot))),
+                    None => dim(String::from("  not in NVRAM")),
+                },
+            ];
+            ui::Item::with_detail(format!("{}  {}", c.kind, c.file), detail)
+        })
+        .collect();
+    let intro = alloc::vec![
+        dim("  Every EFI binary the scan found, on any ESP."),
+        dim("  Starting one hands it control immediately."),
+    ];
+    let Some(chosen) = ui::menu(TITLE, &intro, &items, "back") else {
+        return;
+    };
+    let candidate = &scan.candidates[chosen];
+    let volume = &scan.volumes[candidate.esp];
+
+    let path_bytes = match espscan::boot_path(volume.handle, &candidate.file) {
+        Ok(p) => p,
+        Err(e) => return show_error(TITLE, e),
+    };
+    let device_path = match <&DevicePath>::try_from(path_bytes.as_slice()) {
+        Ok(p) => p,
+        Err(_) => return show_error(TITLE, String::from("the device path could not be built")),
+    };
+
+    let warning = alloc::vec![
+        key(format!("  {}  {}", candidate.kind, candidate.file)),
+        Line::blank(),
+        warn("  This hands control to that program right now."),
+        line("  A boot loader that succeeds will not return here."),
+        line("  If it fails, or exits on its own, this menu comes"),
+        line("  back and nothing about the machine has changed."),
+        Line::blank(),
+        good("  Nothing is written to NVRAM or to disk either way."),
+    ];
+    if !ui::page(TITLE, &warning) {
+        return;
+    }
+
+    // The firmware arms a five-minute watchdog before handing control to a
+    // boot option, and `main` disarmed it on the way in so a menu waiting on
+    // a keypress would not eat that timer. Handing control to a loader here
+    // is the same handoff the firmware itself makes, so it gets the same
+    // watchdog back for as long as this program is not the one running.
+    let _ = boot::set_watchdog_timer(300, 0x1_0000, None);
+    ui::finish();
+
+    let outcome = match boot::load_image(
+        boot::image_handle(),
+        LoadImageSource::FromDevicePath { device_path, boot_policy: BootPolicy::ExactMatch },
+    ) {
+        Ok(handle) => boot::start_image(handle).map_err(|e| format!("returned: {e}")),
+        Err(e) => Err(format!("could not be loaded: {e}")),
+    };
+
+    // Only reached if the loaded image gave control back instead of taking
+    // the machine over, so there is a menu to return to and a watchdog to
+    // disarm again on its behalf.
+    let _ = boot::set_watchdog_timer(0, 0x1_0000, None);
+    ui::redisplay();
+
+    match outcome {
+        Ok(()) => show_note(TITLE, format!("{} exited without an error.", candidate.file)),
+        Err(e) => show_error(TITLE, format!("{} {e}", candidate.file)),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Main {
     Overview,
     Report,
     Gpt,
     Nvram,
+    BootNow,
     Reboot,
     Shutdown,
     Exit,
@@ -2234,10 +2340,10 @@ enum Main {
 /// could see. The overview is first because it is what answers the question
 /// someone arrives with, and the report sits directly under it: it is the
 /// same reading written down in full, for the person who will help rather
-/// than the one holding the machine. A separator sets the last three rows
+/// than the one holding the machine. A separator sets the last four rows
 /// apart from those: they are not things the program does to a disk, they
-/// are ways to leave — restarted, powered off, or handed back to the
-/// firmware.
+/// are ways to leave — to one specific program, restarted, powered off, or
+/// handed back to the firmware in general.
 fn main_menu() -> Menu<Main> {
     Menu::new(alloc::vec![
         row(
@@ -2272,6 +2378,14 @@ fn main_menu() -> Menu<Main> {
             ]
         ),
         separator(),
+        row(
+            Main::BootNow,
+            "Boot a loader now (chainloading)",
+            &[
+                "Start a .efi file found on an ESP immediately.",
+                "No reboot, nothing written to NVRAM or to disk."
+            ]
+        ),
         row(
             Main::Reboot,
             "Reboot",
@@ -2335,6 +2449,7 @@ fn main() -> Status {
             Some(Main::Report) => run_report(&boot_device, esp_lost),
             Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
             Some(Main::Nvram) => run_nvram_menu(&boot_device, &mut boot_snapshot, esp_lost),
+            Some(Main::BootNow) => run_boot_now(&boot_device),
             // Only comes back if the reboot/shutdown was not confirmed.
             Some(Main::Reboot) => run_reboot(),
             Some(Main::Shutdown) => run_shutdown(),

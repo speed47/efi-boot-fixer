@@ -40,6 +40,14 @@ The NVRAM screens add their own, and touch no disk at all:
 - the same confirmation sequence applies, including to `BootNext`, which
   reverts itself and could have been exempted
 
+"Boot a loader now (chainloading)" touches neither NVRAM nor a disk — it loads and starts a
+candidate the scan found directly, in memory, for this session only — so it
+gets a single acknowledgement rather than the confirmation sequence, the same
+as Reboot and Shutdown. What it hands control to is not vetted beyond what
+`espscan` already reports: an unrecognised `.efi` is offered like any other,
+because refusing to start it would just be the type-GUID mistake pointed at a
+different list. See [boot.md](boot.md#booting-a-loader-immediately).
+
 ## Not excluding the boot disk
 
 Earlier versions refused to write to the disk this image booted from, and

@@ -191,6 +191,18 @@ pub fn finish() {
     term::hand_back();
 }
 
+/// Re-detect the display after control briefly left the program.
+///
+/// A chainloaded image that returns instead of taking the machine over is
+/// free to have called `SetMode` on the GOP first, so the framebuffer this
+/// program cached before handing control over cannot be trusted. This is
+/// the same probe [`init`] does, run again rather than once: cheap, and it
+/// is what makes the menu safe to redraw afterwards.
+pub fn redisplay() {
+    hide_cursor();
+    term::init();
+}
+
 /// Clip to the display width.
 ///
 /// A device path is routinely longer than 80 columns, and letting it wrap

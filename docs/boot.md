@@ -109,6 +109,47 @@ with no hard-drive node at all — a PXE boot, the firmware's setup
 application, the built-in shell — matches nothing, and is reported as
 matching nothing rather than guessed at.
 
+## Booting a loader immediately
+
+"Boot a loader now (chainloading)", on the main menu, hands control to any candidate the
+scan found — registered in NVRAM or not — right away, in the current
+session. It exists next to "Boot something once" rather than instead of it:
+that operation queues an *existing* `Boot####` for the next reset by writing
+`BootNext`, which is the safe way to try an entry that is already registered
+because a failure just means the boot after it is the old default again.
+This one skips NVRAM and the reset entirely and goes straight to a specific
+file, which is what is actually wanted when the loader in question is not
+registered yet, or the machine cannot get through a reboot cleanly to try it.
+
+It calls `boot::load_image` with the same full device path
+[`espscan::boot_path`](../crates/bootfixr/src/espscan.rs) builds for
+registering an entry — `HD()` node plus `File()` node, taken from the
+firmware's own path to the partition rather than assembled from a guessed
+one — and then `boot::start_image`. Nothing is written to NVRAM or to a
+disk either way; the only thing that changes is what is running.
+
+Two details this path has to get right that a reboot would have handled for
+free:
+
+- **The watchdog.** `main` disarms the five-minute boot watchdog on the way
+  in, precisely so a menu waiting on a keypress does not eat it — see
+  `main()` in [main.rs](../crates/bootfixr/src/main.rs). Hopping straight to
+  `start_image` is the same handoff the firmware's own boot manager makes
+  before trying a `Boot####` entry, so the watchdog is rearmed first, to the
+  same five minutes and the same firmware-reserved code, and disarmed again
+  only if control comes back.
+- **The display.** A loader that fails, or is not a boot loader at all, can
+  still have called `SetMode` on the GOP before giving control back, which
+  leaves the framebuffer this program cached before the handoff untrustworthy.
+  `ui::redisplay` reruns the same probe `ui::init` does at startup rather than
+  assuming the old geometry still holds.
+
+A loader that succeeds does not return here — it calls
+`ExitBootServices` itself and this program's remaining state stops mattering.
+One that fails, or that turns out to be some other kind of `.efi` entirely,
+comes back to the menu exactly the way a firmware boot attempt that failed
+would fall through to the next entry.
+
 ## Reading NVRAM from the host
 
 `tools/dump-efivars.py` walks an OVMF varstore image from outside the

@@ -42,6 +42,8 @@ All driven with the D-pad, no keyboard required:
   (including entries that fell out of it), scan the ESPs for loaders,
   register a missing one, change the default, boot something once without
   committing to it, or restore a saved boot configuration.
+- **Boot a loader right now**: chainload any `.efi` file found on an ESP
+  immediately, without modifying anything.
 - **Prevent the Windows 24H2 corruption from recurring** (experimental): modifies
   the primary GPT so that on the next upgrade, Windows doesn't break it (hopefully),
   more information available about the rationale behind this in [docs/corruption.md](docs/corruption.md).
