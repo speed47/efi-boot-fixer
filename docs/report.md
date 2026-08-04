@@ -1,6 +1,6 @@
 # The diagnostic report
 
-`Save a diagnostic report` writes everything this machine will say into one
+`Generate a diagnostic report` writes everything this machine will say into one
 plain text file: `\BOOTFIXR\diag-001.txt`, `diag-002.txt`, ... It reads the
 disks, the variable store, the ESPs and the volumes, and writes nothing but
 that file.

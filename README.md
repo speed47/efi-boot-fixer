@@ -28,7 +28,7 @@ All driven with the D-pad, no keyboard required:
 
 - **Diagnose at a glance**: one read-only page covering every disk's
   partition table, the boot list and the loaders found on the ESPs.
-- **Save a diagnostic report**: everything the machine will say — what
+- **Generate a diagnostic report**: everything the machine will say — what
   SMBIOS calls it (with the serial numbers masked), every GPT header field,
   every partition GUID, every boot entry, the Secure Boot state, the whole
   variable store — to a text file on the ESP
@@ -157,7 +157,7 @@ So obviously, it is advised to copy it to your ESP even if everything works for 
   there if it comes out wrong or you want the text bigger.
 - Start with **Check this machine** — it writes nothing, looks at everything,
   and ends by naming the menu that holds the fix for what it found.
-- If you're going to ask anyone for help, **Save a diagnostic report** puts
+- If you're going to ask anyone for help, **Generate a diagnostic report** puts
   everything the machine will say into a text file on the ESP or a USB stick.
   Attach that to your post instead of answering questions one at a time.
 - Then **Partition tables (GPT) → Back up both GPTs**, before anything that

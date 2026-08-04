@@ -172,7 +172,7 @@ drive() {
             # saved: A continues past the report page, the destination menu
             # is only offered with USB=1 (see 'report-usb'), then A accepts
             # the review page and A dismisses the result.
-            keys "$DOWN" "$A"                       # Save a diagnostic report
+            keys "$DOWN" "$A"                       # Generate a diagnostic report
             keys "$DOWN" "$DOWN" "$RIGHT"           # scroll it, then a screen
             keys "$A"                               # continue to saving
             keys "$A" "$A"                          # review page, result

@@ -86,7 +86,7 @@ fn preamble() -> Vec<Line> {
         warn("  BEFORE PUBLISHING IT: there are no passwords here and nothing"),
         warn("  off your filesystems, and the serial numbers and system UUID"),
         warn("  below are masked. It does still identify this machine, by its"),
-        warn("  model, its partition GUIDs, and device paths that can could carry a"),
+        warn("  model, its partition GUIDs, and device paths that can carry a"),
         warn("  USB device's serial. A boot entry can also hold a command line."),
         warn("  Feel free to trim any data that you're not comfortable publishing."),
     ]

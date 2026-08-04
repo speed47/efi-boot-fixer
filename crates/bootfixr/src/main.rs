@@ -857,6 +857,7 @@ fn run_report(boot_device: &BootDevice, esp_lost: bool) {
     review.push(Line::blank());
     review.push(dim("  A plain text file, meant to be attached to a forum post."));
     review.push(dim("  Writing it changes nothing else on this machine."));
+    review.push(dim("  If you don't want to save it, hit [B] to abort."));
     review.extend(attach_hint(&dests));
     if !ui::page(TITLE, &review) {
         return;
@@ -2182,10 +2183,7 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
 /// writes.
 fn run_reboot() {
     let lines = alloc::vec![
-        warn("  The machine restarts now."),
-        Line::blank(),
-        line("  Nothing is written by this. Anything this session"),
-        line("  changed has already been written and flushed."),
+        warn("  Press [A] to restart the machine now."),
     ];
     if !ui::page("Reboot", &lines) {
         return;
@@ -2202,10 +2200,7 @@ fn run_reboot() {
 /// an acknowledgement is enough and the confirmation sequence is not needed.
 fn run_shutdown() {
     let lines = alloc::vec![
-        warn("  The machine powers off now."),
-        Line::blank(),
-        line("  Nothing is written by this. Anything this session"),
-        line("  changed has already been written and flushed."),
+        warn("  Press [A] to power off the machine now."),
     ];
     if !ui::page("Shutdown", &lines) {
         return;
@@ -2253,7 +2248,7 @@ fn main_menu() -> Menu<Main> {
         ),
         row(
             Main::Report,
-            "Save a diagnostic report [read only]",
+            "Generate a diagnostic report [read only]",
             &[
                 "Write everything above, and a great deal more, to a",
                 "text file on the ESP or on a USB stick - to attach to",
