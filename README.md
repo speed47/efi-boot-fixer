@@ -28,6 +28,12 @@ All driven with the D-pad, no keyboard required:
 
 - **Diagnose at a glance**: one read-only page covering every disk's
   partition table, the boot list and the loaders found on the ESPs.
+- **Save a diagnostic report**: everything the machine will say — what
+  SMBIOS calls it (with the serial numbers masked), every GPT header field,
+  every partition GUID, every boot entry, the Secure Boot state, the whole
+  variable store — to a text file on the ESP
+  or a USB stick, to attach to a forum post instead of answering questions
+  one at a time. Nothing is modified to produce it.
 - **Repair a corrupt GPT**: rebuilds a broken main GPT from the secondary
   one, the fix for the infamous Windows 24H2 dual-boot corruption.
 - **Back up and restore GPTs**: snapshot both partition tables to the ESP,
@@ -89,6 +95,9 @@ After confirmation, the repair is done:
 - **It refuses more than it accepts.** No removable or read-only disks to
   repair, no hybrid MBRs, no implausible secondary GPTs, no mismatched
   snapshots. See [docs/safety.md](docs/safety.md).
+- **Everything, once, in a file.** The diagnostic report writes out what no
+  screen has room for, so helping someone does not mean a dozen rounds of
+  "and what does it say for...". See [docs/report.md](docs/report.md).
 - **Snapshots you can still read years later.** Structured, checksummed,
   self-describing archives, attributed back to the right disk by
   per-partition GUIDs. They go on the ESP, and optionally on a USB stick if you
@@ -148,6 +157,9 @@ So obviously, it is advised to copy it to your ESP even if everything works for 
   there if it comes out wrong or you want the text bigger.
 - Start with **Check this machine** — it writes nothing, looks at everything,
   and ends by naming the menu that holds the fix for what it found.
+- If you're going to ask anyone for help, **Save a diagnostic report** puts
+  everything the machine will say into a text file on the ESP or a USB stick.
+  Attach that to your post instead of answering questions one at a time.
 - Then **Partition tables (GPT) → Back up both GPTs**, before anything that
   writes. DO NOT SKIP THIS STEP. Even if you have nothing to repair now, having
   a backup is never a bad idea.

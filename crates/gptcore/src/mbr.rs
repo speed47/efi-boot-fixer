@@ -20,8 +20,14 @@ const START_CHS: [u8; 3] = [0x00, 0x02, 0x00];
 /// "Beyond CHS addressing", which is what every modern tool writes.
 const END_CHS: [u8; 3] = [0xFF, 0xFF, 0xFF];
 
+/// One of the four 16-byte partition records.
+///
+/// Public because the diagnostic report prints them verbatim: the
+/// difference between "hybrid MBR" and "protective MBR" is four rows of
+/// numbers, and someone reading a report on a forum needs the numbers
+/// rather than this file's opinion of them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) struct MbrRecord {
+pub struct MbrRecord {
     pub boot_indicator: u8,
     pub start_chs: [u8; 3],
     pub os_type: u8,
@@ -51,9 +57,24 @@ impl MbrRecord {
         buf[12..16].copy_from_slice(&self.size_in_lba.to_le_bytes());
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.os_type == 0 && self.starting_lba == 0 && self.size_in_lba == 0
     }
+}
+
+/// The four partition records, in order, or `None` if the block is short.
+///
+/// No opinion is offered here about what they mean; [`inspect`] is where
+/// that lives, and the report prints both its verdict and these.
+pub fn records(block: &[u8]) -> Option<Vec<MbrRecord>> {
+    if block.len() < 512 {
+        return None;
+    }
+    Some(
+        (0..RECORD_COUNT)
+            .map(|i| MbrRecord::parse(&block[OFF_RECORDS + i * RECORD_SIZE..]))
+            .collect(),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,9 +113,9 @@ pub fn inspect(block: &[u8], last_block: u64) -> MbrStatus {
         return MbrStatus::Absent;
     }
 
-    let records: Vec<MbrRecord> = (0..RECORD_COUNT)
-        .map(|i| MbrRecord::parse(&block[OFF_RECORDS + i * RECORD_SIZE..]))
-        .collect();
+    let Some(records) = records(block) else {
+        return MbrStatus::Absent;
+    };
 
     let protective = records.iter().position(|r| r.os_type == OS_TYPE_GPT_PROTECTIVE);
     let Some(idx) = protective else {

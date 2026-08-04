@@ -86,7 +86,7 @@ expected_effect() {
         # disk being backed up.
         none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice)
             want=no-change ;;
-        backup-usb|backup-usb-only|bootentries)
+        backup-usb|backup-usb-only|bootentries|report|report-usb)
             want=no-change ;;
         # The test disk is not attached at all, so there is nothing to say
         # about it.
@@ -152,10 +152,11 @@ keys() {
 confirm() { keys "$LEFT" "$RIGHT" "$LEFT" "$RIGHT" "$A"; }
 
 # Into the two submenus from the top level, which is where every operation
-# now lives: "Partition tables (GPT)" is the second row and "Boot entries
-# (NVRAM)" the third, below "Check this machine".
-gpt_menu()   { keys "$DOWN" "$A"; }
-nvram_menu() { keys "$DOWN" "$DOWN" "$A"; }
+# now lives. The rows above them are "Check this machine" and "Save a
+# diagnostic report", so the GPT submenu is the third row and the NVRAM one
+# the fourth.
+gpt_menu()   { keys "$DOWN" "$DOWN" "$A"; }
+nvram_menu() { keys "$DOWN" "$DOWN" "$DOWN" "$A"; }
 
 drive() {
     sleep "$BOOT_WAIT"
@@ -166,6 +167,26 @@ drive() {
             keys "$A"                               # Check this machine
             keys "$DOWN" "$DOWN"                    # scroll it
             keys "$A" "$B" ;;
+        report)                                     # the diagnostic report
+            # Second row of the main menu. The report is built, shown, then
+            # saved: A continues past the report page, the destination menu
+            # is only offered with USB=1 (see 'report-usb'), then A accepts
+            # the review page and A dismisses the result.
+            keys "$DOWN" "$A"                       # Save a diagnostic report
+            keys "$DOWN" "$DOWN" "$RIGHT"           # scroll it, then a screen
+            keys "$A"                               # continue to saving
+            keys "$A" "$A"                          # review page, result
+            keys "$B" ;;
+        report-usb)                                 # the same, to both volumes
+            # Needs USB=1: the destination menu appears between the report
+            # page and the review page, and its first row is "Save to both".
+            # Without the stick that extra A would land on the result screen
+            # and the run would end one screen short, which is the test.
+            keys "$DOWN" "$A"
+            keys "$A"                               # continue to saving
+            keys "$A"                               # save to both
+            keys "$A" "$A"                          # review page, result
+            keys "$B" ;;
         check)                                      # GPT item 1, disk 2, page
             gpt_menu
             keys "$A" "$DOWN" "$A" "$A" "$B" "$B" ;;

@@ -76,6 +76,22 @@ can have come from nowhere but the stick. After a `backup-usb` there would be
 a copy on the ESP too, and — since the launch volume is listed first — that is
 the row it would land on, testing the path that already had a walk.
 
+The `report` and `report-usb` walks save a diagnostic report, and the file
+they leave behind is the whole assertion — it is the one output of this tool
+that can be read directly rather than inferred from a disk digest:
+
+```sh
+make images
+USB=1 ./tools/run-qemu.sh build/images report-usb         # to both places
+mcopy -n -i build/images/usb.img ::/BOOTFIXR/diag-001.txt /dev/stdout
+```
+
+Worth reading in full after any change to what it gathers: a firmware that
+answers a protocol differently shows up there as a missing section rather
+than as a build failure. `report` without `USB=1` writes to the ESP alone
+and skips the destination menu, which is the shape of the run on hardware
+with nothing plugged in. See [report.md](report.md).
+
 `ONE_DISK=1` leaves `test.img` off the machine, which is the only way to
 exercise the picker being skipped — the shape of the hardware this tool is
 actually for. The `check-one` walk presses once where two presses would

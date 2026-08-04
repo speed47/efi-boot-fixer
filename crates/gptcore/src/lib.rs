@@ -21,6 +21,7 @@ pub mod backup;
 pub mod bootcfg;
 pub mod bootopt;
 pub mod crc;
+pub mod diag;
 pub mod disk;
 pub mod entry;
 pub mod guid;
@@ -30,6 +31,7 @@ pub mod mbr;
 pub mod prevent;
 pub mod repair;
 pub mod report;
+pub mod smbios;
 pub mod style;
 
 pub use crc::{Crc32, SoftCrc32};

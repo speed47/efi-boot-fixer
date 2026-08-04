@@ -67,6 +67,28 @@ fn get(name: &CStr16) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+/// The size of any variable, in any namespace, without reading it.
+///
+/// `GetVariable` with a zero-length buffer answers `BUFFER_TOO_SMALL` and
+/// reports the size it wanted in the error payload. That is the documented
+/// way to ask, and the only one that does not allocate — which matters for
+/// the two callers that ask it: the diagnostic report walks the whole store,
+/// and `dbx` alone can be tens of kilobytes of revocation hashes that mean
+/// nothing to anybody diagnosing a boot failure.
+///
+/// `Ok(None)` is "not present".
+pub fn size_of(name: &CStr16, vendor: &VariableVendor) -> Result<Option<usize>, String> {
+    match runtime::get_variable(name, vendor, &mut []) {
+        // An empty variable does not exist — setting one with no data
+        // deletes it — so this branch should be unreachable. It is answered
+        // honestly rather than treated as an error.
+        Ok((data, _)) => Ok(Some(data.len())),
+        Err(e) if e.status() == Status::BUFFER_TOO_SMALL => Ok(e.data().or(Some(0))),
+        Err(e) if e.status() == Status::NOT_FOUND => Ok(None),
+        Err(e) => Err(err("cannot read", e.status())),
+    }
+}
+
 /// A `u16` variable: `BootCurrent`, `BootNext`, `Timeout`.
 ///
 /// A variable of the wrong size is treated as absent rather than guessed

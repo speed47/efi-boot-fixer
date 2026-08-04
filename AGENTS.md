@@ -14,8 +14,11 @@ crates/bootfixr/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
   src/ui/            menus, and the two backends they can be drawn on
   src/gfx/           framebuffer, rotation, baked font, character console
   src/nvram.rs       reading Boot####/BootOrder out of the variable store
+  src/secureboot.rs  the Secure Boot flags and key databases, read-only
+  src/smbios.rs      copying the SMBIOS table out of firmware memory
   src/store.rs       our own files, on the ESP and on removable media
   src/espscan.rs     finding bootloaders on the ESPs (not src/store.rs)
+  src/diag.rs        the firmware half of the diagnostic report
 tools/               image builders, the QEMU harness, the font rasteriser
 docs/                the long-form reasoning that used to be in the README
 ```
@@ -134,7 +137,18 @@ queued input first. See [docs/input.md](docs/input.md).
   snapshot a later build refuses is worthless.
 - Colour is decided where a line is written (`gptcore::style::Style`), never
   by inspecting text in the UEFI layer.
-- Snapshot names count up from the highest present and never fill a gap.
+- SMBIOS serial numbers, asset tags and the system UUID are **masked** in
+  the diagnostic report (`gptcore::smbios::mask`), keeping the length and
+  three characters. Nothing in the tool may describe the file as anonymous:
+  partition GUIDs, `UsbWwid()` path nodes and firmware-built boot entry
+  descriptions still identify the machine. See [docs/report.md](docs/report.md).
+- The diagnostic report is **not** wrapped to any width, unlike every screen.
+  Its reader is a forum thread, not a 7-inch panel, and a device path broken
+  across three lines cannot be searched for or diffed. See
+  [docs/report.md](docs/report.md).
+- Snapshot names count up from the highest present and never fill a gap. So
+  do diagnostic reports (`diag-NNN.txt`), which share the directory and the
+  numbering pass with them.
 - A snapshot written to two destinations gets **one name**, numbered from
   what is in use on every volume the tool can see — not just the
   destinations, or saving to one volume now and another later yields two

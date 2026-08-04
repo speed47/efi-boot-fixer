@@ -14,7 +14,8 @@ EFI Boot Fixer for Steam Deck
   version 0.1.0+3.g1a2b3c4
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
-  Check this machine (read only)                     <- highlighted
+  Check this machine [read only]                     <- highlighted
+   Save a diagnostic report [read only]
    Partition tables (GPT) ...
    Boot entries (NVRAM) ...
 
@@ -31,11 +32,13 @@ EFI Boot Fixer for Steam Deck
 
 ## The shape of the menus
 
-One diagnostic, two doors, and the ways out. Operations are grouped by what
+Two diagnostics, two doors, and the ways out. Operations are grouped by what
 they act on, and each group is ordered by what it costs to be wrong:
 
 ```
-Check this machine (read only)
+Check this machine [read only]
+Save a diagnostic report [read only]
+
 Partition tables (GPT)                      Boot entries (NVRAM)
   Check a disk's GPT                          View the boot entries
   Back up both GPTs to a file                 Scan the ESPs for bootloaders
@@ -57,6 +60,11 @@ nothing, and ends by naming the submenu that holds the fix for whatever it
 found. It exists because the question someone arrives with is not "is my GPT
 valid" but "why will this thing not boot", and answering that used to mean
 knowing in advance which half of the tool to look in.
+
+**"Save a diagnostic report" is the same reading, written down in full.** The
+screen above it is deliberately short, because a screen that says everything
+says nothing on a 7-inch panel; the report leaves nothing out, and goes to a
+text file meant to be attached to a forum post. See [report.md](report.md).
 
 Nothing is more than two rows deep: the row that opens a submenu, then the
 operation. The rows ending in `...` are the doors; the rest do something.

@@ -30,12 +30,15 @@
 extern crate alloc;
 
 mod blockdev;
+mod diag;
 mod diskinfo;
 mod espscan;
 mod fwcrc;
 mod gfx;
 mod nvram;
+mod secureboot;
 mod selfdev;
+mod smbios;
 mod store;
 mod ui;
 
@@ -489,7 +492,7 @@ fn run_overview(boot_device: &BootDevice) {
     }
     lines.push(Line::blank());
     lines.push(good("  Nothing was written. This screen never modifies anything."));
-    ui::page("Check this machine (read only)", &lines);
+    ui::page("Check this machine [read only]", &lines);
 }
 
 /// Read-only: say what is wrong, write nothing, offer nothing.
@@ -790,6 +793,17 @@ fn boot_name(taken: &[String]) -> Result<String, String> {
     })
 }
 
+/// The next free `diag-NNN.txt`, given every name already in use.
+fn diag_name(taken: &[String]) -> Result<String, String> {
+    gptcore::diag::next_name(taken).ok_or_else(|| {
+        format!(
+            "\\{}\\ already holds diag-{}.txt; delete some reports first",
+            store::DIR,
+            gptcore::diag::MAX_SEQUENCE
+        )
+    })
+}
+
 /// Every volume worth looking for saved files on.
 ///
 /// Reading asks no question: a snapshot the operator saved to a stick is
@@ -799,6 +813,81 @@ fn source_volumes() -> Vec<store::Volume> {
     let mut all = alloc::vec![store::Volume::boot()];
     all.extend(store::removable());
     all
+}
+
+/// Write everything this machine will say into one plain text file.
+///
+/// The screens this tool is made of each answer one question well and drop
+/// everything else, because that is what a 7-inch panel with no scrollback
+/// forces. This writes the whole picture instead — see [`diag`] — for the
+/// person who will read about the machine rather than stand in front of it.
+///
+/// It is shown before it is saved, and saved through exactly the same
+/// destination menu as a snapshot: an ESP-only copy is no use to somebody
+/// whose machine will not boot, and the answer to that is a USB stick, which
+/// is a question [`choose_destinations`] already knows how to ask.
+fn run_report(boot_device: &BootDevice, esp_lost: bool) {
+    const TITLE: &str = "Diagnostic report";
+    if esp_lost && !warn_esp_may_be_gone() {
+        return;
+    }
+
+    let lines = diag::build(boot_device);
+    let text = gptcore::diag::to_text(&lines);
+
+    // Offered on screen first. The whole report is here already, it costs
+    // nothing to show, and an operator who only wanted to read it has got
+    // what they came for without writing a file at all.
+    if !ui::page("Diagnostic report (read only)", &lines) {
+        return;
+    }
+
+    let Some(dests) = choose_destinations("Where should the report go?") else {
+        return;
+    };
+
+    let mut review = alloc::vec![
+        line(format!("  {} lines, {} bytes.", lines.len(), text.len())),
+        Line::blank(),
+        line(format!("  It will be written to \\{}\\ on:", store::DIR)),
+    ];
+    for volume in &dests {
+        review.extend(volume_lines(volume));
+    }
+    review.push(Line::blank());
+    review.push(dim("  A plain text file, meant to be attached to a forum post."));
+    review.push(dim("  Writing it changes nothing else on this machine."));
+    review.extend(attach_hint(&dests));
+    if !ui::page(TITLE, &review) {
+        return;
+    }
+
+    let written = match write_snapshot(&dests, diag_name, text.as_bytes()) {
+        Ok(written) => written,
+        Err(e) => return show_error("Diagnostic report FAILED", e),
+    };
+    if !written.any() {
+        let mut lines = alloc::vec![bad("  Nothing was written:")];
+        lines.extend(written.lines());
+        return ui::message("Diagnostic report FAILED", &lines);
+    }
+
+    let mut lines = alloc::vec![good("  Saved as:")];
+    lines.extend(written.lines());
+    lines.push(Line::blank());
+    lines.push(dim("  Copy it off this machine and attach it whole. It holds no"));
+    lines.push(dim("  passwords and nothing off your filesystems, and the serial"));
+    lines.push(dim("  numbers and system UUID in it are masked."));
+    lines.push(Line::blank());
+    // Said here, on the screen, and not only in the file: this is the
+    // moment somebody decides to post it in public, and the docs are not
+    // in front of them. Masking the serial does not make the file
+    // anonymous, and saying that it does would be worse than saying
+    // nothing.
+    lines.push(warn("  It still identifies this machine - by its model, its"));
+    lines.push(warn("  partition GUIDs, and device paths that can carry a USB"));
+    lines.push(warn("  device's serial. A boot entry can also hold a command line."));
+    ui::message(TITLE, &lines);
 }
 
 /// Save both GPTs to the ESP, to removable media, or to both.
@@ -2130,6 +2219,7 @@ fn run_shutdown() {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Main {
     Overview,
+    Report,
     Gpt,
     Nvram,
     Reboot,
@@ -2137,25 +2227,37 @@ enum Main {
     Exit,
 }
 
-/// The top level: one diagnostic, two doors, and the ways out.
+/// The top level: two diagnostics, two doors, and the ways out.
 ///
 /// Grouped by what an operation acts on rather than by the order the
 /// features were built in. The version before this had five GPT operations
 /// flat and five NVRAM operations behind a submenu, so two halves of the
 /// same tool sat at different depths for no reason anyone reading the menu
 /// could see. The overview is first because it is what answers the question
-/// someone arrives with. A separator sets the last three rows apart from
-/// it: they are not things the program does to a disk, they are ways to
-/// leave — restarted, powered off, or just handed back to the firmware.
+/// someone arrives with, and the report sits directly under it: it is the
+/// same reading written down in full, for the person who will help rather
+/// than the one holding the machine. A separator sets the last three rows
+/// apart from those: they are not things the program does to a disk, they
+/// are ways to leave — restarted, powered off, or handed back to the
+/// firmware.
 fn main_menu() -> Menu<Main> {
     Menu::new(alloc::vec![
         row(
             Main::Overview,
-            "Check this machine (read only)",
+            "Check this machine [read only]",
             &[
                 "This will check every disk's partition table,",
                 "the firmware's boot list, and what is on the",
                 "EFI System Partitions (ESPs)."
+            ]
+        ),
+        row(
+            Main::Report,
+            "Save a diagnostic report [read only]",
+            &[
+                "Write everything above, and a great deal more, to a",
+                "text file on the ESP or on a USB stick - to attach to",
+                "a forum post rather than answer questions one at a time."
             ]
         ),
         row(
@@ -2229,6 +2331,7 @@ fn main() -> Status {
 
         match menu.show(APP_NAME, &intro, "exit") {
             Some(Main::Overview) => run_overview(&boot_device),
+            Some(Main::Report) => run_report(&boot_device, esp_lost),
             Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
             Some(Main::Nvram) => run_nvram_menu(&boot_device, &mut boot_snapshot, esp_lost),
             // Only comes back if the reboot/shutdown was not confirmed.
