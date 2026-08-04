@@ -200,6 +200,8 @@ pub fn mask(value: &str) -> String {
 /// reads the report.
 fn is_placeholder(value: &str) -> bool {
     value.eq_ignore_ascii_case("unknown")
+        || value.eq_ignore_ascii_case("standard")
+        || value.eq_ignore_ascii_case("to be filled by o.e.m.")
 }
 
 /// The same, for a UUID: the first group stands, the rest goes.
@@ -373,6 +375,32 @@ mod tests {
         let table = structure(1, 0x0100, &system, &["Valve", "Jupiter", "1", "Unknown", "SKU9"]);
         let text = plain(&render(&table));
         assert!(text.contains("serial            : Unknown"), "{text}");
+        assert!(!text.contains("(masked)"), "{text}");
+    }
+
+    /// `Standard` and `To Be Filled By O.E.M.` are other common firmware
+    /// placeholders for an unset serial, treated the same as `Unknown`.
+    #[test]
+    fn other_placeholder_serials_are_not_masked() {
+        let mut system = vec![1u8, 2, 3, 4];
+        system.extend_from_slice(&[0xAA; 16]);
+        system.extend_from_slice(&[6, 5, 6]);
+        let table = structure(1, 0x0100, &system, &["Valve", "Jupiter", "1", "Standard", "SKU9"]);
+        let text = plain(&render(&table));
+        assert!(text.contains("serial            : Standard"), "{text}");
+        assert!(!text.contains("(masked)"), "{text}");
+
+        let mut system = vec![1u8, 2, 3, 4];
+        system.extend_from_slice(&[0xAA; 16]);
+        system.extend_from_slice(&[6, 5, 6]);
+        let table = structure(
+            1,
+            0x0100,
+            &system,
+            &["Valve", "Jupiter", "1", "To Be Filled By O.E.M.", "SKU9"],
+        );
+        let text = plain(&render(&table));
+        assert!(text.contains("serial            : To Be Filled By O.E.M."), "{text}");
         assert!(!text.contains("(masked)"), "{text}");
     }
 
