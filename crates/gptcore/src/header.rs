@@ -85,6 +85,14 @@ pub enum Defect {
         stored: u64,
         last_block: u64,
     },
+    /// The pointer is in range but not where this header's role puts it:
+    /// the main header's alternate is the last block, the secondary's is
+    /// LBA 1. A stale clone or a partial write leaves exactly this — both
+    /// CRCs valid, the pair pointing somewhere that is not each other.
+    AlternateLbaWrongForRole {
+        stored: u64,
+        expected: u64,
+    },
     EntrySizeInvalid {
         found: u32,
     },
@@ -136,6 +144,9 @@ impl fmt::Display for Defect {
             }
             Defect::AlternateLbaOutOfRange { stored, last_block } => {
                 write!(f, "AlternateLBA {} is outside the disk (last block {})", stored, last_block)
+            }
+            Defect::AlternateLbaWrongForRole { stored, expected } => {
+                write!(f, "AlternateLBA is {}, must be {} for this header", stored, expected)
             }
             Defect::EntrySizeInvalid { found } => write!(
                 f,
@@ -250,6 +261,20 @@ impl GptHeader {
         }
         if self.alternate_lba == 0 || self.alternate_lba > last_block {
             out.push(Defect::AlternateLbaOutOfRange { stored: self.alternate_lba, last_block });
+        } else {
+            // The two headers must point at each other, not merely at
+            // something on the disk. The role comes from where the header
+            // was read, not from its own MyLBA, which is itself checked
+            // above; a one-block disk cannot tell the roles apart and is
+            // skipped.
+            let expected = match read_from {
+                1 if last_block > 1 => Some(last_block),
+                lba if lba == last_block && last_block > 1 => Some(1),
+                _ => None,
+            };
+            if let Some(expected) = expected.filter(|e| self.alternate_lba != *e) {
+                out.push(Defect::AlternateLbaWrongForRole { stored: self.alternate_lba, expected });
+            }
         }
         #[allow(unknown_lints, clippy::manual_is_multiple_of)]
         if self.size_of_partition_entry < 128 || self.size_of_partition_entry % 8 != 0 {
@@ -455,6 +480,38 @@ mod tests {
         assert!(GptHeader::parse(&[0u8; 91]).is_none());
         assert!(GptHeader::parse(&[]).is_none());
         assert!(GptHeader::parse(&[0u8; 92]).is_some());
+    }
+
+    /// Both headers must point at each other. In range is not enough: a
+    /// stale clone or a half-written pair has a plausible AlternateLBA
+    /// that simply is not the other header, and both CRCs still hold.
+    #[test]
+    fn an_alternate_lba_that_is_not_the_other_header_is_a_defect() {
+        let last_block = 1000u64;
+        let wrong_for = |read_from: u64, alternate: u64, expected: u64| {
+            let mut h = sample_header();
+            h.my_lba = read_from;
+            h.alternate_lba = alternate;
+            let mut defects = Vec::new();
+            h.validate_fields(read_from, last_block, 512, &mut defects);
+            assert!(
+                defects.contains(&Defect::AlternateLbaWrongForRole { stored: alternate, expected }),
+                "read from {read_from}, alternate {alternate}: {defects:?}"
+            );
+        };
+        // Main pointing anywhere but the last block; secondary pointing
+        // anywhere but LBA 1.
+        wrong_for(1, 500, last_block);
+        wrong_for(last_block, 500, 1);
+
+        // The correct pointers carry no such defect.
+        let mut ok = Vec::new();
+        sample_header().validate_fields(1, last_block, 512, &mut ok);
+        let mut h = sample_header();
+        h.my_lba = last_block;
+        h.alternate_lba = 1;
+        h.validate_fields(last_block, last_block, 512, &mut ok);
+        assert!(!ok.iter().any(|d| matches!(d, Defect::AlternateLbaWrongForRole { .. })), "{ok:?}");
     }
 
     #[test]
