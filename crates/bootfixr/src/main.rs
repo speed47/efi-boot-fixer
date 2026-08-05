@@ -578,9 +578,31 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
         return;
     };
 
+    // The sectors about to be rewritten, saved first. "Back up before you
+    // repair" used to be nothing but menu ordering; the repair now takes
+    // its own copy, the way the NVRAM writes always have. A failure is a
+    // question rather than a refusal — on a machine whose ESP will not
+    // take the file, this repair may be the only remedy left.
+    let mut warning = match auto_snapshot(&disk, analysis, boot_device) {
+        Ok(saved) => saved,
+        Err(why) => {
+            let mut lines = why;
+            lines.push(Line::blank());
+            lines.push(warn("  Nothing has been written yet. Continuing means"));
+            lines.push(warn("  repairing with no saved copy of the sectors this"));
+            lines.push(warn("  operation is about to overwrite."));
+            lines.push(Line::blank());
+            lines.push(key("  Continue without a saved copy?"));
+            if !ui::page("Could not save a snapshot", &lines) {
+                return show_note("Repair", "Cancelled. Nothing was written.".to_string());
+            }
+            Vec::new()
+        }
+    };
+
     // Say what is actually about to happen. "Rewrites the partition table"
     // is alarming and, when only the protective MBR is wrong, untrue.
-    let warning = if analysis.verdict == gptcore::Verdict::MbrOnly {
+    warning.extend(if analysis.verdict == gptcore::Verdict::MbrOnly {
         alloc::vec![
             warn("  This rewrites the protective MBR on this disk."),
             line("  Both GPTs are intact and are left alone."),
@@ -591,12 +613,44 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
             line("  The proposed table came from the secondary GPT and was"),
             line("  shown on the previous screen."),
         ]
-    };
+    });
     if !ui::confirm_sequence("Authorise write", &warning) {
         return show_note("Repair", "Cancelled. Nothing was written.".to_string());
     }
     let result = execute(&disk, &repair);
     report_write("Repair", &disk, result, esp_lost);
+}
+
+/// Capture both tables to the ESP before a repair rewrites them.
+///
+/// Silently to the ESP alone, unlike the manual backup: this runs between
+/// the review page and the confirmation gate, where a destination menu
+/// would be a question about a file the operator did not ask for. `Ok` is
+/// the lines naming what was written, shown on the confirmation screen
+/// rather than on a screen of its own — a screen costs a press, and the
+/// QEMU walks count presses. `Err` is the lines saying why not, for the
+/// continue-anyway question.
+fn auto_snapshot(
+    disk: &Disk,
+    analysis: &Analysis,
+    boot_device: &BootDevice,
+) -> Result<Vec<Line>, Vec<Line>> {
+    let mut dev = open_disk(disk.handle).map_err(|e| alloc::vec![bad(format!("  {e}"))])?;
+    let meta = provenance(disk, boot_device, "automatic, before repair");
+    let archive = backup::capture(&mut dev, analysis, now(), meta)
+        .map_err(|e| alloc::vec![bad(format!("  could not read the tables ({e})"))])?;
+    drop(dev);
+
+    let written =
+        write_snapshot(&[store::Volume::boot()], gpt_name, &backup::encode(&archive, &CRC))
+            .map_err(|e| alloc::vec![bad(format!("  {e}"))])?;
+    if !written.any() {
+        return Err(written.lines());
+    }
+    let mut lines = alloc::vec![good("  The table as it stands was first saved to:")];
+    lines.extend(written.lines());
+    lines.push(Line::blank());
+    Ok(lines)
 }
 
 // ------------------------------------------------- where the files go
@@ -949,7 +1003,12 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
         Err(e) => return show_error("Back up GPT", e),
     };
 
-    let archive = match backup::capture(&mut dev, analysis, now(), provenance(&disk, boot_device)) {
+    let archive = match backup::capture(
+        &mut dev,
+        analysis,
+        now(),
+        provenance(&disk, boot_device, "manual backup"),
+    ) {
         Ok(a) => a,
         Err(e) => return show_error("Back up GPT", format!("could not read the tables ({e})")),
     };
@@ -1010,11 +1069,13 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
 ///
 /// None of this is needed to restore the file. It is here for the question
 /// asked years afterwards: is this from this machine, and what was it?
-fn provenance(disk: &Disk, boot_device: &BootDevice) -> Vec<(String, String)> {
-    let mut meta = alloc::vec![(
-        String::from("tool"),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("BOOTFIXR_VERSION"))
-    )];
+/// `label` answers the smaller question asked much sooner — which of these
+/// snapshots is which — on the restore picker itself.
+fn provenance(disk: &Disk, boot_device: &BootDevice, label: &str) -> Vec<(String, String)> {
+    let mut meta = alloc::vec![
+        (String::from(backup::META_LABEL), String::from(label)),
+        (String::from("tool"), format!("{} {}", env!("CARGO_PKG_NAME"), env!("BOOTFIXR_VERSION")))
+    ];
 
     let vendor = uefi::system::firmware_vendor().to_string();
     if !vendor.is_empty() {
@@ -1201,21 +1262,23 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
     let items: Vec<ui::Item> = saved
         .iter()
         .map(|sv| {
-            ui::Item::with_detail(
-                sv.label(),
-                alloc::vec![
-                    sv.belongs_to(&disks),
-                    // Before the disk GUID, because with the same name on
-                    // two volumes this is the line that says which row is
-                    // which.
-                    dim(format!("  found on {}", sv.source)),
-                    dim(format!("  disk GUID {}", sv.archive.disk_guid)),
-                    dim(match sv.archive.meta_get("tool") {
-                        Some(t) => format!("  written by {t}"),
-                        None => String::from("  written by an older build"),
-                    }),
-                ],
-            )
+            let mut detail = alloc::vec![sv.belongs_to(&disks)];
+            // The label is why the snapshot exists — "manual backup",
+            // "automatic, before repair" — and is the line that lets an
+            // operator with six rows of gpt-NNN recall which is which.
+            // Older files never recorded one and simply do without.
+            if let Some(label) = sv.archive.meta_get(backup::META_LABEL) {
+                detail.push(key(format!("  {label}")));
+            }
+            // Before the disk GUID, because with the same name on two
+            // volumes this is the line that says which row is which.
+            detail.push(dim(format!("  found on {}", sv.source)));
+            detail.push(dim(format!("  disk GUID {}", sv.archive.disk_guid)));
+            detail.push(dim(match sv.archive.meta_get("tool") {
+                Some(t) => format!("  written by {t}"),
+                None => String::from("  written by an older build"),
+            }));
+            ui::Item::with_detail(sv.label(), detail)
         })
         .collect();
 

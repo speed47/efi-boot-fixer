@@ -22,6 +22,12 @@ Applied in order, before anything is written:
   never one whose entry-array chunks would land inside the partition area its
   own table describes — a snapshot taken while a corrupt header pointed its
   array somewhere wild must not write those blocks back there
+- never a repair without first saving the sectors it is about to rewrite:
+  a snapshot goes to the ESP automatically, labelled "automatic, before
+  repair", between the review page and the gate. A failure to save it is a
+  question with the consequence spelled out, not a silent skip and not a
+  hard refusal — on a machine whose ESP will not take the file, the repair
+  may be the only remedy left
 - never without the operator entering the confirmation sequence, on a screen
   whose header names the disk about to be written to — which is what allows
   the picker to be skipped when there is only one disk to pick

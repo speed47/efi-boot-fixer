@@ -120,6 +120,12 @@ queued input first. See [docs/input.md](docs/input.md).
   session's first NVRAM write. Its variables are stored as opaque bytes and
   never re-encoded — an entry this build cannot parse is the one most worth
   copying exactly.
+- A GPT repair saves `\BOOTFIXR\gpt-NNN.bkp` to the ESP by itself, labelled
+  `automatic, before repair` in the metadata section, between the review
+  page and the confirmation gate. A failure to save it is a question with
+  the consequence spelled out, never a silent skip and never a hard
+  refusal. Snapshot labels are a metadata key (`backup::META_LABEL`), not a
+  format version — older builds skip unknown keys by design.
 - `bootcfg::plan_restore` follows the same rule on the way back: every
   `Boot####` before the `BootOrder` naming it, `BootNext` last of all, and
   nothing deleted. Asserted in `tests/bootwrite.rs`.
