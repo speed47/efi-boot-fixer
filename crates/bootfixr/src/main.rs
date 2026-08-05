@@ -483,6 +483,9 @@ fn run_overview(boot_device: &BootDevice) {
             next.push(warn("  A loader on an ESP has no boot entry pointing at it."));
             next.push(dim("    Boot entries (NVRAM) -> Register a bootloader"));
         }
+        if esps.truncated {
+            lines.push(warn("    some directories were nested too deep to scan"));
+        }
     }
 
     lines.push(Line::blank());
@@ -1494,6 +1497,10 @@ fn run_boot_scan(boot_device: &BootDevice) {
             scan.candidates.len()
         )));
         lines.push(dim("  Boot entries (NVRAM) -> Register a bootloader can add one."));
+    }
+    if scan.truncated {
+        lines.push(warn("  Some directories were nested too deep to scan, so the"));
+        lines.push(warn("  list above may be incomplete."));
     }
     lines.push(good("  Nothing was written. This screen never modifies NVRAM."));
     ui::page("Bootloaders on the ESPs (read only)", &lines);

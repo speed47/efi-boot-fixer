@@ -521,6 +521,11 @@ fn bootloaders(scan: &espscan::Scan) -> Vec<Line> {
             }
         }
     }
+    if scan.truncated {
+        out.push(Line::blank());
+        out.push(warn("  Some directories were nested too deep to scan; the list above"));
+        out.push(warn("  may be incomplete."));
+    }
     out
 }
 
