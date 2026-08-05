@@ -57,18 +57,7 @@ pub const MAX_SEQUENCE: u32 = 999;
 /// The number in `diag-NNN.txt`, case-insensitively: FAT may hand back
 /// `DIAG-001.TXT`.
 pub fn sequence_of(name: &str) -> Option<u32> {
-    if name.len() != NAME_PREFIX.len() + 3 + NAME_SUFFIX.len() {
-        return None;
-    }
-    let (prefix, rest) = name.split_at(NAME_PREFIX.len());
-    if !prefix.eq_ignore_ascii_case(NAME_PREFIX) {
-        return None;
-    }
-    let (digits, suffix) = rest.split_at(3);
-    if !suffix.eq_ignore_ascii_case(NAME_SUFFIX) || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
+    crate::names::sequence_of(name, NAME_PREFIX, NAME_SUFFIX)
 }
 
 /// The next name to write, given what is already there.
@@ -79,9 +68,7 @@ pub fn sequence_of(name: &str) -> Option<u32> {
 /// comparing "before" and "after" is the person most likely to be holding
 /// both.
 pub fn next_name(existing: &[String]) -> Option<String> {
-    let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
-    let next = highest + 1;
-    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}{NAME_SUFFIX}"))
+    crate::names::next_name(existing, NAME_PREFIX, NAME_SUFFIX, MAX_SEQUENCE)
 }
 
 /// The report as it goes into the file.
