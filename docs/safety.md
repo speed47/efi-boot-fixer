@@ -14,7 +14,10 @@ Applied in order, before anything is written:
   the first usable LBA
 - never a table without an `esp` and a `rootfs-A`, which is the stale-table
   guard
-- never a saved snapshot whose block size or disk size does not match
+- never a saved snapshot whose block size or disk size does not match, and
+  never one whose entry-array chunks would land inside the partition area its
+  own table describes — a snapshot taken while a corrupt header pointed its
+  array somewhere wild must not write those blocks back there
 - never without the operator entering the confirmation sequence, on a screen
   whose header names the disk about to be written to — which is what allows
   the picker to be skipped when there is only one disk to pick
