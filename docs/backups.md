@@ -79,6 +79,11 @@ things a raw dump does not:
 
 - restore refuses a disk whose block size or block count differs, instead of
   writing a table that describes a different device;
+- restore refuses a disk that now carries a hybrid MBR — the same refusal
+  repair and prevention make, for the same reason — and refuses any snapshot
+  whose entry-array chunks would land inside the area its own table hands to
+  partitions, which is what a snapshot taken while a header pointed somewhere
+  wild would otherwise write back there;
 - the operator is told, before authorising, whether the snapshot was taken
   from a healthy table — restoring a corrupt one is a real way to make things
   worse, and the screen says so in as many words;

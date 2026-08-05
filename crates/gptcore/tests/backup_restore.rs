@@ -317,3 +317,78 @@ fn snapshot_names_count_up_and_never_reuse_a_number() {
     let full = vec!["gpt-999.bkp".to_string()];
     assert_eq!(backup::next_name(&full), None);
 }
+
+/// The refusal list applies to every write path. A hybrid MBR set up after
+/// the snapshot was taken must stop the restore, exactly as it stops a
+/// repair and a prevention.
+#[test]
+fn a_hybrid_mbr_on_the_target_refuses_the_restore() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+
+    // A real NTFS record beside the protective one.
+    let mut mbr = img.read_lba(0, 1);
+    let rec = 446 + 16;
+    mbr[rec] = 0x80;
+    mbr[rec + 4] = 0x07;
+    mbr[rec + 8..rec + 12].copy_from_slice(&2048u32.to_le_bytes());
+    mbr[rec + 12..rec + 16].copy_from_slice(&524_288u32.to_le_bytes());
+    img.write_lba(0, &mbr);
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    assert!(matches!(restore_plan(&archive, &analysis), Err(Mismatch::HybridMbr)));
+}
+
+/// A corrupt main header is free to point its entry array anywhere,
+/// including into the middle of a partition. Capturing from there means
+/// restoring to there, so the pointer must not be followed.
+#[test]
+fn a_pointer_into_a_partition_is_not_followed_by_capture() {
+    let img = deck_image();
+    let mut header = gptcore::GptHeader::parse(&img.read_lba(1, 1)).expect("parse");
+    // Well inside rootfs-A, with the CRC resealed so only the array
+    // checks can notice — the shape of the real corruption, aimed worse.
+    header.partition_entry_lba = 1_000_000;
+    img.write_lba(1, &header.to_block(512, &CRC));
+
+    let archive = snapshot(&img);
+    assert_eq!(archive.health, Health::MainCorrupt);
+    assert_eq!(
+        archive.chunk(Role::MainEntries).expect("captured conventionally").lba,
+        2,
+        "a pointer into the partition area must not drive the capture"
+    );
+}
+
+/// The same guard on the way back, for snapshots old builds already wrote:
+/// an entry-array chunk recorded inside the partition area is refused.
+#[test]
+fn an_archived_array_inside_the_partition_area_is_refused() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+    let chunk =
+        archive.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.lba = 1_000_000;
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    match restore_plan(&archive, &analysis) {
+        Err(Mismatch::OverlapsPartitions { role: Role::MainEntries, lba: 1_000_000, .. }) => {}
+        other => panic!("expected an overlap refusal, got {other:?}"),
+    }
+}
+
+/// The real corruption's array lives at 2016 — inside the gap below the
+/// first usable block. That snapshot is evidence, and it stays both
+/// capturable from there (asserted above) and restorable to there.
+#[test]
+fn the_real_corruptions_snapshot_is_still_restorable() {
+    let img = deck_corrupt_image();
+    let archive = snapshot(&img);
+    assert_eq!(archive.chunk(Role::MainEntries).unwrap().lba, 2016);
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    restore_plan(&archive, &analysis).expect("the 2016 array sits clear of every partition");
+}

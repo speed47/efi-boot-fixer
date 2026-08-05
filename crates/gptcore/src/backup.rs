@@ -285,6 +285,48 @@ fn default_array_blocks(block_size: u32) -> u64 {
     CONVENTIONAL_ARRAY_BYTES.div_ceil(block_size as u64)
 }
 
+/// Whether an entry-array region stays clear of every partition, as far as
+/// the headers to hand can say.
+///
+/// A corrupt header's array pointer can name any block on the disk, and a
+/// region captured from the middle of a partition would later be restored
+/// to the middle of that partition. The real corruption this tool exists
+/// for, though, points into the gap *below* the first usable block — bytes
+/// a later investigation wants — so the pointer is judged by where it
+/// lands, not by whether its header validated.
+///
+/// Every header with a sane usable range gets a veto. `None` when no
+/// header offers one, which callers treat as "only the conventional
+/// location can be trusted".
+fn vet_entries_region(
+    lba: u64,
+    blocks: u64,
+    headers: &[Option<GptHeader>],
+    last_block: u64,
+) -> Option<bool> {
+    if lba < 2 || blocks == 0 {
+        return Some(false);
+    }
+    let end = lba.checked_add(blocks)?;
+    if end > last_block + 1 {
+        return Some(false);
+    }
+    let mut vetted = None;
+    for h in headers.iter().flatten() {
+        let sane = h.first_usable_lba >= 2
+            && h.first_usable_lba <= h.last_usable_lba
+            && h.last_usable_lba <= last_block;
+        if !sane {
+            continue;
+        }
+        if lba <= h.last_usable_lba && end > h.first_usable_lba {
+            return Some(false);
+        }
+        vetted = Some(true);
+    }
+    vetted
+}
+
 /// Read the structures worth saving off `dev`.
 ///
 /// Where a header is intact its own pointers are followed, so a snapshot
@@ -304,12 +346,25 @@ pub fn capture<D: BlockDevice + ?Sized>(
     let mut chunks = Vec::new();
     chunks.push(Chunk { role: Role::Mbr, lba: 0, data: analysis.mbr_raw.clone() });
 
-    // Main GPT: its own array pointer if the header parsed, else LBA 2.
+    // Both headers, parsed or not, so a pointer can be vetted against
+    // whichever usable ranges survive on this disk.
+    let references = [
+        analysis.main.as_ref().ok().map(|t| t.header),
+        analysis.secondary.as_ref().ok().map(|t| t.header),
+    ];
+
+    // Main GPT: its own array pointer where that pointer can be shown to
+    // stay clear of the partitions — see [`vet_entries_region`] — else
+    // LBA 2.
     let (main_lba, main_blocks) = match analysis.main.as_ref() {
-        Ok(t) => (
-            t.header.partition_entry_lba,
-            t.header.entry_array_blocks(block_size).unwrap_or(fallback),
-        ),
+        Ok(t) => {
+            let blocks = t.header.entry_array_blocks(block_size).unwrap_or(fallback);
+            let lba = t.header.partition_entry_lba;
+            match vet_entries_region(lba, blocks, &references, last_block) {
+                Some(true) => (lba, blocks),
+                _ => (2, fallback),
+            }
+        }
         Err(_) => (2, fallback),
     };
     if let Ok(data) = read_lbas(dev, main_lba, main_blocks) {
@@ -324,12 +379,18 @@ pub fn capture<D: BlockDevice + ?Sized>(
         },
     });
 
-    // Secondary GPT: its array sits immediately below its header at the end.
+    // Secondary GPT: its array sits immediately below its header at the
+    // end. Same rule as the main copy: the pointer is followed only where
+    // it stays clear of the partitions.
     let (secondary_lba, secondary_blocks) = match analysis.secondary.as_ref() {
-        Ok(t) => (
-            t.header.partition_entry_lba,
-            t.header.entry_array_blocks(block_size).unwrap_or(fallback),
-        ),
+        Ok(t) => {
+            let blocks = t.header.entry_array_blocks(block_size).unwrap_or(fallback);
+            let lba = t.header.partition_entry_lba;
+            match vet_entries_region(lba, blocks, &references, last_block) {
+                Some(true) => (lba, blocks),
+                _ => (last_block.saturating_sub(fallback), fallback),
+            }
+        }
         Err(_) => (last_block.saturating_sub(fallback), fallback),
     };
     if let Ok(data) = read_lbas(dev, secondary_lba, secondary_blocks) {
@@ -579,6 +640,24 @@ pub enum Mismatch {
         lba: u64,
         len: usize,
     },
+    /// A structural chunk is not where its role puts it: the MBR at LBA 0,
+    /// the headers at LBA 1 and the last block.
+    MisplacedChunk {
+        role: Role,
+        lba: u64,
+    },
+    /// An entry-array chunk would land inside the area the archive's own
+    /// table says belongs to partitions. A snapshot taken while a header
+    /// was corrupt can record its array from anywhere that header pointed;
+    /// writing that back would put 32 stale blocks in the middle of a
+    /// filesystem.
+    OverlapsPartitions {
+        role: Role,
+        lba: u64,
+        blocks: u64,
+    },
+    /// The disk now carries a hybrid MBR, which this tool never writes to.
+    HybridMbr,
     /// Nothing to write: the archive has no header chunks.
     Incomplete,
 }
@@ -603,6 +682,19 @@ impl core::fmt::Display for Mismatch {
             Mismatch::Unaligned { lba, len } => {
                 write!(f, "the section for LBA {lba} is {len} bytes, not a whole number of blocks")
             }
+            Mismatch::MisplacedChunk { role, lba } => {
+                write!(f, "the {} is recorded at LBA {lba}, not where it belongs", role.describe())
+            }
+            Mismatch::OverlapsPartitions { role, lba, blocks } => {
+                write!(
+                    f,
+                    "the {} ({blocks} blocks at LBA {lba}) would land inside the partition area",
+                    role.describe()
+                )
+            }
+            Mismatch::HybridMbr => {
+                write!(f, "this disk carries a hybrid MBR, which this tool never modifies")
+            }
             Mismatch::Incomplete => write!(f, "the snapshot does not contain both GPT headers"),
         }
     }
@@ -620,6 +712,12 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     }
     if archive.last_block != analysis.last_block {
         return Err(Mismatch::LastBlock { archive: archive.last_block, disk: analysis.last_block });
+    }
+    // The same refusal repair and prevent make, for the same reason: some
+    // legacy OS depends on that view of the disk, and a restore writes the
+    // saved MBR chunk straight over it.
+    if analysis.mbr == crate::mbr::MbrStatus::Hybrid {
+        return Err(Mismatch::HybridMbr);
     }
 
     for chunk in &archive.chunks {
@@ -639,6 +737,59 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
 
     let main_header = archive.chunk(Role::MainHeader).ok_or(Mismatch::Incomplete)?;
     let secondary_header = archive.chunk(Role::SecondaryHeader).ok_or(Mismatch::Incomplete)?;
+
+    // The report needs a header and a table to show, and the placement
+    // checks below need its usable range. Prefer the main copy; fall back
+    // to the secondary so a snapshot with a damaged main GPT still renders
+    // something.
+    let header = GptHeader::parse(&main_header.data)
+        .or_else(|| GptHeader::parse(&secondary_header.data))
+        .ok_or(Mismatch::Incomplete)?;
+
+    // Structural chunks go exactly where their role says. Every archive
+    // this tool writes satisfies this; one that does not is not a restore
+    // anyone meant to make.
+    if let Some(c) = archive.chunk(Role::Mbr) {
+        if c.lba != 0 {
+            return Err(Mismatch::MisplacedChunk { role: Role::Mbr, lba: c.lba });
+        }
+    }
+    if main_header.lba != 1 {
+        return Err(Mismatch::MisplacedChunk { role: Role::MainHeader, lba: main_header.lba });
+    }
+    if secondary_header.lba != archive.last_block {
+        return Err(Mismatch::MisplacedChunk {
+            role: Role::SecondaryHeader,
+            lba: secondary_header.lba,
+        });
+    }
+
+    // Entry arrays may only land clear of the area the archive's own
+    // table hands to partitions. Old snapshots taken while a header was
+    // corrupt can record an array from anywhere that header pointed, and
+    // this is the last place able to refuse them.
+    let references =
+        [GptHeader::parse(&main_header.data), GptHeader::parse(&secondary_header.data)];
+    for role in [Role::MainEntries, Role::SecondaryEntries] {
+        let Some(c) = archive.chunk(role) else { continue };
+        let blocks = c.blocks(archive.block_size);
+        let ok = match vet_entries_region(c.lba, blocks, &references, archive.last_block) {
+            Some(ok) => ok,
+            // No header offers a usable range to vet against, so only the
+            // conventional locations, at the conventional size, can be
+            // trusted.
+            None => {
+                blocks <= default_array_blocks(archive.block_size)
+                    && match role {
+                        Role::MainEntries => c.lba == 2,
+                        _ => c.lba.saturating_add(blocks) == archive.last_block,
+                    }
+            }
+        };
+        if !ok {
+            return Err(Mismatch::OverlapsPartitions { role, lba: c.lba, blocks });
+        }
+    }
 
     fn push(steps: &mut Vec<Step>, archive: &Archive, role: Role) {
         if let Some(c) = archive.chunk(role) {
@@ -662,12 +813,6 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     push(&mut steps, archive, Role::SecondaryHeader);
     steps.push(Step::Flush { why: "commit headers" });
 
-    // The report needs a header and a table to show. Prefer the main
-    // copy; fall back to the secondary so a snapshot with a damaged main
-    // GPT still renders something.
-    let header = GptHeader::parse(&main_header.data)
-        .or_else(|| GptHeader::parse(&secondary_header.data))
-        .ok_or(Mismatch::Incomplete)?;
     let entries = archive
         .chunk(Role::MainEntries)
         .or_else(|| archive.chunk(Role::SecondaryEntries))
