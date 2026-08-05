@@ -279,3 +279,64 @@ fn closing_the_gap_survives_a_power_cut_between_the_two_headers() {
     assert_eq!(after.secondary.as_ref().unwrap().header.first_usable_lba, 34);
 }
 
+// ------------------------------------------------------ the alternate pointer
+
+/// A main header whose AlternateLBA is in range but not the last block —
+/// a stale clone — must not read back as healthy: sgdisk flags such a
+/// disk, and a tool that says "healthy" about it offers no way out.
+#[test]
+fn a_wrong_alternate_pointer_on_the_main_gpt_is_repaired() {
+    let img = deck_image();
+    let before = img.print();
+
+    let mut header = gptcore::GptHeader::parse(&img.read_lba(1, 1)).expect("parse");
+    header.alternate_lba = 500;
+    img.write_lba(1, &header.to_block(512, &CRC));
+
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(analysis.verdict, Verdict::MainRepairable, "{:?}", analysis.main);
+    let repair = plan(&analysis, &CRC).expect("a plan");
+    assert_eq!(repair.header.alternate_lba, img.last_block());
+    apply(&mut dev, &repair).unwrap();
+    drop(dev);
+
+    assert!(img.is_clean(), "sgdisk unhappy:\n{}", img.verify());
+    assert_eq!(before, img.print());
+}
+
+/// The same fault on the secondary, with the main GPT destroyed outright:
+/// the secondary is still the only copy of the table and its array CRC
+/// still holds, so it stays usable as the repair source — and the repair
+/// writes it back with the pointer corrected rather than leaving a
+/// "repaired" disk whose secondary points at nothing.
+#[test]
+fn a_repair_from_a_secondary_with_a_wrong_alternate_also_corrects_it() {
+    let img = deck_image();
+    let before = img.print();
+
+    let last = img.last_block();
+    let mut header = gptcore::GptHeader::parse(&img.read_lba(last, 1)).expect("parse");
+    header.alternate_lba = 500;
+    img.write_lba(last, &header.to_block(512, &CRC));
+    img.zero_lba(1, 1);
+
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(analysis.verdict, Verdict::MainRepairable, "{:?}", analysis.rejection);
+    let repair = plan(&analysis, &CRC).expect("a plan");
+
+    // Both headers are in the plan: the rebuilt main and the corrected
+    // secondary.
+    let touched: Vec<u64> = repair.writes().map(|(lba, _)| lba).collect();
+    assert!(touched.contains(&1) && touched.contains(&last), "{touched:?}");
+    apply(&mut dev, &repair).unwrap();
+    drop(dev);
+
+    assert!(img.is_clean(), "sgdisk unhappy:\n{}", img.verify());
+    assert_eq!(before, img.print());
+    let mut dev = img.disk();
+    let after = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(after.verdict, Verdict::Healthy);
+    assert_eq!(after.secondary.as_ref().unwrap().header.alternate_lba, 1);
+}

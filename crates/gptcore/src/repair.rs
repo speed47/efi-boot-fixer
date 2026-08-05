@@ -35,6 +35,17 @@ impl TableView {
         self.defects.is_empty() && self.entries_error.is_none()
     }
 
+    /// Everything checks out except the alternate pointer.
+    ///
+    /// The one defect a header can carry while its entry array, CRCs and
+    /// geometry are all still trustworthy — so it can still serve as a
+    /// repair source, provided the repair also writes it back corrected.
+    pub fn only_wrong_alternate(&self) -> bool {
+        self.entries_error.is_none()
+            && !self.defects.is_empty()
+            && self.defects.iter().all(|d| matches!(d, Defect::AlternateLbaWrongForRole { .. }))
+    }
+
     pub fn used_entries(&self) -> impl Iterator<Item = (usize, &PartitionEntry)> {
         self.entries.iter().enumerate().filter(|(_, e)| e.is_used())
     }
@@ -191,9 +202,11 @@ pub fn analyze<D: BlockDevice + ?Sized>(
         }
     } else if main_ok {
         Verdict::SecondaryDegraded
-    } else if secondary_ok {
-        // Safe to unwrap: secondary_ok implies Ok.
-        let src = secondary.as_ref().expect("secondary_ok implies Ok");
+    } else if secondary_ok || secondary.as_ref().is_ok_and(|t| t.only_wrong_alternate()) {
+        // A secondary whose sole defect is a wrong alternate pointer is
+        // still a trustworthy source — its array CRC holds — and the plan
+        // below rewrites it corrected alongside the rebuilt main.
+        let src = secondary.as_ref().expect("the guard above implies Ok");
         match assess(src, block_size) {
             Ok(rec) => {
                 recognition = Some(rec);
@@ -362,6 +375,21 @@ pub fn plan(analysis: &Analysis, crc: &impl Crc32) -> Option<RepairPlan> {
                 data: header.to_block(block_size, crc),
                 what: String::from("main GPT header"),
             });
+
+            // A source that was itself carrying a wrong alternate pointer
+            // must not survive the repair as-is: the disk would come back
+            // "repaired" with a secondary still pointing somewhere that is
+            // not the main header. Only the pointer fields change; the
+            // array it describes is untouched and its CRC still holds.
+            if src.only_wrong_alternate() {
+                let secondary =
+                    GptHeader { my_lba: analysis.last_block, alternate_lba: 1, ..src.header };
+                steps.push(Step::Write {
+                    lba: analysis.last_block,
+                    data: secondary.to_block(block_size, crc),
+                    what: String::from("secondary GPT header (alternate pointer corrected)"),
+                });
+            }
             steps.push(Step::Flush { why: "commit main GPT header" });
 
             Some(RepairPlan { steps, header, entries: src.entries.clone() })
