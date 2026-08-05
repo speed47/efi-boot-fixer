@@ -569,13 +569,9 @@ fn volumes() -> Vec<Line> {
 /// [`main`](crate::main)), so a loop here is a machine that has to be held
 /// down rather than a screen that says something unhelpful. Real machines
 /// hold a few dozen to a few hundred; a report that stops after a thousand
-/// and says so has lost nothing anybody was going to read.
-///
-/// The same walk in [`crate::nvram`] is older and unbounded, so this is not
-/// complete protection — a firmware that behaved this way would hang the
-/// boot-entry screens first. It is the standard `gptcore::smbios` already
-/// sets, applied where the loop is new.
-const MAX_VARIABLES: usize = 1024;
+/// and says so has lost nothing anybody was going to read. The same bound
+/// guards the walk in [`crate::nvram`].
+const MAX_VARIABLES: usize = nvram::MAX_VARIABLES;
 
 /// The name, vendor and size of every variable in the store.
 ///
@@ -586,25 +582,32 @@ const MAX_VARIABLES: usize = 1024;
 /// GUID nobody expected, is invisible everywhere else in this tool.
 ///
 /// Bounded by [`MAX_VARIABLES`], because this is the one loop here whose end
-/// the firmware decides.
+/// the firmware decides. Two passes, the same way [`crate::nvram`] reads
+/// entries: the names are all collected before any is sized, because
+/// calling `GetVariable` in the middle of a live `GetNextVariableName`
+/// walk is not something every firmware tolerates.
 fn variable_store() -> Vec<Line> {
     let mut out = section("Every variable in the store (names and sizes only)");
-    let mut count = 0usize;
     let mut total = 0usize;
     let mut rows = Vec::new();
 
+    let mut keys = Vec::new();
     for var in runtime::variable_keys() {
-        if count >= MAX_VARIABLES {
+        if keys.len() >= MAX_VARIABLES {
             rows.push(bad(format!("  stopped after {MAX_VARIABLES} variables; there are more")));
             break;
         }
-        let var = match var {
-            Ok(var) => var,
+        match var {
+            Ok(var) => keys.push(var),
             Err(e) => {
                 rows.push(bad(format!("  the walk stopped early ({:?})", e.status())));
                 break;
             }
         };
+    }
+    let count = keys.len();
+
+    for var in &keys {
         let name = &var.name;
         let size = match nvram::size_of(name, &var.vendor) {
             Ok(Some(n)) => {
@@ -614,7 +617,6 @@ fn variable_store() -> Vec<Line> {
             Ok(None) => String::from("vanished while being read"),
             Err(e) => e,
         };
-        count += 1;
         // `name.to_string()` and not `name`: `CStr16`'s Display writes one
         // character at a time, so a width spec applied to it pads every
         // character rather than the string, and the column comes out
