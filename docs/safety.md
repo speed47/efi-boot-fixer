@@ -8,6 +8,10 @@ Applied in order, before anything is written:
   the backup screens are not covered by it: a snapshot is a file, written
   through a filesystem, and removable media is offered there on purpose —
   see [backups.md](backups.md). Nothing writes blocks to a removable disk.
+  One honest caveat: "removable" is the firmware's own RMB bit, and a USB
+  enclosure presenting fixed media defeats it. Such a disk is listed, so
+  the transport is said instead of hidden — the picker tags anything the
+  firmware reaches over USB with `[usb]`, in the row and in its detail.
 - never a disk with a hybrid MBR (some legacy OS depends on that view)
 - never a secondary GPT that fails structural checks (overlaps, ranges outside
   the usable area, inverted extents) or whose entry array would collide with

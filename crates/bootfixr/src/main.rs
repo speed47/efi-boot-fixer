@@ -100,6 +100,26 @@ fn path_text(path: Option<&DevicePath>) -> String {
     }
 }
 
+/// Whether the firmware reaches this device over USB.
+///
+/// The repair paths' removable-media filter trusts the firmware's RMB
+/// bit, and a USB-SATA enclosure is free to present fixed media through
+/// it. The transport is in the device path, though, so a disk reached
+/// over USB can at least be said out loud — a `[usb]` tag in the picker
+/// is context, not a refusal; the operator knows what they plugged in.
+fn over_usb(path: Option<&DevicePath>) -> bool {
+    use uefi::proto::device_path::{DeviceSubType, DeviceType};
+    let Some(path) = path else {
+        return false;
+    };
+    path.node_iter().any(|n| {
+        n.device_type() == DeviceType::MESSAGING
+            && (n.sub_type() == DeviceSubType::MESSAGING_USB
+                || n.sub_type() == DeviceSubType::MESSAGING_USB_WWID
+                || n.sub_type() == DeviceSubType::MESSAGING_USB_CLASS)
+    })
+}
+
 fn now() -> Timestamp {
     match uefi::runtime::get_time() {
         Ok(t) => Timestamp {
@@ -123,6 +143,8 @@ struct Disk {
     path: String,
     /// This disk carries the volume the image was loaded from.
     boot: bool,
+    /// The firmware reaches it over USB, whatever its media claims.
+    usb: bool,
     model: Option<String>,
     block_size: u32,
     last_block: u64,
@@ -155,6 +177,9 @@ impl Disk {
         if self.boot {
             s.push_str("  [boot]");
         }
+        if self.usb {
+            s.push_str("  [usb]");
+        }
         if self.steamos {
             s.push_str("  [SteamOS]");
         }
@@ -175,6 +200,9 @@ impl Disk {
         let mut out = ui::wrapped(&format!("  {}", self.path), Style::Dim, "    ");
         out.push(dim(format!("  {} blocks x {} B", self.last_block + 1, self.block_size)));
         out.push(Line::new(format!("  GPT: {health}"), style));
+        if self.usb {
+            out.push(warn("  Reached over USB; its media reports itself as fixed."));
+        }
         out
     }
 }
@@ -217,6 +245,7 @@ fn scan(boot_device: &BootDevice) -> Vec<Disk> {
 
         let path = get_protocol::<DevicePath>(handle).ok();
         let boot = path.as_deref().is_some_and(|p| boot_device.covers(p));
+        let usb = over_usb(path.as_deref());
 
         let analysis = read_disk(handle);
         // Precomputed rather than derived on demand: `label` is called for
@@ -230,6 +259,7 @@ fn scan(boot_device: &BootDevice) -> Vec<Disk> {
             number: disks.len() + 1,
             path: path_text(path.as_deref()),
             boot,
+            usb,
             model: diskinfo::model(handle),
             block_size,
             last_block,
