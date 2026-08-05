@@ -1705,6 +1705,15 @@ fn pick_boot_entry(title: &str, intro: &[Line], state: &nvram::BootState) -> Opt
 /// Put a loader found on an ESP into NVRAM.
 fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool) {
     let state = nvram::read();
+    // The same refusal as "Set the default", for a worse consequence: the
+    // plan writes a whole new BootOrder, and building it from an order
+    // that could not be read would silently drop every existing entry.
+    let order = match &state.order {
+        Ok(o) => o.clone(),
+        Err(e) => {
+            return show_error("Register a bootloader", format!("BootOrder cannot be read - {e}"))
+        }
+    };
     let scan = espscan::scan(boot_device, &known_paths(&state));
 
     let new: Vec<&espscan::Candidate> =
@@ -1782,7 +1791,7 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
         device_path,
         optional_data: Vec::new(),
     };
-    let writes = bootopt::plan_register(slot, &opt, state.order.as_deref().unwrap_or(&[]), first);
+    let writes = bootopt::plan_register(slot, &opt, &order, first);
 
     let mut review = alloc::vec![
         key(format!("  {}  as  {}", bootopt::slot_name(slot), opt.description)),
@@ -1826,11 +1835,7 @@ fn run_boot_default(snapshot: &mut bool, esp_lost: bool) {
     }
 
     let after = bootopt::reorder(slot, &order);
-    let name = |s: u16| match state.get(s) {
-        Some(Ok(opt)) => format!("{}  {}", bootopt::slot_name(s), opt.description),
-        Some(Err(_)) => format!("{}  (unreadable)", bootopt::slot_name(s)),
-        None => format!("{}  (no such entry)", bootopt::slot_name(s)),
-    };
+    let name = |s: u16| slot_with_name(&state, s);
     let review = bootopt::render_order_change(&order, &after, name);
     let writes = bootopt::plan_set_default(slot, &order);
 
