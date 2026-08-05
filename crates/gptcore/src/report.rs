@@ -74,6 +74,9 @@ fn describe_mbr(status: MbrStatus) -> (String, Style) {
         MbrStatus::WrongSize { found, expected } => {
             (format!("wrong size ({found} blocks, expected {expected})"), Style::Warn)
         }
+        MbrStatus::WrongStart { found } => {
+            (format!("wrong start (LBA {found}, expected 1)"), Style::Warn)
+        }
         MbrStatus::Hybrid => ("HYBRID - will not touch this disk".to_string(), Style::Bad),
         MbrStatus::Absent => ("missing or not protective".to_string(), Style::Warn),
     }

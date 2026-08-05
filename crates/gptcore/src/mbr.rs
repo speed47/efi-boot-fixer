@@ -1,15 +1,15 @@
 //! The protective MBR at LBA 0.
 //!
-//! Regeneration deliberately preserves bytes 0..440. Those are boot code,
-//! irrelevant to UEFI boot but not ours to discard, and a hybrid MBR is
-//! refused outright rather than "repaired" into a protective one.
+//! Regeneration deliberately preserves bytes 0..446: boot code and the
+//! NT disk signature, irrelevant to UEFI boot but not ours to discard, and
+//! a hybrid MBR is refused outright rather than "repaired" into a
+//! protective one.
 
 use alloc::vec::Vec;
 
 pub(crate) const MBR_BOOT_SIGNATURE: u16 = 0xAA55;
 pub(crate) const OS_TYPE_GPT_PROTECTIVE: u8 = 0xEE;
 
-const OFF_BOOT_CODE_END: usize = 440;
 const OFF_RECORDS: usize = 446;
 const RECORD_SIZE: usize = 16;
 const RECORD_COUNT: usize = 4;
@@ -84,6 +84,9 @@ pub enum MbrStatus {
     /// Protective in shape, but SizeInLBA does not cover the disk. This is
     /// what a resized or re-imaged disk leaves behind.
     WrongSize { found: u32, expected: u32 },
+    /// Protective in shape, but StartingLBA is not 1, so it does not cover
+    /// the GPT it exists to protect.
+    WrongStart { found: u32 },
     /// A 0xEE record alongside real partition records. Some legacy OS is
     /// relying on this view; regenerating it would break that, so we never
     /// touch a disk in this state.
@@ -95,7 +98,10 @@ pub enum MbrStatus {
 impl MbrStatus {
     /// Whether this MBR should be rewritten as part of a repair.
     pub fn needs_repair(&self) -> bool {
-        matches!(self, MbrStatus::WrongSize { .. } | MbrStatus::Absent)
+        matches!(
+            self,
+            MbrStatus::WrongSize { .. } | MbrStatus::WrongStart { .. } | MbrStatus::Absent
+        )
     }
 }
 
@@ -129,7 +135,13 @@ pub fn inspect(block: &[u8], last_block: u64) -> MbrStatus {
 
     let expected = expected_size_in_lba(last_block);
     let record = &records[idx];
-    if record.starting_lba != 1 || record.size_in_lba != expected {
+    // Start before size: a record wrong on both counts is misplaced first,
+    // and "wrong size (N blocks, expected N)" about a record whose size was
+    // fine reads as a bug in this tool.
+    if record.starting_lba != 1 {
+        return MbrStatus::WrongStart { found: record.starting_lba };
+    }
+    if record.size_in_lba != expected {
         return MbrStatus::WrongSize { found: record.size_in_lba, expected };
     }
     MbrStatus::Protective
@@ -140,7 +152,11 @@ pub fn inspect(block: &[u8], last_block: u64) -> MbrStatus {
 pub fn generate(existing: Option<&[u8]>, block_size: u32, last_block: u64) -> Vec<u8> {
     let mut block = alloc::vec![0u8; block_size as usize];
     if let Some(old) = existing {
-        let carry = OFF_BOOT_CODE_END.min(old.len());
+        // Everything up to the partition records: the boot code, the
+        // 4-byte disk signature at 440 that Windows BIOS-mode BCD stores
+        // device references against, and the two bytes after it. None of
+        // it is ours to discard.
+        let carry = OFF_RECORDS.min(old.len());
         block[..carry].copy_from_slice(&old[..carry]);
     }
     // Records 2..4 stay zero; only the protective record is populated.
@@ -177,6 +193,31 @@ mod tests {
         let mbr = generate(Some(&old), 512, LAST);
         assert!(mbr[..440].iter().all(|&b| b == 0xAB));
         assert_eq!(inspect(&mbr, LAST), MbrStatus::Protective);
+    }
+
+    /// The NT disk signature at 440..444 is what Windows BIOS-mode BCD
+    /// stores device references against; zeroing it on a repair would make
+    /// that software stop recognising the disk.
+    #[test]
+    fn the_disk_signature_survives_regeneration() {
+        let mut old = alloc::vec![0u8; 512];
+        old[440..444].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let mbr = generate(Some(&old), 512, LAST);
+        assert_eq!(mbr[440..444], 0xDEAD_BEEFu32.to_le_bytes());
+        assert_eq!(inspect(&mbr, LAST), MbrStatus::Protective);
+    }
+
+    /// A protective record that does not start at LBA 1 is reported as
+    /// such, not as "wrong size (N blocks, expected N)".
+    #[test]
+    fn a_record_starting_off_lba_1_is_flagged_by_its_start() {
+        let mut mbr = generate(None, 512, LAST);
+        mbr[OFF_RECORDS + 8..OFF_RECORDS + 12].copy_from_slice(&2u32.to_le_bytes());
+        match inspect(&mbr, LAST) {
+            MbrStatus::WrongStart { found } => assert_eq!(found, 2),
+            other => panic!("expected WrongStart, got {:?}", other),
+        }
+        assert!(inspect(&mbr, LAST).needs_repair());
     }
 
     #[test]
