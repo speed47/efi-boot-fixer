@@ -302,6 +302,9 @@ fn block_devices(boot_device: &BootDevice) -> Vec<Line> {
         drop(io);
 
         let path = crate::get_protocol::<DevicePath>(handle).ok();
+        if crate::over_usb(path.as_deref()) {
+            flags.push(String::from("over USB"));
+        }
         if path.as_deref().is_some_and(|p| boot_device.covers(p)) {
             flags.push(String::from("carries the volume this program came from"));
         }
