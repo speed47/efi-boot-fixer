@@ -199,9 +199,24 @@ pub fn mask(value: &str) -> String {
 /// owner, it just makes an empty field look like a real serial to whoever
 /// reads the report.
 fn is_placeholder(value: &str) -> bool {
-    value.eq_ignore_ascii_case("unknown")
-        || value.eq_ignore_ascii_case("standard")
-        || value.eq_ignore_ascii_case("to be filled by o.e.m.")
+    // The list can only ever be the common cases; a placeholder it misses
+    // is masked as though it were a real serial, which errs on the side
+    // that costs the owner nothing.
+    const PLACEHOLDERS: &[&str] = &[
+        "unknown",
+        "standard",
+        "to be filled by o.e.m.",
+        "default string",
+        "not specified",
+        "not applicable",
+        "none",
+        "n/a",
+        "no serial",
+        "system serial number",
+        "chassis serial number",
+        "base board serial number",
+    ];
+    PLACEHOLDERS.iter().any(|p| value.eq_ignore_ascii_case(p))
 }
 
 /// The same, for a UUID: the first group stands, the rest goes.
