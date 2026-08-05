@@ -28,6 +28,8 @@ pub mod guid;
 pub mod header;
 pub mod layout;
 pub mod mbr;
+mod meta;
+mod names;
 pub mod prevent;
 pub mod repair;
 pub mod report;

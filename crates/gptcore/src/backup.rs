@@ -22,6 +22,7 @@ use crate::disk::{read_lbas, BlockDevice, IoError};
 use crate::entry::{parse_array, PartitionEntry};
 use crate::guid::Guid;
 use crate::header::GptHeader;
+use crate::meta::{decode_meta, encode_meta};
 use crate::repair::{Analysis, RepairPlan, Step, Verdict};
 use crate::style::{self, dim, key, line, title, Line, Style};
 use alloc::format;
@@ -426,35 +427,6 @@ pub fn capture<D: BlockDevice + ?Sized>(
     })
 }
 
-fn encode_meta(meta: &[(String, String)]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for (k, v) in meta {
-        // Tab-separated, newline-terminated: trivially readable in a hex
-        // dump, which is the situation this data exists for.
-        if k.contains('\t') || k.contains('\n') || v.contains('\n') {
-            continue;
-        }
-        out.extend_from_slice(k.as_bytes());
-        out.push(b'\t');
-        out.extend_from_slice(v.as_bytes());
-        out.push(b'\n');
-    }
-    out
-}
-
-fn decode_meta(bytes: &[u8]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let Ok(text) = core::str::from_utf8(bytes) else {
-        return out;
-    };
-    for l in text.lines() {
-        if let Some((k, v)) = l.split_once('\t') {
-            out.push((String::from(k), String::from(v)));
-        }
-    }
-    out
-}
-
 pub fn encode(archive: &Archive, crc: &impl Crc32) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
@@ -838,18 +810,7 @@ pub const MAX_SEQUENCE: u32 = 999;
 /// The number in `gpt-NNN.bkp`, case-insensitively: FAT may hand back
 /// `GPT-001.BKP`.
 pub fn sequence_of(name: &str) -> Option<u32> {
-    if name.len() != NAME_PREFIX.len() + 3 + NAME_SUFFIX.len() {
-        return None;
-    }
-    let (prefix, rest) = name.split_at(NAME_PREFIX.len());
-    if !prefix.eq_ignore_ascii_case(NAME_PREFIX) {
-        return None;
-    }
-    let (digits, suffix) = rest.split_at(3);
-    if !suffix.eq_ignore_ascii_case(NAME_SUFFIX) || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
+    crate::names::sequence_of(name, NAME_PREFIX, NAME_SUFFIX)
 }
 
 /// The next name to write, given what is already there.
@@ -859,9 +820,7 @@ pub fn sequence_of(name: &str) -> Option<u32> {
 /// newest. `None` once the space is exhausted — better to say so than to
 /// overwrite somebody's oldest snapshot.
 pub fn next_name(existing: &[String]) -> Option<String> {
-    let highest = existing.iter().filter_map(|n| sequence_of(n)).max().unwrap_or(0);
-    let next = highest + 1;
-    (next <= MAX_SEQUENCE).then(|| format!("{NAME_PREFIX}{next:03}{NAME_SUFFIX}"))
+    crate::names::next_name(existing, NAME_PREFIX, NAME_SUFFIX, MAX_SEQUENCE)
 }
 
 /// One-line summary for a list of saved backups.
