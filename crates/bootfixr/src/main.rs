@@ -2414,7 +2414,11 @@ fn main_menu() -> Menu<Main> {
 
 #[entry]
 fn main() -> Status {
-    uefi::helpers::init().expect("failed to initialise uefi helpers");
+    // Logger and print conveniences only — nothing this program draws
+    // needs them, and with panic = "abort" an `expect` here would turn a
+    // refusal into a hang requiring the power button, before any UI
+    // exists to say why.
+    let _ = uefi::helpers::init();
     // The firmware arms a five-minute watchdog before handing control to a boot
     // option, and resets the machine when it fires. A menu waiting on a keypress
     // outlives that, so the reset lands mid-session and the machine comes back
