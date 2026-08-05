@@ -27,7 +27,7 @@ use uefi::proto::device_path::build::{self, DevicePathBuilder};
 use uefi::proto::device_path::media::{FilePath, HardDrive, PartitionSignature};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::media::block::BlockIO;
-use uefi::proto::media::file::{Directory, File, FileAttribute, FileInfo, FileMode};
+use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::media::partition::{GptPartitionType, PartitionInfo};
 use uefi::{CString16, Handle, Identify};
@@ -88,6 +88,10 @@ pub struct Scan {
     /// for a partition with no device path protocol, and two of those would
     /// otherwise be indistinguishable.
     pub unreadable: Vec<usize>,
+    /// A directory sat deeper than [`MAX_DEPTH`] and was not descended
+    /// into. Carried so the screens can say "there may be more", because a
+    /// loader the scan silently missed reads as a loader that is gone.
+    pub truncated: bool,
 }
 
 /// The pair that identifies a bootloader: which partition, and which file.
@@ -168,13 +172,6 @@ pub fn boot_path(volume: Handle, file: &str) -> Result<Vec<u8>, String> {
     Ok(built.as_bytes().to_vec())
 }
 
-/// Size of a file, or `None` if it is not a readable regular file.
-fn file_size(root: &mut Directory, path: &str) -> Option<u64> {
-    let handle = root.open(&name16(path)?, FileMode::Read, FileAttribute::empty()).ok()?;
-    let mut file = handle.into_regular_file()?;
-    Some(file.get_boxed_info::<FileInfo>().ok()?.file_size())
-}
-
 /// `dir\name`, without doubling the separator when `dir` is the root.
 fn join_path(dir: &str, name: &str) -> String {
     if dir == "\\" {
@@ -184,15 +181,25 @@ fn join_path(dir: &str, name: &str) -> String {
     }
 }
 
-/// Every `.efi` file under `dir`, and under its subdirectories up to `depth`
-/// levels further down.
+/// How deep under the root the walk descends.
 ///
-/// Called from [`probe`] with `dir = "\\"` and `depth = 3`, which is enough
-/// to reach `\EFI\Microsoft\Boot\bootmgfw.efi` — three directories deep —
-/// without that path needing to be spelled out anywhere. An ESP is not
-/// expected to have a directory tree deep or wide enough for this to be
-/// costly.
-fn efi_files_recursive(root: &mut Directory, dir: &str, depth: u32, out: &mut Vec<String>) {
+/// Deep enough for anything a vendor actually ships —
+/// `\EFI\Microsoft\Boot\bootmgfw.efi` is three levels — with room to
+/// spare, while still bounding the recursion against a corrupt filesystem.
+/// Hitting the limit is recorded, never silent: a loader the scan missed
+/// without saying so reads as a loader that is gone.
+const MAX_DEPTH: u32 = 8;
+
+/// Every `.efi` file under `dir` (with its size, taken from the directory
+/// walk itself), and under its subdirectories up to `depth` levels further
+/// down. Sets `truncated` when a directory was left unvisited.
+fn efi_files_recursive(
+    root: &mut Directory,
+    dir: &str,
+    depth: u32,
+    out: &mut Vec<(String, u64)>,
+    truncated: &mut bool,
+) {
     let Some(name) = name16(dir) else {
         return;
     };
@@ -207,13 +214,18 @@ fn efi_files_recursive(root: &mut Directory, dir: &str, depth: u32, out: &mut Ve
     while let Ok(Some(info)) = handle.read_entry_boxed() {
         let file = info.file_name().to_string();
         if info.attribute().contains(FileAttribute::DIRECTORY) {
-            if file != "." && file != ".." && depth > 0 {
+            if file == "." || file == ".." {
+                continue;
+            }
+            if depth > 0 {
                 subdirs.push(file);
+            } else {
+                *truncated = true;
             }
             continue;
         }
         if file.to_ascii_lowercase().ends_with(".efi") {
-            out.push(join_path(dir, &file));
+            out.push((join_path(dir, &file), info.file_size()));
         }
     }
     // Dropped before recursing, so at most one directory handle from this
@@ -221,23 +233,18 @@ fn efi_files_recursive(root: &mut Directory, dir: &str, depth: u32, out: &mut Ve
     drop(handle);
 
     for subdir in subdirs {
-        efi_files_recursive(root, &join_path(dir, &subdir), depth - 1, out);
+        efi_files_recursive(root, &join_path(dir, &subdir), depth - 1, out, truncated);
     }
 }
 
-/// Everything bootable-looking on one volume.
-fn probe(root: &mut Directory) -> Vec<(String, u64)> {
-    let mut paths = Vec::new();
-    efi_files_recursive(root, "\\", 3, &mut paths);
-
+/// Everything bootable-looking on one volume, and whether any directory
+/// was too deep to look into.
+fn probe(root: &mut Directory) -> (Vec<(String, u64)>, bool) {
     let mut out = Vec::new();
-    for path in paths {
-        if let Some(size) = file_size(root, &path) {
-            out.push((path, size));
-        }
-    }
+    let mut truncated = false;
+    efi_files_recursive(root, "\\", MAX_DEPTH, &mut out, &mut truncated);
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+    (out, truncated)
 }
 
 /// Find every ESP on a fixed disk and everything bootable-looking on it.
@@ -250,7 +257,12 @@ pub fn scan(boot: &crate::selfdev::BootDevice, entries: &[(u16, Vec<u8>)]) -> Sc
         .filter_map(|(slot, bytes)| target_of_bytes(bytes).map(|(guid, file)| (*slot, guid, file)))
         .collect();
 
-    let mut scan = Scan { volumes: Vec::new(), candidates: Vec::new(), unreadable: Vec::new() };
+    let mut scan = Scan {
+        volumes: Vec::new(),
+        candidates: Vec::new(),
+        unreadable: Vec::new(),
+        truncated: false,
+    };
     let Ok(handles) = boot::locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))
     else {
         return scan;
@@ -295,7 +307,11 @@ pub fn scan(boot: &crate::selfdev::BootDevice, entries: &[(u16, Vec<u8>)]) -> Sc
             .ok()
             .and_then(|mut fs| fs.open_volume().ok())
         {
-            Some(mut root) => probe(&mut root),
+            Some(mut root) => {
+                let (found, truncated) = probe(&mut root);
+                scan.truncated |= truncated;
+                found
+            }
             None => {
                 scan.unreadable.push(index);
                 scan.volumes.push(volume);
