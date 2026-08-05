@@ -171,6 +171,18 @@ impl Framebuffer {
             PixelFormat::Bgr => (Channel::fixed(16), Channel::fixed(8), Channel::fixed(0)),
             PixelFormat::Bitmask => {
                 let mask = info.pixel_bitmask()?;
+                // The masks also settle how wide a pixel is, and a bitmask
+                // mode is free to be 16 bits — "5 bits of red in a 16-bit
+                // word" below is legal. Everything under this module
+                // indexes the framebuffer as 32-bit words, so any
+                // narrower pixel would put every write at the wrong
+                // offset and run half of `fill` past the framebuffer.
+                // Rather than grow a second code path for hardware nobody
+                // has seen this tool on, fall back to the text console.
+                let union = mask.red | mask.green | mask.blue | mask.reserved;
+                if (32 - union.leading_zeros()) < 25 {
+                    return None;
+                }
                 (
                     Channel::from_mask(mask.red),
                     Channel::from_mask(mask.green),
@@ -183,7 +195,18 @@ impl Framebuffer {
             return None;
         }
 
-        let base = gop.frame_buffer().as_mut_ptr().cast::<u32>();
+        let mut fb = gop.frame_buffer();
+        // The SAFETY comments on `put` and `fill` assume the framebuffer
+        // holds at least `stride * height` 32-bit pixels. That is what the
+        // formats accepted above imply, but it is the firmware's buffer
+        // and this is the one moment its actual size is in hand — so
+        // check, rather than write past the end of a buffer some firmware
+        // sized differently.
+        let needed = stride.checked_mul(height)?.checked_mul(4)?;
+        if fb.size() < needed {
+            return None;
+        }
+        let base = fb.as_mut_ptr().cast::<u32>();
         Some(Framebuffer {
             base,
             stride,
