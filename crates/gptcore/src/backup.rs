@@ -43,6 +43,12 @@ pub const VERSION: u32 = 2;
 /// reachable by any file older than the metadata section.
 pub const MIN_VERSION: u32 = 1;
 
+/// Well-known metadata key: why this snapshot exists — "manual backup",
+/// "automatic, before repair". Shown by the restore picker so an operator
+/// can tell their snapshots apart; simply absent in files older builds
+/// wrote, which is why this is a metadata key and not a format bump.
+pub const META_LABEL: &str = "label";
+
 /// Size of the fixed part, before the chunks: magic, version, block size,
 /// last block, disk GUID, timestamp, health, chunk count.
 const FIXED_LEN: usize = 52;

@@ -95,6 +95,16 @@ truncated or bit-rotted snapshot is rejected outright rather than
 half-restored. Files that fail to decode are listed as rejected and never
 offered as a choice.
 
+Snapshots are not only taken by hand. A repair saves one to the ESP by
+itself, between the review page and the confirmation gate, so "back up
+before you repair" is enforced by the operation rather than by menu
+ordering. The metadata section records why each file exists under the
+`label` key — "manual backup", "automatic, before repair" — and the restore
+picker shows it, which is what lets an operator with six rows of `gpt-NNN`
+recall which is which. It is a metadata key rather than a format bump on
+purpose: older builds skip keys they do not know, and files they wrote
+simply have no label.
+
 The listing now sweeps removable media the operator keeps their own files on,
 so anything over 4 MiB is rejected on sight rather than read: a coincidental
 namesake of a few hundred MiB would otherwise be pulled into memory in full
