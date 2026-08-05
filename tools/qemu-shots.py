@@ -18,6 +18,10 @@ import sys
 import time
 
 
+class QemuGone(Exception):
+    """QEMU closed the QMP connection: the normal end of a run."""
+
+
 def connect(path, deadline):
     """Wait for QEMU to create the socket, then complete the QMP handshake."""
     while time.time() < deadline:
@@ -41,7 +45,7 @@ class Qmp:
         while b"\n" not in self.buf:
             chunk = self.sock.recv(65536)
             if not chunk:
-                raise SystemExit("qemu-shots: QMP closed")
+                raise QemuGone
             self.buf += chunk
         line, self.buf = self.buf.split(b"\n", 1)
         return json.loads(line)
@@ -80,6 +84,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (BrokenPipeError, ConnectionResetError, SystemExit):
+    except (BrokenPipeError, ConnectionResetError, QemuGone):
         # QEMU exiting first is the normal end of a run, not a failure.
+        # SystemExit deliberately propagates: swallowing it silenced this
+        # script's own error messages (bad usage, no socket) too.
         pass
