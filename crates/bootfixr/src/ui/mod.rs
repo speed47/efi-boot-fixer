@@ -614,12 +614,16 @@ fn run_menu(
         let (cols, rows) = size();
         let detail_rows = items.iter().map(|i| i.detail.len()).max().unwrap_or(0);
         // header, intro, blank, [items], blank, detail, rule, hint, blank.
-        // The last three are the footer's, and are why this reserves four
-        // rows below the detail rather than three: the count of items shown
-        // has to leave the rule a row of its own even when the "... n of m"
-        // line is there too, or a long menu would draw over it.
         let overhead = header_rows() + intro.len() + 1 + detail_rows + 4;
-        let view = rows.saturating_sub(overhead).clamp(1, items.len());
+        let mut view = rows.saturating_sub(overhead).clamp(1, items.len());
+        // A menu that scrolls also prints the "... n of m" indicator row,
+        // which the budget above does not include; without giving it a row
+        // of its own, the footer's rule lands on the selected item's last
+        // detail line. Shrinking the window never makes the menu fit, so
+        // the indicator is shown in exactly the runs that reserve for it.
+        if items.len() > view {
+            view = rows.saturating_sub(overhead + 1).clamp(1, items.len());
+        }
 
         // Keep the selection inside the window.
         if selected < top {
