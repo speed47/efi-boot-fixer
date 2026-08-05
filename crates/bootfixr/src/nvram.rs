@@ -101,6 +101,16 @@ fn get_u16(name: &CStr16) -> Option<u16> {
     (data.len() == 2).then(|| u16::from_le_bytes(bytes))
 }
 
+/// A refusal to walk the variable store for ever.
+///
+/// `GetNextVariableName` is firmware-driven iteration, and firmware that
+/// repeats a key or never says `NOT_FOUND` is a known enough bug class to
+/// be worth a bound: the watchdog is disarmed for the whole session (see
+/// `main`), so an unbounded loop here is a machine that has to be held
+/// down. Real stores hold a few dozen to a few hundred variables; the same
+/// bound `crate::diag` uses.
+pub(crate) const MAX_VARIABLES: usize = 1024;
+
 /// Every `Boot####` in the store, and why enumeration stopped if it did.
 ///
 /// Two passes: collect the slot numbers first, then fetch each one.
@@ -111,7 +121,14 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
     let mut slots = Vec::new();
     let mut truncated = None;
 
-    for key in runtime::variable_keys() {
+    for (seen, key) in runtime::variable_keys().enumerate() {
+        if seen >= MAX_VARIABLES {
+            truncated = Some(format!(
+                "the variable store walk was stopped after {MAX_VARIABLES} names; \
+                 the firmware may be repeating itself"
+            ));
+            break;
+        }
         let key = match key {
             Ok(key) => key,
             Err(e) => {
