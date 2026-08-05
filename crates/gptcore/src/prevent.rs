@@ -89,9 +89,12 @@ pub enum Verdict {
         current: u64,
         proposed: u64,
     },
-    /// Already immediately after the entry array; nothing to do.
+    /// Already at (or below) the block after the entry array; nothing to
+    /// do. `proposed` is where the gap-free value sits, so the description
+    /// can say which of the two situations this is.
     AlreadyMinimal {
         current: u64,
+        proposed: u64,
     },
     Refused(Blocker),
 }
@@ -129,16 +132,28 @@ pub fn assess(analysis: &Analysis) -> Verdict {
     // The entry array occupies LBA 2..=(1 + blocks), so the first block
     // that can legitimately be used is the one after it.
     let proposed = 2 + blocks;
-    let current = main.header.first_usable_lba;
+    let main_fu = main.header.first_usable_lba;
+    let secondary_fu = secondary.header.first_usable_lba;
 
-    if main.header.first_usable_lba != secondary.header.first_usable_lba {
+    let current = if main_fu == secondary_fu {
+        main_fu
+    } else if (main_fu == proposed && secondary_fu > proposed)
+        || (secondary_fu == proposed && main_fu > proposed)
+    {
+        // One header already holds the lowered value and the other still
+        // holds the old one: a power cut between the two writes of this
+        // very operation leaves exactly this. Carrying on from the not yet
+        // lowered value is what makes re-running it finish the job, as the
+        // plan below promises.
+        main_fu.max(secondary_fu)
+    } else {
         return Verdict::Refused(Blocker::HeadersDisagree {
-            main: main.header.first_usable_lba,
-            secondary: secondary.header.first_usable_lba,
+            main: main_fu,
+            secondary: secondary_fu,
         });
-    }
+    };
     if current <= proposed {
-        return Verdict::AlreadyMinimal { current };
+        return Verdict::AlreadyMinimal { current, proposed };
     }
     for (i, e) in main.used_entries() {
         if e.starting_lba < proposed {
@@ -220,15 +235,46 @@ pub fn describe(verdict: Verdict) -> Vec<Line> {
                 ],
             );
         }
-        Verdict::AlreadyMinimal { current } => {
+        Verdict::AlreadyMinimal { current, proposed } if current == proposed => {
             out.push(good(alloc::format!(
                 "  FirstUsableLBA is already {current}, immediately after the"
             )));
             out.push(good("  entry array. There is no gap to close."));
+        }
+        Verdict::AlreadyMinimal { current, proposed } => {
+            // Below, not at: unusual, but it leaves no gap for the faulty
+            // arithmetic to get wrong, and saying "immediately after the
+            // entry array" about it would be false.
+            out.push(warn(alloc::format!(
+                "  FirstUsableLBA is {current}, below the first block after the"
+            )));
+            out.push(warn(alloc::format!(
+                "  entry array ({proposed}). Unusual, but there is no gap to close."
+            )));
         }
         Verdict::Refused(b) => {
             out.push(warn(alloc::format!("  Not applicable: {b}")));
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::plain;
+    extern crate std;
+
+    /// "Immediately after the entry array" is only true at equality; a
+    /// FirstUsableLBA *below* the array's end must not be described as
+    /// though it sat neatly against it.
+    #[test]
+    fn already_minimal_is_described_by_which_case_it_is() {
+        let at = plain(&describe(Verdict::AlreadyMinimal { current: 34, proposed: 34 }));
+        assert!(at.contains("already 34, immediately after the"), "{at}");
+
+        let below = plain(&describe(Verdict::AlreadyMinimal { current: 10, proposed: 34 }));
+        assert!(below.contains("below the first block after the"), "{below}");
+        assert!(!below.contains("immediately after"), "{below}");
+    }
 }

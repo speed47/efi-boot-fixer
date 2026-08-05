@@ -179,7 +179,7 @@ fn closing_the_gap_is_idempotent() {
     let second = analyze(&mut dev, &CRC).unwrap();
     assert_eq!(
         gptcore::prevent::assess(&second),
-        gptcore::prevent::Verdict::AlreadyMinimal { current: 34 }
+        gptcore::prevent::Verdict::AlreadyMinimal { current: 34, proposed: 34 }
     );
     assert!(gptcore::prevent::plan(&second, &CRC).is_none());
 }
@@ -236,3 +236,46 @@ fn a_damaged_disk_is_refused_for_prevention() {
     assert!(gptcore::prevent::plan(&analysis, &CRC).is_none());
     assert!(dev.writes().is_empty());
 }
+
+/// A power cut between the two header writes leaves the main GPT lowered
+/// and the secondary as it was. The plan's doc promises that re-running
+/// the operation simply finishes the job — so the half-written state must
+/// assess as applicable, not refuse as a disagreement.
+#[test]
+fn closing_the_gap_survives_a_power_cut_between_the_two_headers() {
+    let img = deck_image();
+    let before = img.print();
+
+    let mut dev = img.disk();
+    let analysis = analyze(&mut dev, &CRC).unwrap();
+    let full = gptcore::prevent::plan(&analysis, &CRC).expect("a plan");
+
+    // Steps are [write main, flush, write secondary, flush]; the power
+    // cut lands after the first flush.
+    let interrupted = gptcore::repair::RepairPlan {
+        steps: full.steps[..2].to_vec(),
+        header: full.header,
+        entries: full.entries.clone(),
+    };
+    apply(&mut dev, &interrupted).unwrap();
+    drop(dev);
+
+    let mut dev = img.disk();
+    let second = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(
+        gptcore::prevent::assess(&second),
+        gptcore::prevent::Verdict::Applicable { current: 2048, proposed: 34 },
+        "the half-written state must be resumable"
+    );
+    let finish = gptcore::prevent::plan(&second, &CRC).expect("a finishing plan");
+    apply(&mut dev, &finish).unwrap();
+    drop(dev);
+
+    assert!(img.is_clean(), "sgdisk unhappy:\n{}", img.verify());
+    assert_eq!(before, img.print(), "partitions must not move");
+    let mut dev = img.disk();
+    let after = analyze(&mut dev, &CRC).unwrap();
+    assert_eq!(after.main.as_ref().unwrap().header.first_usable_lba, 34);
+    assert_eq!(after.secondary.as_ref().unwrap().header.first_usable_lba, 34);
+}
+
