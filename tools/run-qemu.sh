@@ -389,9 +389,16 @@ drive | timeout "$TIMEOUT" qemu-system-x86_64 \
 rc=$?
 set -e
 echo
-# Not a failure in itself: qemu never exits on its own once the keypresses
-# are done, so `timeout` kills it on every run and 124 is the normal code.
+# qemu never exits on its own once the keypresses are done, so `timeout`
+# kills it on every run and 124 is the normal code. Anything else means the
+# machine never ran at all — qemu missing (127), refused the command line,
+# or crashed — and without this check every "no-change" and "skip" walk
+# would pass green on a host with no qemu installed.
 echo "### qemu exited with $rc (script: $SCRIPT) ###"
+if [ "$rc" -ne 124 ] && [ "$rc" -ne 0 ]; then
+    echo "### FAILED: qemu did not run to the timeout (exit $rc) ###" >&2
+    exit 1
+fi
 
 AFTER=$(disk_digest "$DIR/test.img")
 case "$EFFECT" in
