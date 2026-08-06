@@ -150,29 +150,6 @@ pub fn layout_for(width: usize, height: usize) -> Layout {
     }
 }
 
-/// How good a grid is to lay the menus out in, worst first.
-///
-/// The order the mode chooser sorts on, and it is the same judgement
-/// [`fits`] and [`TARGET_COLS`] already encode, in the order those two
-/// matter: a grid the menus fit in beats one they do not, whatever the cell
-/// size; then a bigger cell, because that is the whole point of changing
-/// mode; then the line length, to settle ties between modes that offer the
-/// same cell.
-fn score(layout: &Layout) -> (bool, usize, core::cmp::Reverse<usize>) {
-    (
-        layout.cols >= MIN_COLS && layout.rows >= MIN_ROWS,
-        layout.cell_w * layout.cell_h,
-        core::cmp::Reverse(layout.cols.abs_diff(TARGET_COLS)),
-    )
-}
-
-/// A mode worth changing to, and what changing to it would come to.
-pub struct Upgrade {
-    pub width: usize,
-    pub height: usize,
-    pub layout: Layout,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     /// ASCII only; everything drawn by this application is.
@@ -292,37 +269,16 @@ impl Console {
         self.fb.resolution()
     }
 
-    /// The mode worth stepping up to, out of what the firmware offers, or
-    /// `None` if this one is already the best of them.
+    /// What a mode at `(width, height)` would come to if it were set — the
+    /// grid [`resolution_menu`](crate::ui::resolution_menu) shows next to
+    /// each mode it offers, so a choice can be made before it is risked.
     ///
-    /// Judged against what the mode in force can do *at best* — its
-    /// [`automatic`] layout — and not against the cell the operator happens
-    /// to have stepped to. Someone who has just chosen a smaller font by
-    /// hand has not thereby asked to be offered a different mode.
-    ///
-    /// Turned before it is scored, because the value of a mode depends on
+    /// Turned before it is laid out, because the value of a mode depends on
     /// which way round the picture goes: 2560x1600 is a wide grid the way
     /// the firmware has it and a tall one on a panel mounted sideways.
-    pub fn upgrade(&self, modes: &[super::Mode]) -> Option<Upgrade> {
-        let rotation = self.fb.rotation();
-        let layout_of = |mode: &super::Mode| {
-            let (width, height) = rotation.logical(mode.width, mode.height);
-            layout_for(width, height)
-        };
-
-        let (width, height) = self.fb.logical_size();
-        let now = layout_for(width, height);
-        let best = modes
-            .iter()
-            .filter(|mode| mode.drawable && !mode.current)
-            .max_by_key(|mode| score(&layout_of(mode)))?;
-
-        let layout = layout_of(best);
-        (score(&layout) > score(&now)).then_some(Upgrade {
-            width: best.width,
-            height: best.height,
-            layout,
-        })
+    pub fn layout_at(&self, width: usize, height: usize) -> Layout {
+        let (width, height) = self.fb.rotation().logical(width, height);
+        layout_for(width, height)
     }
 
     /// Change the framebuffer mode and lay the grid out again in it.

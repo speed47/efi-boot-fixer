@@ -23,7 +23,7 @@ use crate::gfx::{Framebuffer, Rotation};
 // Re-exported rather than reached for directly: `ui` is written against this
 // module and nothing above it names `gfx`, which is what keeps the menus
 // unable to tell the two backends apart.
-pub use crate::gfx::console::{Layout, Upgrade};
+pub use crate::gfx::console::Layout;
 pub use crate::gfx::Mode;
 use uefi::proto::console::text::Color;
 use uefi::system;
@@ -132,11 +132,11 @@ pub fn modes() -> Vec<Mode> {
     })
 }
 
-/// The mode worth stepping up to, out of `modes`, or `None` if the one in
-/// force is already the best on offer.
-pub fn upgrade(modes: &[Mode]) -> Option<Upgrade> {
+/// What a mode at `(width, height)` would come to if it were set, or `None`
+/// on the text console, where there is no grid of ours to preview.
+pub fn layout_at(width: usize, height: usize) -> Option<Layout> {
     with(|b| match b {
-        Backend::Gfx(console) => console.upgrade(modes),
+        Backend::Gfx(console) => Some(console.layout_at(width, height)),
         Backend::Text => None,
     })
 }

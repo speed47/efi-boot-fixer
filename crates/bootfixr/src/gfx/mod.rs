@@ -75,10 +75,10 @@ impl Rotation {
 
     /// A physical extent as the logical one it presents at this rotation.
     ///
-    /// Taken as an argument rather than read off a framebuffer because the
-    /// mode chooser asks it about modes that are not set: what a mode is
-    /// worth depends on which way round the picture will be.
-    const fn logical(self, width: usize, height: usize) -> (usize, usize) {
+    /// Public because the display screen asks it about modes that are not
+    /// set: what a mode is worth depends on which way round the picture
+    /// will be, and only the caller knows that.
+    pub const fn logical(self, width: usize, height: usize) -> (usize, usize) {
         if self.swaps_axes() {
             (height, width)
         } else {
@@ -88,7 +88,7 @@ impl Rotation {
 
     pub const fn name(self) -> &'static str {
         match self {
-            Rotation::None => "as the firmware has it",
+            Rotation::None => "default",
             Rotation::Cw90 => "quarter turn clockwise",
             Rotation::Half => "upside down",
             Rotation::Ccw90 => "quarter turn anticlockwise",
