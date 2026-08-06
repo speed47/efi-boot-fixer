@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     let pkg = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION");
@@ -22,6 +23,7 @@ fn main() {
         },
     };
     println!("cargo:rustc-env=BOOTFIXR_VERSION={version}");
+    println!("cargo:rustc-env=BOOTFIXR_COMPILE_DATE={}", compile_date());
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=BOOTFIXR_VERSION");
@@ -89,6 +91,39 @@ fn stamp(pkg: &str, describe: &str) -> String {
     } else {
         format!("{pkg}+{suffix}")
     }
+}
+
+/// The build timestamp, in RFC 3339 format and forced to UTC, so the binary
+/// can report it regardless of the timezone the build ran in. Computed here
+/// rather than at runtime because the target is `no_std`: no calendar
+/// library is available on that side to turn a clock reading into a date.
+fn compile_date() -> String {
+    let secs =
+        SystemTime::now().duration_since(UNIX_EPOCH).expect("system clock before epoch").as_secs()
+            as i64;
+    let days = secs.div_euclid(86400);
+    let time_of_day = secs.rem_euclid(86400);
+    let (hour, minute, second) = (time_of_day / 3600, (time_of_day / 60) % 60, time_of_day % 60);
+    let (year, month, day) = civil_from_days(days);
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Howard Hinnant's `civil_from_days`: days since the Unix epoch to a
+/// proleptic Gregorian (year, month, day), without pulling in a calendar
+/// crate just for this.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097); // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// The git files whose contents decide the stamp, so that committing or
