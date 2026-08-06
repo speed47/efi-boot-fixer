@@ -72,7 +72,17 @@ const CRC: FirmwareCrc32 = FirmwareCrc32;
 /// another handheld with the same fault is a deletion rather than a
 /// rewrite: `EFI Boot Fixer` stands on its own. The binary is named from
 /// the part that survives that deletion, so it never has to be renamed.
-const APP_NAME: &str = "EFI Boot Fixer for Steam Deck - github.com/speed47/efi-boot-fixer";
+///
+/// Named at runtime rather than fixed at build time: this same binary also
+/// runs on machines SMBIOS does not report as a Deck, and on those the
+/// hardware suffix would be a claim this program cannot back up.
+fn app_name() -> &'static str {
+    if ui::is_steam_deck() {
+        "EFI Boot Fixer for Steam Deck - github.com/speed47/efi-boot-fixer"
+    } else {
+        "EFI Boot Fixer - github.com/speed47/efi-boot-fixer"
+    }
+}
 
 /// Open a protocol without disturbing drivers that already hold it.
 ///
@@ -2641,7 +2651,7 @@ fn main() -> Status {
             intro.push(warn("  boot volume unknown - no disk will be marked [boot]"));
         }
 
-        match menu.show(APP_NAME, &intro, "exit") {
+        match menu.show(app_name(), &intro, "exit") {
             Some(Main::Overview) => run_overview(&boot_device),
             Some(Main::Report) => run_report(&boot_device, esp_lost),
             Some(Main::Gpt) => run_gpt_menu(&boot_device, &mut esp_lost),
