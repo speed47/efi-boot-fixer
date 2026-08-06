@@ -340,6 +340,34 @@ fn a_hybrid_mbr_on_the_target_refuses_the_restore() {
     assert!(matches!(restore_plan(&archive, &analysis), Err(Mismatch::HybridMbr)));
 }
 
+/// And the same refusal from the other side. Capture records the MBR as it
+/// found it, so a snapshot of a disk that carried a hybrid MBR holds one —
+/// and writing it back leaves a disk that repair, prevent and restore all
+/// refuse from then on, with nothing on screen having said so.
+#[test]
+fn a_hybrid_mbr_inside_the_snapshot_refuses_the_restore() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+
+    // A second, non-protective record alongside the 0xEE one, in the
+    // snapshot rather than on the disk.
+    let chunk = archive.chunks.iter_mut().find(|c| c.role == Role::Mbr).expect("mbr chunk");
+    let rec = 446 + 16;
+    chunk.data[rec] = 0x80;
+    chunk.data[rec + 4] = 0x07;
+    chunk.data[rec + 8..rec + 12].copy_from_slice(&2048u32.to_le_bytes());
+    chunk.data[rec + 12..rec + 16].copy_from_slice(&524_288u32.to_le_bytes());
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    assert_eq!(
+        analysis.mbr,
+        gptcore::mbr::MbrStatus::Protective,
+        "the disk itself is fine; the refusal has to come from the file"
+    );
+    assert!(matches!(restore_plan(&archive, &analysis), Err(Mismatch::HybridMbrInArchive)));
+}
+
 /// A corrupt main header is free to point its entry array anywhere,
 /// including into the middle of a partition. Capturing from there means
 /// restoring to there, so the pointer must not be followed.

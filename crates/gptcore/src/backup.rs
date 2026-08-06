@@ -645,6 +645,10 @@ pub enum Mismatch {
     },
     /// The disk now carries a hybrid MBR, which this tool never writes to.
     HybridMbr,
+    /// The snapshot's own MBR chunk is hybrid. Capture records the MBR as
+    /// it found it, so this file is evidence worth keeping — but writing
+    /// it back installs a state every write path here refuses afterwards.
+    HybridMbrInArchive,
     /// Nothing to write: the archive has no header chunks.
     Incomplete,
 }
@@ -685,6 +689,11 @@ impl core::fmt::Display for Mismatch {
             Mismatch::HybridMbr => {
                 write!(f, "this disk carries a hybrid MBR, which this tool never modifies")
             }
+            Mismatch::HybridMbrInArchive => write!(
+                f,
+                "the MBR it holds is hybrid, and writing it back would leave a disk \
+                 this tool never modifies"
+            ),
             Mismatch::Incomplete => write!(f, "the snapshot does not contain both GPT headers"),
         }
     }
@@ -708,6 +717,18 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     // saved MBR chunk straight over it.
     if analysis.mbr == crate::mbr::MbrStatus::Hybrid {
         return Err(Mismatch::HybridMbr);
+    }
+    // And the same refusal in the other direction, because the check above
+    // asks what is on the disk now and the write turns on what the file
+    // would put there. Restoring a hybrid MBR leaves a disk that repair,
+    // prevent and restore all refuse from then on: the tool would have
+    // disabled itself on the machine it was brought in to fix, having said
+    // "Written and flushed." on the way. A snapshot holding one is still
+    // worth keeping, and capture still records the MBR as it found it.
+    if let Some(c) = archive.chunk(Role::Mbr) {
+        if crate::mbr::inspect(&c.data, archive.last_block) == crate::mbr::MbrStatus::Hybrid {
+            return Err(Mismatch::HybridMbrInArchive);
+        }
     }
 
     for chunk in &archive.chunks {
