@@ -624,6 +624,15 @@ pub enum Mismatch {
         role: Role,
         lba: u64,
     },
+    /// A structural chunk is not the one block its role occupies. Nothing
+    /// bounds a chunk's payload but the size of the file it came in, so an
+    /// oversized "protective MBR" would be written from LBA 0 forward,
+    /// through the entry array this plan has just flushed and into the
+    /// partitions past it.
+    WrongSize {
+        role: Role,
+        blocks: u64,
+    },
     /// An entry-array chunk would land inside the area the archive's own
     /// table says belongs to partitions. A snapshot taken while a header
     /// was corrupt can record its array from anywhere that header pointed;
@@ -662,6 +671,9 @@ impl core::fmt::Display for Mismatch {
             }
             Mismatch::MisplacedChunk { role, lba } => {
                 write!(f, "the {} is recorded at LBA {lba}, not where it belongs", role.describe())
+            }
+            Mismatch::WrongSize { role, blocks } => {
+                write!(f, "the {} is recorded as {blocks} blocks, not one", role.describe())
             }
             Mismatch::OverlapsPartitions { role, lba, blocks } => {
                 write!(
@@ -724,46 +736,63 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
         .or_else(|| GptHeader::parse(&secondary_header.data))
         .ok_or(Mismatch::Incomplete)?;
 
-    // Structural chunks go exactly where their role says. Every archive
-    // this tool writes satisfies this; one that does not is not a restore
-    // anyone meant to make.
-    if let Some(c) = archive.chunk(Role::Mbr) {
-        if c.lba != 0 {
-            return Err(Mismatch::MisplacedChunk { role: Role::Mbr, lba: c.lba });
+    // Structural chunks go exactly where their role says, and are exactly
+    // the one block that role occupies. Every archive this tool writes
+    // satisfies both; one that does not is not a restore anyone meant to
+    // make. The size matters as much as the position, because the position
+    // alone only fixes where such a chunk starts.
+    for (role, lba) in
+        [(Role::Mbr, 0), (Role::MainHeader, 1), (Role::SecondaryHeader, archive.last_block)]
+    {
+        let Some(c) = archive.chunk(role) else { continue };
+        if c.lba != lba {
+            return Err(Mismatch::MisplacedChunk { role, lba: c.lba });
+        }
+        let blocks = c.blocks(archive.block_size);
+        if blocks != 1 {
+            return Err(Mismatch::WrongSize { role, blocks });
         }
     }
-    if main_header.lba != 1 {
-        return Err(Mismatch::MisplacedChunk { role: Role::MainHeader, lba: main_header.lba });
-    }
-    if secondary_header.lba != archive.last_block {
-        return Err(Mismatch::MisplacedChunk {
-            role: Role::SecondaryHeader,
-            lba: secondary_header.lba,
-        });
-    }
 
-    // Entry arrays may only land clear of the area the archive's own
-    // table hands to partitions. Old snapshots taken while a header was
-    // corrupt can record an array from anywhere that header pointed, and
-    // this is the last place able to refuse them.
-    let references =
+    // Entry arrays may only land clear of the area handed to partitions.
+    // Old snapshots taken while a header was corrupt can record an array
+    // from anywhere that header pointed, and this is the last place able
+    // to refuse them.
+    //
+    // Where the partitions are is a question about the disk, so the answer
+    // comes from the disk — the same references [`capture`] vets against,
+    // at the other end of the same journey. The archive's headers are the
+    // bytes about to be installed and can say anything at all: a file
+    // declaring a usable range of 2..2 satisfies every sanity test here
+    // and then vetoes nothing, which would let a snapshot on a USB stick
+    // place megabytes of "entry array" anywhere above LBA 2. They keep
+    // their veto, because an honest snapshot knows things a wrecked disk
+    // has forgotten, but they no longer confer permission.
+    let disk_refs = [
+        analysis.main.as_ref().ok().map(|t| t.header),
+        analysis.secondary.as_ref().ok().map(|t| t.header),
+    ];
+    let archive_refs =
         [GptHeader::parse(&main_header.data), GptHeader::parse(&secondary_header.data)];
     for role in [Role::MainEntries, Role::SecondaryEntries] {
         let Some(c) = archive.chunk(role) else { continue };
         let blocks = c.blocks(archive.block_size);
-        let ok = match vet_entries_region(c.lba, blocks, &references, archive.last_block) {
-            Some(ok) => ok,
-            // No header offers a usable range to vet against, so only the
-            // conventional locations, at the conventional size, can be
-            // trusted.
-            None => {
-                blocks <= default_array_blocks(archive.block_size)
-                    && match role {
-                        Role::MainEntries => c.lba == 2,
-                        _ => c.lba.saturating_add(blocks) == archive.last_block,
-                    }
-            }
-        };
+        let vetoed_by_archive =
+            vet_entries_region(c.lba, blocks, &archive_refs, archive.last_block) == Some(false);
+        let ok = !vetoed_by_archive
+            && match vet_entries_region(c.lba, blocks, &disk_refs, analysis.last_block) {
+                Some(ok) => ok,
+                // No header on this disk offers a usable range to vet
+                // against, so only the conventional locations, at the
+                // conventional size, can be trusted.
+                None => {
+                    blocks <= default_array_blocks(archive.block_size)
+                        && match role {
+                            Role::MainEntries => c.lba == 2,
+                            _ => c.lba.saturating_add(blocks) == archive.last_block,
+                        }
+                }
+            };
         if !ok {
             return Err(Mismatch::OverlapsPartitions { role, lba: c.lba, blocks });
         }
