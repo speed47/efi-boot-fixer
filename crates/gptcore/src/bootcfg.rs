@@ -311,6 +311,15 @@ pub fn plan_restore(snap: &Snapshot) -> Vec<VarWrite> {
     entries.into_iter().chain(settings).chain(order).chain(next).collect()
 }
 
+/// Well-known metadata key: the variables that could not be read when the
+/// snapshot was taken, space-separated.
+///
+/// A partial copy that says so is worth having; one that presents itself
+/// as complete is not — and saying so inside the file only tells whoever
+/// hex-dumps it later, not the operator being shown a screen that says
+/// "the boot configuration as it is now was saved".
+pub const META_UNREAD: &str = "unread";
+
 /// What was saved, for the screen shown after saving it.
 pub fn describe(snap: &Snapshot) -> Vec<Line> {
     let mut out = alloc::vec![key(format!("  Taken:   {}", snap.time))];
@@ -331,6 +340,12 @@ pub fn describe(snap: &Snapshot) -> Vec<Line> {
             true => dim(row),
             false => warn(format!("{row}  (not a boot variable - not restored)")),
         });
+    }
+    if let Some(unread) = snap.meta_get(META_UNREAD) {
+        out.push(Line::blank());
+        out.push(warn("  This copy is PARTIAL. These could not be read when"));
+        out.push(warn("  it was taken, and are not in it:"));
+        out.push(warn(format!("    {unread}")));
     }
     out
 }

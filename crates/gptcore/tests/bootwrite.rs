@@ -368,3 +368,20 @@ fn the_names_the_tool_writes_are_the_names_it_saves() {
         assert!(!bootopt::may_write(name), "{name}");
     }
 }
+
+/// A partial copy that says so is worth having; one that presents itself
+/// as complete is not. The tool records what it could not read, and the
+/// screen has to be the thing that shows it — nobody hex-dumps the file
+/// they are about to restore.
+#[test]
+fn a_partial_snapshot_says_so_where_it_will_be_read() {
+    let mut snap = snapshot();
+    snap.meta.push((String::from(bootcfg::META_UNREAD), String::from("Boot0007 Timeout")));
+
+    let text = gptcore::style::plain(&bootcfg::describe(&snap));
+    assert!(text.contains("PARTIAL"), "{text}");
+    assert!(text.contains("Boot0007 Timeout"), "{text}");
+
+    // And an ordinary snapshot says nothing of the sort.
+    assert!(!gptcore::style::plain(&bootcfg::describe(&snapshot())).contains("PARTIAL"));
+}

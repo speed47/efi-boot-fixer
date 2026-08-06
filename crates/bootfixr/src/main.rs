@@ -1622,7 +1622,7 @@ fn run_boot_scan(boot_device: &BootDevice) {
 // ------------------------------------------------- NVRAM writes (phase 2)
 
 /// Save the whole boot configuration to the chosen volumes.
-fn take_boot_snapshot(dests: &[store::Volume]) -> Result<Written, String> {
+fn take_boot_snapshot(dests: &[store::Volume]) -> Result<(Written, Option<String>), String> {
     let (vars, missed) = nvram::capture();
     if vars.is_empty() {
         return Err(String::from("there is nothing in NVRAM to save"));
@@ -1640,13 +1640,14 @@ fn take_boot_snapshot(dests: &[store::Volume]) -> Result<Written, String> {
     }
     // A partial copy that says so is worth having; one that pretends to be
     // complete is not.
-    if !missed.is_empty() {
-        meta.push((String::from("unread"), missed.join(" ")));
+    let unread = (!missed.is_empty()).then(|| missed.join(" "));
+    if let Some(unread) = &unread {
+        meta.push((String::from(bootcfg::META_UNREAD), unread.clone()));
     }
 
     let snap = bootcfg::Snapshot { time: now(), vars, meta };
     let bytes = bootcfg::encode(&snap, &CRC);
-    write_snapshot(dests, boot_name, &bytes)
+    write_snapshot(dests, boot_name, &bytes).map(|written| (written, unread))
 }
 
 /// Save the boot configuration before this session's first NVRAM write.
@@ -1675,17 +1676,23 @@ fn ensure_boot_snapshot(taken: &mut bool, esp_lost: bool) -> bool {
     // Nowhere would take it is the same situation as not having been able
     // to build it at all, and gets the same question.
     let written = match take_boot_snapshot(&dests) {
-        Ok(written) if written.any() => Ok(written),
-        Ok(refused) => Err(refused.lines()),
+        Ok((written, unread)) if written.any() => Ok((written, unread)),
+        Ok((refused, _)) => Err(refused.lines()),
         Err(e) => Err(alloc::vec![bad(format!("  {e}"))]),
     };
 
     match written {
-        Ok(written) => {
+        Ok((written, missed_note)) => {
             *taken = true;
             let mut lines =
                 alloc::vec![good("  The boot configuration as it is now was saved to:")];
             lines.extend(written.lines());
+            if let Some(unread) = missed_note.as_deref() {
+                lines.push(Line::blank());
+                lines.push(warn("  This copy is PARTIAL. These could not be read, and"));
+                lines.push(warn("  are not in it:"));
+                lines.push(warn(format!("    {unread}")));
+            }
             lines.push(Line::blank());
             lines.push(dim("  Taken automatically before the first change of"));
             lines.push(dim("  this session, so there is a record to go back to."));
@@ -1827,6 +1834,21 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
             return show_error("Register a bootloader", format!("BootOrder cannot be read - {e}"))
         }
     };
+    // And the same reasoning one step further, because the slot for the
+    // new entry is the lowest one not in the list of entries that were
+    // found. From a list that stopped early that is a slot already in use:
+    // the write would replace a working entry, every screen would call it
+    // an addition, and the snapshot taken moments before came from the
+    // same short walk, so the copy to go back to would not hold it either.
+    if let Some(why) = &state.truncated {
+        return show_error(
+            "Register a bootloader",
+            format!(
+                "{why}\n\nChoosing a slot from a partial list of entries could \
+                 overwrite one that already exists."
+            ),
+        );
+    }
     let scan = espscan::scan(boot_device, &known_paths(&state));
 
     let new: Vec<&espscan::Candidate> =
