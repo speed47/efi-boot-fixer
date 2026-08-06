@@ -51,7 +51,6 @@ pub(crate) fn decode_meta(bytes: &[u8]) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     extern crate std;
-    use alloc::format;
     use alloc::string::ToString;
 
     #[test]
@@ -63,7 +62,11 @@ mod tests {
     /// Nothing signs a snapshot, and a reader shows one line per pair.
     #[test]
     fn a_metadata_section_cannot_be_arbitrarily_long() {
-        let text: String = (0..10_000).map(|i| format!("k{i}\tv\n")).collect();
+        let text = (0..10_000).fold(String::new(), |mut acc, i| {
+            use core::fmt::Write;
+            let _ = writeln!(acc, "k{i}\tv");
+            acc
+        });
         assert_eq!(decode_meta(text.as_bytes()).len(), MAX_PAIRS);
     }
 
