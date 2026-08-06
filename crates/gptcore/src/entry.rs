@@ -75,11 +75,19 @@ impl PartitionEntry {
 /// treated as an error: the array is sized by the header, and a short read
 /// is already reported elsewhere.
 pub fn parse_array(bytes: &[u8], count: u32, stride: u32) -> Vec<PartitionEntry> {
+    // The bound [`GptHeader::entry_array_len`] applies, applied again here
+    // because this is reached with a header's raw count *before* that
+    // header has been validated, and with a count out of a snapshot file,
+    // which no header validates at all. Past the end of `bytes` every
+    // iteration is a failing `get`, so an unclamped count changes no
+    // result and costs four billion of them: a rescue tool that looks
+    // hung, on a machine whose watchdog it disarmed at startup.
+    let count = count.min(crate::header::MAX_ENTRY_COUNT) as usize;
     let stride = stride as usize;
     if stride < 128 {
         return Vec::new();
     }
-    (0..count as usize)
+    (0..count)
         .filter_map(|i| {
             let start = i.checked_mul(stride)?;
             let end = start.checked_add(stride)?;
@@ -150,6 +158,19 @@ mod tests {
         let entries = parse_array(&bytes, 1, 256);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name_string(), "esp");
+    }
+
+    /// The count comes off a disk, or out of a file, before anything has
+    /// validated it. Past the end of the buffer each iteration finds
+    /// nothing, so the clamp changes no result — it only refuses to spend
+    /// four billion iterations proving it.
+    #[test]
+    fn a_count_larger_than_the_array_bound_is_clamped() {
+        let bytes = alloc::vec![0u8; 9000 * 128];
+        assert_eq!(parse_array(&bytes, 9000, 128).len(), crate::header::MAX_ENTRY_COUNT as usize);
+        assert!(parse_array(&[], u32::MAX, 128).is_empty());
+        // The conventional table is untouched by the bound.
+        assert_eq!(parse_array(&bytes, 128, 128).len(), 128);
     }
 
     #[test]

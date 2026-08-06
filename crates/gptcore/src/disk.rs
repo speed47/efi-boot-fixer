@@ -16,6 +16,8 @@ pub enum IoError {
     DeviceError,
     /// The device is not writable.
     ReadOnly,
+    /// The buffer the request needs could not be allocated.
+    TooLarge,
 }
 
 impl core::fmt::Display for IoError {
@@ -25,6 +27,7 @@ impl core::fmt::Display for IoError {
             IoError::Unaligned => "buffer is not a whole number of blocks",
             IoError::DeviceError => "device error",
             IoError::ReadOnly => "device is not writable",
+            IoError::TooLarge => "not enough memory for a request this size",
         };
         f.write_str(s)
     }
@@ -59,7 +62,14 @@ pub fn read_lbas<D: BlockDevice + ?Sized>(
         return Err(IoError::OutOfRange);
     }
 
-    let mut buf = alloc::vec![0u8; len];
+    // Ask for the memory rather than assuming it. `vec![0; len]` cannot
+    // fail politely: out of pool, it calls the allocation error handler,
+    // which under firmware is the tool vanishing from the screen of
+    // somebody whose machine already will not boot. A refusal is a line
+    // of text, and every caller here already carries one.
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(len).map_err(|_| IoError::TooLarge)?;
+    buf.resize(len, 0u8);
     dev.read_blocks(lba, &mut buf)?;
     Ok(buf)
 }
