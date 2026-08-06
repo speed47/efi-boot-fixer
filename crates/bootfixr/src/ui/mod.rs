@@ -856,7 +856,7 @@ pub fn init(is_steam_deck: bool) {
 /// judgement about a particular person looking at a particular panel from
 /// wherever they happen to be holding it, and no amount of arithmetic here
 /// settles it.
-/// The modes the firmware says it could set, and what the largest would give.
+/// The modes the firmware says it could set.
 ///
 /// Here because the tool deliberately leaves the firmware's own choice of
 /// mode alone — see [`crate::gfx::Framebuffer::open`] — which means a screen
@@ -867,55 +867,30 @@ pub fn init(is_steam_deck: bool) {
 /// nothing above 8x16 reaches 80 columns at that resolution, and a font
 /// that will not change reads as a font that was never there.
 ///
-/// Reporting only. Nothing on this screen calls `SetMode`.
-fn display_modes(
-    modes: &[term::Mode],
-    upgrade: Option<&term::Upgrade>,
-    cols: usize,
-    rows: usize,
-    layout: Option<term::Layout>,
-) {
+/// Reporting only. Nothing on this screen calls `SetMode`; choosing one of
+/// these modes is [`resolution_menu`]'s job, which a second press of View
+/// reaches whenever there is more than one to choose between.
+fn display_modes(modes: &[term::Mode], cols: usize, rows: usize, layout: Option<term::Layout>) {
     if modes.is_empty() {
         return;
     }
     // Rows already spent: the header, four of prose, two blanks, the two
     // status lines, the pixel line if it was printed, and the blank and
-    // heading below. Three more are held back for the two lines the offer
-    // takes and for the note a press can add. What is left must stop short
-    // of the footer's rule.
+    // heading below. One more is held back for the note a press can add.
+    // What is left must stop short of the footer's rule.
     let used = header_rows() + 10 + usize::from(layout.is_some());
-    let budget = rows.saturating_sub(3).saturating_sub(used + 3).max(1);
+    let budget = rows.saturating_sub(3).saturating_sub(used + 1).max(1);
 
     outln!();
     paint(colors(Style::Dim));
     let undrawable = modes.iter().any(|m| !m.drawable);
     outln!(
-        "  Modes this display offers (* in use{}):",
+        "  Available screen resolutions (* currently in use{}):",
         if undrawable { ", ! not ours to draw in" } else { "" }
     );
     body();
     for line in mode_lines(modes, text_width(cols).saturating_sub(4), budget) {
         outln!("    {line}");
-    }
-
-    // The offer, where there is one worth making. Said in full — the mode,
-    // the grid it comes to, and how it undoes itself — because an operator
-    // about to risk the only picture they have needs to know the way back
-    // before the picture is gone, not after.
-    if let Some(upgrade) = upgrade {
-        paint(colors(Style::Dim));
-        outln!(
-            "  [{}] tries {} x {}: {} x {} characters in cells of {}x{}.",
-            key_label("View"),
-            upgrade.width,
-            upgrade.height,
-            upgrade.layout.cols,
-            upgrade.layout.rows,
-            upgrade.layout.cell_w,
-            upgrade.layout.cell_h
-        );
-        outln!("  If the picture does not survive it, waiting brings this one back.");
-        body();
     }
 }
 
@@ -1005,21 +980,21 @@ const MODE_SECONDS: usize = 6;
 fn confirm_mode(previous: (usize, usize)) -> bool {
     let ticks_per_second = 1_000_000 / TICK_US;
     for left in (1..=MODE_SECONDS).rev() {
-        let (cols, rows) = size();
+        let (_, rows) = size();
         clear();
         header("Display");
         paint(colors(Style::Key));
-        outln!("  This is a new display mode, {cols} x {rows} characters.");
+        outln!("  Applied a new display mode.");
         body();
         outln!();
-        outln!("  If you can read it, keep it. If you cannot, wait: the mode");
-        outln!("  you had comes back on its own and nothing is lost by it.");
+        outln!("  Will automatically revert to the previous mode unless you");
+        outln!("  confirm that this new mode is usable on your device.");
         outln!();
         paint(colors(Style::Warn));
         let (width, height) = previous;
-        outln!("  Going back to {width} x {height} in {left}...");
+        outln!("  Reverting to {width}x{height} in {left}s...");
         body();
-        footer(rows, &[hint("A", "keep this mode"), hint("B", "go back now")]);
+        footer(rows, &[hint("A", "keep this mode"), hint("B", "revert to previous mode")]);
 
         term::flush();
         for _ in 0..ticks_per_second {
@@ -1077,32 +1052,38 @@ fn display() {
     loop {
         let (cols, rows) = size();
         let layout = term::layout();
-        let upgrade = term::upgrade(&modes);
+        // One mode is not a choice, so a second View earns a hint only where
+        // the firmware has offered more than that.
+        let choosable = modes.len() > 1;
         clear();
-        header("Display");
-        outln!("  This screen is drawn by the toolkit itself rather than by the");
-        outln!("  firmware, which is what makes it possible to turn the picture");
-        outln!("  to match the panel. The Steam Deck's is mounted sideways, so");
-        outln!("  the firmware's own text comes out a quarter turn off there.");
+        header("Display configuration");
+        outln!("  You may configure screen orientation, font size and resolution.");
+        outln!("  See the available controls at the bottom of the screen.");
         outln!();
+        out!("  Current orientation: ");
         paint(colors(Style::Key));
-        outln!("  Now showing: {}, {cols} x {rows} characters", fit(rotation.name(), cols));
-        body();
+        outln!("{}", fit(rotation.name(), cols.saturating_sub(23)));
+        paint(colors(Style::Normal));
+        out!("  Text area is: ");
+        paint(colors(Style::Key));
+        outln!("{cols} columns x {rows} lines");
         if let (Some((width, height)), Some(layout)) = (term::resolution(), layout) {
-            outln!(
-                "  Drawn on {width} x {height} pixels, cells of {}x{}",
-                layout.cell_w,
-                layout.cell_h
-            );
+            paint(colors(Style::Normal));
+            out!("  Current resolution: ");
+            paint(colors(Style::Key));
+            outln!("{width}x{height}");
+            paint(colors(Style::Normal));
+            out!("  Characters size: ");
+            paint(colors(Style::Key));
+            outln!("{}x{}", layout.cell_w, layout.cell_h);
         }
-        outln!();
-        outln!("  If you can read this the right way up, there is nothing to do.");
+        body();
 
-        display_modes(&modes, upgrade.as_ref(), cols, rows, layout);
+        display_modes(&modes, cols, rows, layout);
 
         if let Some(note) = note {
             paint(colors(Style::Dim));
-            outln!("  {}", fit(note, cols));
+            outln!("  {}", fit(note, cols.saturating_sub(2)));
             body();
         }
 
@@ -1113,8 +1094,8 @@ fn display() {
         // is the button that acts on it, and it keeps its old meaning of
         // leaving on every screen where there is no mode worth trying.
         let mut hints = vec![hint("LEFT/RIGHT", "turn"), hint("UP/DOWN", "text size")];
-        if upgrade.is_some() {
-            hints.push(hint("View", "bigger mode"));
+        if choosable {
+            hints.push(hint("View", "choose resolution"));
         }
         hints.push(hint("A", "done"));
         footer(rows, &hints);
@@ -1126,17 +1107,15 @@ fn display() {
             Input::Right => rotation = rotation.next(),
             Input::Up => note = (!term::resize_text(true)).then_some(NO_BIGGER_SIZE),
             Input::Down => note = (!term::resize_text(false)).then_some(NO_SMALLER_SIZE),
-            Input::View => match upgrade {
-                Some(upgrade) => {
-                    note = try_mode(upgrade.width, upgrade.height);
-                    // Which mode is the current one is part of the answer,
-                    // and so of the offer built from it.
-                    modes = term::modes();
-                }
-                // Nothing worth trying, so View means what it means
-                // everywhere else on this screen.
-                None => break,
-            },
+            Input::View if choosable => {
+                note = resolution_menu(&modes);
+                // Which mode is the current one is part of the answer, and
+                // so of the list the picker shows if it is opened again.
+                modes = term::modes();
+            }
+            // Nothing worth choosing, so View means what it means
+            // everywhere else on this screen.
+            Input::View => break,
             Input::Select | Input::Cancel => break,
         }
         term::set_rotation(rotation);
@@ -1144,4 +1123,95 @@ fn display() {
     // The press that leaves is held long enough to repeat as often as any
     // other, and the screen this returns to would act on what it left behind.
     drain();
+}
+
+/// Offer every mode the firmware reports, and apply the one chosen.
+///
+/// Reached with a second View from [`display`], and only when there is more
+/// than one mode to choose between — one mode is not a choice. A bespoke
+/// loop rather than [`run_menu`]: that function's own View reaches
+/// [`display`], which is exactly where this already is, and there is
+/// nothing past this screen worth reaching with a third press.
+///
+/// Returns what [`display`] should say, if anything.
+fn resolution_menu(modes: &[term::Mode]) -> Option<&'static str> {
+    let mut selected = modes.iter().position(|m| m.current).unwrap_or(0);
+    let mut top = 0usize;
+    drain();
+
+    loop {
+        let (cols, rows) = size();
+        // header, intro, blank, [modes], blank, rule, hint, blank, plus one
+        // more for the scroll indicator on a list that does not fit.
+        let overhead = header_rows() + 4 + 4;
+        let mut view = rows.saturating_sub(overhead).clamp(1, modes.len());
+        if modes.len() > view {
+            view = rows.saturating_sub(overhead + 1).clamp(1, modes.len());
+        }
+
+        if selected < top {
+            top = selected;
+        } else if selected >= top + view {
+            top = selected + 1 - view;
+        }
+
+        clear();
+        header("Choose a resolution");
+        outln!("  Pick a mode below.");
+        outln!("  You will be asked to confirm it once it is applied.");
+        outln!();
+
+        for (i, mode) in modes.iter().enumerate().skip(top).take(view) {
+            let mut label = format!("{}x{}", mode.width, mode.height);
+            if let Some(layout) = term::layout_at(mode.width, mode.height) {
+                label.push_str(&format!(" - {} cols x {} rows", layout.cols, layout.rows));
+            }
+            if mode.current {
+                label.push_str(" (current)");
+            } else if !mode.drawable {
+                label.push_str(" (not ours to draw in)");
+            }
+            if i == selected {
+                paint(HIGHLIGHT);
+                let width = cols.saturating_sub(3);
+                let text = fit(&label, width);
+                outln!(" {} {text:<width$}", term::marker());
+                body();
+            } else {
+                outln!("   {}", fit(&label, cols.saturating_sub(3)));
+            }
+        }
+        if modes.len() > view {
+            paint(colors(Style::Dim));
+            outln!("   ... {} of {}", selected + 1, modes.len());
+            body();
+        }
+
+        outln!();
+        outln!("{}", fit("  If screen becomes unreadable, it'll revert automatically after a few seconds.", cols));
+
+        footer(rows, &[hint("D-pad", "move"), hint("A", "apply"), hint("B", "back")]);
+
+        match wait_raw() {
+            Input::Up => {
+                selected = (selected as isize - 1).rem_euclid(modes.len() as isize) as usize
+            }
+            Input::Down => selected = (selected + 1) % modes.len(),
+            Input::Select => {
+                let mode = &modes[selected];
+                // Already in force, so there is nothing to apply or confirm.
+                if mode.current {
+                    continue;
+                }
+                let note = try_mode(mode.width, mode.height);
+                drain();
+                return note;
+            }
+            Input::Cancel => {
+                drain();
+                return None;
+            }
+            _ => {}
+        }
+    }
 }

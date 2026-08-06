@@ -330,19 +330,24 @@ drive() {
             keys "$LEFT" "$RIGHT"                   # turn away and back
             keys "$A"                               # done, back to the menu
             keys "$B" ;;                            # exit
-        display-mode)                               # take the offered mode
-            # The offer is only made where the firmware's own mode is too
-            # small to lay the menus out in the largest cell the display
-            # could carry, so this walk wants a RES that is: 800x600 is one,
-            # and is what a desktop firmware often picks unasked.
+        display-mode)                               # pick a bigger mode and keep it
+            # The picker only earns its View when the firmware reports more
+            # than one mode, so this walk wants a RES that is: 800x600 is
+            # one, and OVMF's own list runs well past it. The list is sorted
+            # smallest first and opens on the mode in force, so one DOWN
+            # from there lands on something bigger.
             keys "$TAB"                             # View, from the menu
-            keys "$TAB"                             # View again: try the mode
+            keys "$TAB"                             # View again: choose a resolution
+            keys "$DOWN"                             # a bigger mode than the current one
+            keys "$A"                               # apply it
             keys "$A"                               # confirm, inside the timer
             keys "$A"                               # done, back to the menu
             keys "$B" ;;                            # exit
         display-revert)                             # say nothing, and get it back
             keys "$TAB"                             # View, from the menu
-            keys "$TAB"                             # View again: try the mode
+            keys "$TAB"                             # View again: choose a resolution
+            keys "$DOWN"                             # a bigger mode than the current one
+            keys "$A"                               # apply it
             # Longer than the confirmation is given, so the mode goes back
             # on its own. This is the path a panel that shows nothing takes,
             # and the only one that cannot be checked by pressing anything.
