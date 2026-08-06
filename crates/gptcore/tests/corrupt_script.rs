@@ -178,7 +178,9 @@ fn the_scripts_own_restore_works_without_the_application() {
     let before = img.read_lba(0, 34);
 
     run(&["break", img.path.to_str().unwrap(), "-o", snap.to_str().unwrap(), "--yes"]);
-    run(&["restore", img.path.to_str().unwrap(), "-i", snap.to_str().unwrap()]);
+    // `--yes` for the same reason `break` above takes it: the script asks
+    // for a typed confirmation now, and a test has no operator.
+    run(&["restore", img.path.to_str().unwrap(), "-i", snap.to_str().unwrap(), "--yes"]);
 
     assert_eq!(img.read_lba(0, 34), before);
     assert!(img.is_clean(), "{}", img.verify());
