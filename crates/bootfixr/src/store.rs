@@ -215,6 +215,13 @@ impl Volume {
     /// ones. A name that is present but unreadable still counts as taken,
     /// which is the whole point of numbering from a directory listing
     /// rather than from a counter.
+    ///
+    /// So does a *directory*. [`Volume::save`] decides a name is free by
+    /// asking the firmware to open it, and a directory opens, so one named
+    /// `gpt-002.bkp` occupies that name as far as the only test that
+    /// matters is concerned. Filtering directories out here — as the
+    /// listing that decodes files rightly does — would hand `save` a name
+    /// it then refuses, in this session and every session after it.
     pub fn names(&self) -> Result<Vec<String>, String> {
         let Some(mut dir) = self.open_dir(false)? else {
             return Ok(Vec::new());
@@ -222,11 +229,7 @@ impl Volume {
         let mut names = Vec::new();
         loop {
             match dir.read_entry_boxed() {
-                Ok(Some(info)) => {
-                    if !info.attribute().contains(FileAttribute::DIRECTORY) {
-                        names.push(info.file_name().to_string());
-                    }
-                }
+                Ok(Some(info)) => names.push(info.file_name().to_string()),
                 Ok(None) => break,
                 Err(e) => return Err(err(&format!("cannot read \\{DIR}"), e.status())),
             }
@@ -286,7 +289,26 @@ impl Volume {
         // is carried on the entry rather than aborting the listing. It is
         // not discarded: the name still counts as taken, and the caller
         // reports it.
-        Ok(names.into_iter().map(|name| Saved { data: read(&mut dir, &name), name }).collect())
+        let mut total = 0usize;
+        Ok(names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                if i >= MAX_FILES || total >= MAX_TOTAL {
+                    return Saved {
+                        name,
+                        data: Err(format!(
+                            "not read: \\{DIR}\\ holds more than {MAX_FILES} files or \
+                             {} MiB of them",
+                            MAX_TOTAL >> 20
+                        )),
+                    };
+                }
+                let data = read(&mut dir, &name);
+                total += data.as_ref().map_or(0, Vec::len);
+                Saved { name, data }
+            })
+            .collect())
     }
 }
 
@@ -394,6 +416,18 @@ fn name16(name: &str) -> Result<CString16, String> {
 /// in full merely to be rejected, and an allocation the firmware refuses is
 /// not a rejection line but the `no_std` allocation error handler.
 const MAX_FILE: u64 = 4 << 20;
+
+/// And how much of the directory is worth holding at once.
+///
+/// [`MAX_FILE`] bounds one file; these bound the set, because
+/// [`Volume::list_matching`] reads every match into memory before anything
+/// is decoded. The naming scheme allows a thousand matches per volume, so
+/// the per-file cap alone permits gigabytes — and the failure is not a
+/// rejection line but the allocation error handler. A file past either
+/// bound is still listed, with the reason in place of its contents, so
+/// the screen says what it skipped and the name still counts as taken.
+const MAX_FILES: usize = 64;
+const MAX_TOTAL: usize = 16 << 20;
 
 fn read(dir: &mut Directory, name: &str) -> Result<Vec<u8>, String> {
     let name16 = name16(name)?;
