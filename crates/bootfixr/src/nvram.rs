@@ -125,10 +125,16 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
     let mut slots = Vec::new();
     let mut truncated = None;
 
-    for (seen, key) in runtime::variable_keys().enumerate() {
+    // Counted after the vendor filter below, not before it: the bound is
+    // there to stop a firmware that repeats itself, and counting every
+    // namespace against it lets a few hundred unrelated variables — which
+    // some firmwares really do carry — end the walk before this tool has
+    // seen the entries it came for.
+    let mut seen = 0usize;
+    for key in runtime::variable_keys() {
         if seen >= MAX_VARIABLES {
             truncated = Some(format!(
-                "the variable store walk was stopped after {MAX_VARIABLES} names; \
+                "the variable store walk was stopped after {MAX_VARIABLES} global names; \
                  the firmware may be repeating itself"
             ));
             break;
@@ -144,6 +150,7 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
         if key.vendor != VariableVendor::GLOBAL_VARIABLE {
             continue;
         }
+        seen += 1;
         if let Some(slot) = bootopt::parse_slot(&key.name.to_string()) {
             slots.push(slot);
         }
