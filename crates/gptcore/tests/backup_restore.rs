@@ -379,6 +379,85 @@ fn an_archived_array_inside_the_partition_area_is_refused() {
     }
 }
 
+/// A snapshot is a file on removable media, so its headers cannot be the
+/// authority on where this disk's partitions are. Declaring a usable range
+/// of 2..2 passes every sanity test and then vetoes nothing, which is a
+/// blessing for any LBA above 2 — unless the question is put to the disk.
+#[test]
+fn an_archives_own_header_cannot_authorise_its_array_into_a_partition() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+
+    // Nothing the archive says can object to anything above LBA 2 ...
+    for role in [Role::MainHeader, Role::SecondaryHeader] {
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("header chunk");
+        let mut header = gptcore::GptHeader::parse(&chunk.data).expect("parse");
+        header.first_usable_lba = 2;
+        header.last_usable_lba = 2;
+        chunk.data = header.to_block(512, &CRC);
+    }
+    // ... and the array is aimed well inside rootfs-A.
+    let chunk =
+        archive.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.lba = 1_000_000;
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    match restore_plan(&archive, &analysis) {
+        Err(Mismatch::OverlapsPartitions { role: Role::MainEntries, lba: 1_000_000, .. }) => {}
+        other => panic!("expected an overlap refusal, got {other:?}"),
+    }
+}
+
+/// A disk with nothing left to read is the case the tool exists for, and
+/// it is also the case where no header on the disk can say where the
+/// partitions are. A snapshot recorded at the conventional locations still
+/// goes back.
+#[test]
+fn a_snapshot_restores_onto_a_disk_with_no_readable_table() {
+    let img = deck_image();
+    let before = img.read_lba(0, 34);
+    let archive = snapshot(&img);
+
+    img.zero_lba(1, 33);
+    img.zero_lba(img.last_block() - 32, 33);
+    {
+        let mut disk = img.disk();
+        let analysis = analyze(&mut disk, &CRC).expect("analyze");
+        assert!(analysis.main.as_ref().is_ok_and(|t| !t.is_valid()));
+        assert!(analysis.secondary.as_ref().is_ok_and(|t| !t.is_valid()));
+    }
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let plan = restore_plan(&archive, &analysis).expect("plan");
+    apply(&mut disk, &plan).expect("apply");
+
+    assert_eq!(img.read_lba(0, 34), before, "restore was not byte-exact");
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+/// Fixing where a structural chunk starts says nothing about where it
+/// ends. An oversized protective MBR is written from LBA 0 forward, over
+/// the entry array the same plan flushed two steps earlier and into the
+/// partitions past it.
+#[test]
+fn an_oversized_structural_chunk_is_refused() {
+    for role in [Role::Mbr, Role::MainHeader] {
+        let img = deck_image();
+        let mut archive = snapshot(&img);
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("chunk");
+        chunk.data.resize(8000 * 512, 0xCC);
+
+        let mut disk = img.disk();
+        let analysis = analyze(&mut disk, &CRC).expect("analyze");
+        match restore_plan(&archive, &analysis) {
+            Err(Mismatch::WrongSize { role: got, blocks: 8000 }) if got == role => {}
+            other => panic!("expected a size refusal for {role:?}, got {other:?}"),
+        }
+    }
+}
+
 /// The real corruption's array lives at 2016 — inside the gap below the
 /// first usable block. That snapshot is evidence, and it stays both
 /// capturable from there (asserted above) and restorable to there.
