@@ -243,7 +243,12 @@ fn probe(root: &mut Directory) -> (Vec<(String, u64)>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     efi_files_recursive(root, "\\", MAX_DEPTH, &mut out, &mut truncated);
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.sort_by(|a, b| {
+        let depth = |p: &str| p.matches('\\').count();
+        depth(&a.0)
+            .cmp(&depth(&b.0))
+            .then_with(|| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()))
+    });
     (out, truncated)
 }
 

@@ -1925,7 +1925,7 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
         .iter()
         .map(|c| {
             ui::Item::with_detail(
-                format!("{}  {}", c.kind, c.file),
+                format!("{}  {}", c.file, c.kind),
                 alloc::vec![
                     dim(format!("  on ESP {}, {}", c.esp + 1, report::human_size(c.size))),
                     dim(format!(
