@@ -212,6 +212,18 @@ class Header:
         return self.valid_shape and not self.problems
 
 
+def mbr_is_hybrid(block):
+    """A 0xEE record alongside a real one. Mirrors gptcore::mbr::inspect."""
+    if len(block) < 512 or struct.unpack_from("<H", block, 510)[0] != 0xAA55:
+        return False
+    records = [block[446 + i * 16 : 446 + (i + 1) * 16] for i in range(4)]
+    protective = [i for i, r in enumerate(records) if r[4] == 0xEE]
+    if not protective:
+        return False
+    idx = protective[0]
+    return any(i != idx and any(r) for i, r in enumerate(records))
+
+
 def mbr_health(block, last_block):
     """(is_protective, description). Mirrors gptcore::mbr::inspect."""
     if struct.unpack_from("<H", block, 510)[0] != 0xAA55:
@@ -657,6 +669,61 @@ def cmd_show(args):
     return 0
 
 
+def vet_chunks(by_role, disk):
+    """Refuse a snapshot that would write somewhere its roles do not go.
+
+    The shipped tool checks all of this in gptcore::backup::restore_plan;
+    this is the same list, because the two are implementations of one
+    format and a safety property held by only one of them is a property
+    the format does not have. Without it, relabelling a chunk and moving
+    its LBA puts arbitrary bytes anywhere on the disk, as root, unasked.
+    """
+    fixed = {ROLE_MBR: 0, ROLE_MAIN_HEADER: 1, ROLE_SEC_HEADER: disk.last_block}
+    for role, want in fixed.items():
+        if role not in by_role:
+            continue
+        lba, data = by_role[role]
+        if lba != want:
+            raise Fatal(
+                "the %s is recorded at LBA %d, not at %d where it belongs"
+                % (ROLE_NAMES[role], lba, want)
+            )
+        if len(data) != SECTOR:
+            raise Fatal(
+                "the %s is %d bytes, not the one sector it occupies"
+                % (ROLE_NAMES[role], len(data))
+            )
+
+    if ROLE_MBR in by_role and mbr_is_hybrid(by_role[ROLE_MBR][1]):
+        raise Fatal("this snapshot holds a hybrid MBR, which this tool never writes")
+
+    # Where the partitions are is a question about the disk, so the answer
+    # comes from the disk, not from the headers in the file.
+    main_gpt, secondary_gpt, _, _ = survey(disk)
+    ranges = [
+        (g.first_usable, g.last_usable)
+        for g in (main_gpt, secondary_gpt)
+        if g.ok and 2 <= g.first_usable <= g.last_usable <= disk.last_block
+    ]
+    for role in (ROLE_MAIN_ENTRIES, ROLE_SEC_ENTRIES):
+        if role not in by_role:
+            continue
+        lba, data = by_role[role]
+        blocks = len(data) // SECTOR
+        end = lba + blocks
+        if lba < 2 or blocks == 0 or end > disk.last_block + 1:
+            raise Fatal(
+                "the %s (%d sectors at LBA %d) falls outside this disk"
+                % (ROLE_NAMES[role], blocks, lba)
+            )
+        for first_usable, last_usable in ranges:
+            if lba <= last_usable and end > first_usable:
+                raise Fatal(
+                    "the %s (%d sectors at LBA %d) would land inside the partition area"
+                    % (ROLE_NAMES[role], blocks, lba)
+                )
+
+
 def cmd_restore(args):
     with open(args.input, "rb") as f:
         archive = parse_archive(f.read())
@@ -678,6 +745,25 @@ def cmd_restore(args):
             if role not in by_role:
                 raise Fatal("snapshot does not contain both GPT headers")
 
+        # The same refusals gptcore::backup::restore_plan makes, because a
+        # snapshot is a file and this writes whatever it says. Without them
+        # a relabelled chunk puts arbitrary bytes at an arbitrary LBA, as
+        # root, on a live disk.
+        vet_chunks(by_role, disk)
+
+        if not args.dry_run and not args.yes:
+            # `break` asks for this before changing six bytes it has already
+            # snapshotted. A restore rewrites both tables from a file the
+            # operator may not have made, which is the larger of the two.
+            print('Type exactly:  restore %s' % disk.path)
+            try:
+                answer = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                raise Fatal("aborted")
+            if answer != "restore %s" % disk.path:
+                raise Fatal("aborted: confirmation did not match")
+
         # Same ordering rule the tool uses: an entry array must be on the
         # medium before any header claims it is there with a given CRC.
         order = [ROLE_MAIN_ENTRIES, ROLE_SEC_ENTRIES, None, ROLE_MBR, ROLE_MAIN_HEADER, ROLE_SEC_HEADER]
@@ -690,8 +776,6 @@ def cmd_restore(args):
             if role not in by_role:
                 continue
             lba, data = by_role[role]
-            if lba + len(data) // SECTOR > disk.last_block + 1:
-                raise Fatal("a section of the snapshot falls outside this disk")
             print("    LBA %-12d %s (%d sectors)" % (lba, ROLE_NAMES[role], len(data) // SECTOR))
             if not args.dry_run:
                 disk.write(lba, data)
@@ -748,6 +832,7 @@ def main():
     p.add_argument("device")
     p.add_argument("-i", "--input", required=True, help="snapshot file to restore")
     p.add_argument("--dry-run", action="store_true", help="show the writes, perform none")
+    p.add_argument("--yes", action="store_true", help="skip the typed confirmation")
     p.set_defaults(func=cmd_restore)
 
     args = parser.parse_args()
