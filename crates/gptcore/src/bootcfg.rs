@@ -20,7 +20,7 @@ use crate::backup::Timestamp;
 use crate::bootopt::VarWrite;
 use crate::crc::Crc32;
 use crate::meta::{decode_meta, encode_meta};
-use crate::style::{dim, key, title, Line};
+use crate::style::{dim, key, title, warn, Line};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -282,13 +282,22 @@ fn what_it_restores(name: &str, data: &[u8]) -> String {
 /// snapshot is left alone, so this puts back what was saved rather than
 /// making NVRAM identical to the moment of the save. Callers must say so:
 /// the difference is visible to anyone who registered an entry in between.
+///
+/// **Only names this tool writes are planned.** The bytes of a variable
+/// are stored opaquely and put back verbatim, which is the whole point of
+/// the format — but the *name* is not the file's to choose. A snapshot is
+/// a file on removable media whose checksum proves it is undamaged and
+/// nothing more, and [`crate::bootopt::may_write`] is what stops one
+/// naming a variable the firmware executes. Anything outside that set is
+/// dropped here and marked in [`describe`], rather than quietly widening
+/// what a restore can reach.
 pub fn plan_restore(snap: &Snapshot) -> Vec<VarWrite> {
     let mut entries = Vec::new();
     let mut settings = Vec::new();
     let mut order = Vec::new();
     let mut next = Vec::new();
 
-    for (name, data) in &snap.vars {
+    for (name, data) in snap.vars.iter().filter(|(n, _)| crate::bootopt::may_write(n)) {
         let write =
             VarWrite { name: name.clone(), data: data.clone(), what: what_it_restores(name, data) };
         match name.as_str() {
@@ -313,7 +322,15 @@ pub fn describe(snap: &Snapshot) -> Vec<Line> {
     out.push(Line::blank());
     out.push(title("  Contains:"));
     for (name, data) in &snap.vars {
-        out.push(dim(format!("    {:<12} {} bytes", name, data.len())));
+        let row = format!("    {:<12} {} bytes", name, data.len());
+        // A name this tool never writes is not restored, and the screen
+        // has to say which ones those are: a row that is listed but
+        // silently skipped is the same lie as one that is written but not
+        // listed.
+        out.push(match crate::bootopt::may_write(name) {
+            true => dim(row),
+            false => warn(format!("{row}  (not a boot variable - not restored)")),
+        });
     }
     out
 }

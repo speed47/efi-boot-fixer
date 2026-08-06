@@ -320,3 +320,51 @@ fn describing_a_snapshot_names_every_variable_in_it() {
         assert!(text.contains(name.as_str()), "{name} missing from:\n{text}");
     }
 }
+
+/// A snapshot's bytes are put back verbatim; its variable *names* are not
+/// the file's to choose. `Driver####` and `SysPrep####` live in the same
+/// namespace with the same attributes as `Boot####`, and the firmware
+/// loads and starts them before it looks at `BootOrder` — so a file on a
+/// USB stick that could name one would install something that runs on
+/// every boot and appears in no boot menu.
+#[test]
+fn a_snapshot_cannot_name_a_variable_the_tool_never_writes() {
+    let mut snap = snapshot();
+    let legitimate = snap.vars.len();
+    for name in ["Driver0000", "DriverOrder", "SysPrep0000", "OsIndications", "PK"] {
+        snap.vars.push((String::from(name), vec![0x01, 0x00, 0x00, 0x00]));
+    }
+
+    let names: Vec<String> = bootcfg::plan_restore(&snap).iter().map(|w| w.name.clone()).collect();
+    assert_eq!(names.len(), legitimate, "planned writes: {names:?}");
+    for name in &names {
+        assert!(bootopt::may_write(name), "{name} is not a variable this tool writes");
+    }
+}
+
+/// And the screen says which ones were dropped: a row listed and silently
+/// skipped is the same lie as one written and never listed.
+#[test]
+fn a_variable_that_will_not_be_restored_is_marked_as_such() {
+    let mut snap = snapshot();
+    snap.vars.push((String::from("Driver0000"), vec![0x01]));
+
+    let text = gptcore::style::plain(&bootcfg::describe(&snap));
+    let row = text.lines().find(|l| l.contains("Driver0000")).expect("the row is still shown");
+    assert!(row.contains("not restored"), "{row}");
+}
+
+/// The names a snapshot may hold and the names the writer may write are
+/// one list. If they ever drift apart, a restore either reaches further
+/// than a capture did or refuses a file this tool wrote itself.
+#[test]
+fn the_names_the_tool_writes_are_the_names_it_saves() {
+    for name in bootopt::SETTINGS {
+        assert!(bootopt::may_write(name), "{name}");
+    }
+    assert!(bootopt::may_write(&bootopt::slot_name(0)));
+    assert!(bootopt::may_write("Boot0001"));
+    for name in ["Driver0000", "SysPrep0000", "PK", "BootCurrent", "Boot001", "boot0001", ""] {
+        assert!(!bootopt::may_write(name), "{name}");
+    }
+}
