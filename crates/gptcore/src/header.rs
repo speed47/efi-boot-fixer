@@ -38,6 +38,17 @@ const OFF_ENTRY_ARRAY_CRC32: usize = 88;
 /// firmware to support at least 16 KiB of entry array.
 pub(crate) const MAX_ENTRY_COUNT: u32 = 8192;
 
+/// And an upper bound on the array in bytes, because the count is only
+/// half of the product.
+///
+/// `SizeOfPartitionEntry` has a floor of 128 and, in the spec, no ceiling
+/// at all — so 8192 entries of 32 MiB each is a well-formed claim that
+/// bounding the count alone does nothing about, and one this tool would
+/// otherwise hand straight to the allocator. This is [`MAX_ENTRY_COUNT`]
+/// entries at the 128 bytes every implementation actually writes, which
+/// is 64x the conventional 16 KiB.
+pub(crate) const MAX_ENTRY_ARRAY_BYTES: usize = MAX_ENTRY_COUNT as usize * 128;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GptHeader {
     pub signature: u64,
@@ -99,6 +110,12 @@ pub enum Defect {
     EntryCountOutOfRange {
         found: u32,
     },
+    /// Count and size are each in range, but what they describe between
+    /// them is not: a table this size is a claim to refuse rather than a
+    /// buffer to allocate.
+    EntryArrayTooLarge {
+        bytes: usize,
+    },
     EntryArrayCrcMismatch {
         stored: u32,
         computed: u32,
@@ -156,6 +173,11 @@ impl fmt::Display for Defect {
             Defect::EntryCountOutOfRange { found } => {
                 write!(f, "NumberOfPartitionEntries is {}, must be 1..={}", found, MAX_ENTRY_COUNT)
             }
+            Defect::EntryArrayTooLarge { bytes } => write!(
+                f,
+                "the entry array is declared as {} bytes, more than the {} this tool reads",
+                bytes, MAX_ENTRY_ARRAY_BYTES
+            ),
             Defect::EntryArrayCrcMismatch { stored, computed } => {
                 write!(f, "entry array CRC32 is {:#010x}, recomputes to {:#010x}", stored, computed)
             }
@@ -205,7 +227,8 @@ impl GptHeader {
     }
 
     /// Byte length of the entry array, or `None` if the declared geometry
-    /// overflows or exceeds [`MAX_ENTRY_COUNT`].
+    /// overflows, exceeds [`MAX_ENTRY_COUNT`], or describes more than
+    /// [`MAX_ENTRY_ARRAY_BYTES`].
     pub fn entry_array_len(&self) -> Option<usize> {
         if self.number_of_partition_entries == 0
             || self.number_of_partition_entries > MAX_ENTRY_COUNT
@@ -220,6 +243,7 @@ impl GptHeader {
         }
         (self.number_of_partition_entries as usize)
             .checked_mul(self.size_of_partition_entry as usize)
+            .filter(|len| *len <= MAX_ENTRY_ARRAY_BYTES)
     }
 
     /// How many blocks the entry array occupies, rounded up.
@@ -284,6 +308,12 @@ impl GptHeader {
             || self.number_of_partition_entries > MAX_ENTRY_COUNT
         {
             out.push(Defect::EntryCountOutOfRange { found: self.number_of_partition_entries });
+        }
+        if let Some(bytes) = (self.number_of_partition_entries as usize)
+            .checked_mul(self.size_of_partition_entry as usize)
+            .filter(|len| *len > MAX_ENTRY_ARRAY_BYTES)
+        {
+            out.push(Defect::EntryArrayTooLarge { bytes });
         }
         if self.first_usable_lba < 2
             || self.last_usable_lba > last_block
@@ -521,6 +551,33 @@ mod tests {
         h.size_of_partition_entry = u32::MAX;
         assert_eq!(h.entry_array_len(), None);
         assert_eq!(h.entry_array_blocks(512), None);
+    }
+
+    /// Bounding the count bounds half of a product. `SizeOfPartitionEntry`
+    /// has a floor and no ceiling, so an in-range count at a spec-legal
+    /// 32 MiB an entry is a table nobody could hold — and the disk it is
+    /// declared on is large enough for the read to look reasonable.
+    #[test]
+    fn an_entry_size_with_no_ceiling_cannot_describe_a_huge_array() {
+        let mut h = sample_header();
+        h.number_of_partition_entries = MAX_ENTRY_COUNT;
+        h.size_of_partition_entry = 128 << 18; // 32 MiB, a multiple of 8
+        assert_eq!(h.entry_array_len(), None);
+        assert_eq!(h.entry_array_blocks(512), None);
+
+        let mut defects = Vec::new();
+        h.validate_fields(1, 1_000_215_215, 512, &mut defects);
+        assert!(
+            defects.iter().any(|d| matches!(d, Defect::EntryArrayTooLarge { .. })),
+            "the refusal has to be said out loud: {defects:?}"
+        );
+
+        // The conventional table, and the largest this tool will read,
+        // both still parse.
+        h.size_of_partition_entry = 128;
+        assert_eq!(h.entry_array_len(), Some(MAX_ENTRY_ARRAY_BYTES));
+        h.number_of_partition_entries = 128;
+        assert_eq!(h.entry_array_len(), Some(16 * 1024));
     }
 
     /// `div_ceil` panics on a zero divisor, so a device reporting a zero
