@@ -621,7 +621,7 @@ fn variable_store() -> Vec<Line> {
         let size = match nvram::size_of(name, &var.vendor) {
             Ok(Some(n)) => {
                 total += n;
-                format!("{n} bytes")
+                format!("{n}")
             }
             Ok(None) => String::from("vanished while being read"),
             Err(e) => e,
@@ -640,7 +640,7 @@ fn variable_store() -> Vec<Line> {
 
     out.push(dim(format!("  {count} variables, {} in total.", human_size(total as u64))));
     out.push(Line::blank());
-    out.push(dim(format!("  {:<40} {:>14}  {}", "name", "size", "vendor")));
+    out.push(dim(format!("  {:<40} {:>14}  {}", "name", "bytes", "vendor")));
     out.extend(rows);
     out
 }
