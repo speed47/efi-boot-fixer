@@ -39,7 +39,7 @@ sgdisk -v build/images/test.img           # verify the result independently
 `make qemu-repair` is a shortcut for the two `make images` + `run-qemu.sh
 ... repair` steps above. `make qemu SCRIPT=<name>` covers the rest of the
 scripts, including the boot-entry ones (`bootnext`, `bootdefault`,
-`bootregister`, `bootrestore`) exercised in [boot.md](boot.md).
+`bootregister`, `bootbackup`, `bootrestore`) exercised in [boot.md](boot.md).
 
 `make qemu-check` runs every walk `run-qemu.sh` knows, one after another,
 each against its own freshly built images so an earlier walk's leftovers

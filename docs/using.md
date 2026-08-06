@@ -45,14 +45,19 @@ Partition tables (GPT)                      Boot entries (NVRAM)
   Restore GPTs from a saved backup            Register a bootloader
   Repair main GPT from the secondary          Set the default boot entry
   Prevent recurrence (experimental)           Boot something once (next boot only)
-                                              Restore the boot configuration
+                                              Back up the boot configuration
+                                              Restore boot configuration from backup
 Reboot / Shutdown / Exit to the firmware
 ```
 
 Read-only screens come first in both submenus, then anything that writes.
 On the GPT side, backing up sits above the three operations that overwrite a
 table because that is the order the two should be done in, and a menu is the
-cheapest place to say so.
+cheapest place to say so. The NVRAM side follows the same rule: backing up
+sits above restoring, and below the three operations that change NVRAM
+directly, since a manual backup is not required before them — a backup is
+taken automatically before this session's first NVRAM write regardless of
+whether this screen was ever visited.
 
 **Start with "Check this machine".** It reads every disk's partition table,
 the firmware's boot list and the loaders installed on the ESPs, writes

@@ -307,12 +307,17 @@ drive() {
             confirm
             keys "$A"
             keys "$B" "$B" ;;
+        bootbackup)                                 # save the boot config on request
+            nvram_menu
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"  # Back up the boot configuration
+            keys "$A"                               # the result
+            keys "$B" "$B" ;;
         bootrestore)                                # put a saved copy back
             # Wants a boot-NNN.bkp on the ESP, which only a run that changed
             # NVRAM leaves behind: run 'bootregister' first against the same
             # images, with KEEP_VARS=1 here to see it undone.
             nvram_menu
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A"
             keys "$A"                               # the first snapshot
             keys "$A"                               # review page, continue
             keys "$A"                               # the saved-configuration note
