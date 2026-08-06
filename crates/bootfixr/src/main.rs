@@ -48,9 +48,9 @@ use alloc::vec::Vec;
 use blockdev::UefiDisk;
 use fwcrc::FirmwareCrc32;
 use gptcore::backup::{self, Timestamp};
-use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan};
+use gptcore::repair::{analyze, apply, plan, Analysis, RepairPlan, Verdict};
 use gptcore::style::{bad, dim, good, key, line, title, warn, Line, Style};
-use gptcore::{bootcfg, bootopt, layout, prevent, report};
+use gptcore::{bootcfg, bootopt, layout, prevent, report, IoError};
 use selfdev::BootDevice;
 use uefi::boot::{
     self, LoadImageSource, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType,
@@ -331,7 +331,7 @@ fn pick_from(title: &str, disks: Vec<Disk>) -> Option<Disk> {
 /// driver serving our own ESP — leaves the operator with a snapshot they
 /// were just told about and a backup screen that cannot find it, and
 /// nothing on screen connecting the two.
-fn execute(disk: &Disk, plan: &RepairPlan, esp_lost: &mut bool) -> Result<bool, String> {
+fn execute(disk: &Disk, plan: &RepairPlan, esp_lost: &mut bool) -> Result<Outcome, String> {
     // SAFETY: we are committed to writing by this point.
     let exclusive = unsafe {
         boot::open_protocol::<BlockIO>(
@@ -358,18 +358,52 @@ fn execute(disk: &Disk, plan: &RepairPlan, esp_lost: &mut bool) -> Result<bool, 
 
     let mut dev = UefiDisk::new(io).map_err(|e| e.to_string())?;
     apply(&mut dev, plan).map_err(|e| format!("write failed: {e}"))?;
-    Ok(was_exclusive)
+
+    // Read the disk back before letting go of it. "Written and flushed"
+    // otherwise reports that `apply` returned, which is a claim about this
+    // program rather than about the platter, and the one moment the tool
+    // can say "and it left the disk like *this*" is while it still has the
+    // device open — a second open would have to displace the filesystem
+    // driver all over again, on the disk whose ESP we may be standing on.
+    //
+    // Deliberately not fatal: a write that landed must never be reported
+    // as failed because the read after it did not.
+    let after = analyze(&mut dev, &CRC);
+    Ok(Outcome { exclusive: was_exclusive, after })
 }
 
-fn report_write(title: &str, result: Result<bool, String>) {
+/// What a write did, and what the disk said afterwards.
+struct Outcome {
+    exclusive: bool,
+    after: Result<Analysis, IoError>,
+}
+
+fn report_write(title: &str, result: Result<Outcome, String>) {
     match result {
-        Ok(exclusive) => {
-            let mut lines = alloc::vec![
-                good("  Written and flushed."),
-                Line::blank(),
-                key("  Reboot when you are done."),
-            ];
-            if !exclusive {
+        Ok(outcome) => {
+            let mut lines = alloc::vec![good("  Written and flushed.")];
+            match &outcome.after {
+                Ok(after) => {
+                    lines.push(Line::new(
+                        format!("  The disk now reports: {}", report::verdict_line(after.verdict)),
+                        report::verdict_style(after.verdict),
+                    ));
+                    // The states this tool will not write to again. Saying
+                    // so here is the difference between finding out now and
+                    // finding out on the next attempt.
+                    if !after.verdict.will_write() && after.verdict != Verdict::Healthy {
+                        lines.push(Line::blank());
+                        lines.push(warn("  This tool will not modify this disk while it"));
+                        lines.push(warn("  reads that way."));
+                    }
+                }
+                Err(e) => {
+                    lines.push(warn(format!("  The disk could not be read back to confirm: {e}")));
+                }
+            }
+            lines.push(Line::blank());
+            lines.push(key("  Reboot when you are done."));
+            if !outcome.exclusive {
                 lines.push(Line::blank());
                 lines.push(warn("  (The disk was busy, so the write was made without"));
                 lines.push(warn("  exclusive access. The firmware's own view of the"));
