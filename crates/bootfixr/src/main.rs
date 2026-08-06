@@ -596,7 +596,12 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
             if !ui::page("Could not save a snapshot", &lines) {
                 return show_note("Repair", "Cancelled. Nothing was written.".to_string());
             }
-            Vec::new()
+            // The question was asked and answered, but the answer has to
+            // survive to the screen that takes the five presses. Blanking
+            // the warning here made the gate identical whether or not a
+            // copy exists, which is the one difference it most needs to
+            // show.
+            alloc::vec![bad("  NO saved copy of these sectors exists.")]
         }
     };
 
@@ -842,11 +847,23 @@ fn write_snapshot(
     // destinations above: a volume nothing is being written to has a say in
     // what the file is called and none at all in whether it gets written, so
     // a listing that fails here is simply ignored.
+    let mut everywhere = taken.clone();
     for volume in source_volumes() {
-        taken.extend(volume.names().unwrap_or_default());
+        everywhere.extend(volume.names().unwrap_or_default());
     }
 
-    let name = pick(&taken)?;
+    // One name across every volume, so saving to a stick now and the ESP
+    // later cannot produce two different files called the same thing.
+    // That is worth a lot and it is not worth everything: a single
+    // `gpt-999.bkp` on a stick the operator merely plugged in would
+    // otherwise make every snapshot in the session impossible — including
+    // the automatic one a repair takes — and a volume nothing is written
+    // to does not get to decide that. When the shared numbering runs out,
+    // fall back to what is free on the destinations themselves.
+    let name = match pick(&everywhere) {
+        Ok(name) => name,
+        Err(_) => pick(&taken)?,
+    };
     let mut written = Written { ok: Vec::new(), failed };
     for volume in usable {
         match volume.save(&name, bytes) {
@@ -864,7 +881,8 @@ fn write_snapshot(
 fn gpt_name(taken: &[String]) -> Result<String, String> {
     backup::next_name(taken).ok_or_else(|| {
         format!(
-            "\\{}\\ already holds gpt-{}.bkp; delete some snapshots first",
+            "\\{}\\ is full: every name up to gpt-{}.bkp is in use. Removing some \
+             needs another machine, so save to a stick instead if you have one.",
             store::DIR,
             backup::MAX_SEQUENCE
         )
@@ -875,7 +893,8 @@ fn gpt_name(taken: &[String]) -> Result<String, String> {
 fn boot_name(taken: &[String]) -> Result<String, String> {
     bootcfg::next_name(taken).ok_or_else(|| {
         format!(
-            "\\{}\\ already holds boot-{}.bkp; delete some first",
+            "\\{}\\ is full: every name up to boot-{}.bkp is in use. Removing some \
+             needs another machine, so save to a stick instead if you have one.",
             store::DIR,
             bootcfg::MAX_SEQUENCE
         )
@@ -886,7 +905,8 @@ fn boot_name(taken: &[String]) -> Result<String, String> {
 fn diag_name(taken: &[String]) -> Result<String, String> {
     gptcore::diag::next_name(taken).ok_or_else(|| {
         format!(
-            "\\{}\\ already holds diag-{}.txt; delete some reports first",
+            "\\{}\\ is full: every name up to diag-{}.txt is in use. Removing some \
+             needs another machine, so save to a stick instead if you have one.",
             store::DIR,
             gptcore::diag::MAX_SEQUENCE
         )
