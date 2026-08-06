@@ -323,7 +323,15 @@ fn pick_from(title: &str, disks: Vec<Disk>) -> Option<Disk> {
 /// may refuse outright. Falling back to a shared open is better than being
 /// unable to repair the machine's only drive; the caller reports which
 /// happened, and either way the advice is to reboot.
-fn execute(disk: &Disk, plan: &RepairPlan) -> Result<bool, String> {
+/// `esp_lost` is set here rather than by the caller on success, because
+/// what tears the filesystem driver down is the *attempt*: EDK II
+/// disconnects the drivers holding the handle inside `OpenProtocol` with
+/// `Exclusive`, before it can decide to refuse. A write that then fails —
+/// or one that falls back to a shared open having already displaced the
+/// driver serving our own ESP — leaves the operator with a snapshot they
+/// were just told about and a backup screen that cannot find it, and
+/// nothing on screen connecting the two.
+fn execute(disk: &Disk, plan: &RepairPlan, esp_lost: &mut bool) -> Result<bool, String> {
     // SAFETY: we are committed to writing by this point.
     let exclusive = unsafe {
         boot::open_protocol::<BlockIO>(
@@ -336,6 +344,9 @@ fn execute(disk: &Disk, plan: &RepairPlan) -> Result<bool, String> {
         )
     };
 
+    if disk.boot {
+        *esp_lost = true;
+    }
     let (io, was_exclusive) = match exclusive {
         Ok(io) => (io, true),
         Err(_) => (
@@ -350,12 +361,9 @@ fn execute(disk: &Disk, plan: &RepairPlan) -> Result<bool, String> {
     Ok(was_exclusive)
 }
 
-fn report_write(title: &str, disk: &Disk, result: Result<bool, String>, esp_lost: &mut bool) {
+fn report_write(title: &str, result: Result<bool, String>) {
     match result {
         Ok(exclusive) => {
-            if disk.boot && exclusive {
-                *esp_lost = true;
-            }
             let mut lines = alloc::vec![
                 good("  Written and flushed."),
                 Line::blank(),
@@ -622,8 +630,8 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     if !ui::confirm_sequence("Authorise write", &warning) {
         return show_note("Repair", "Cancelled. Nothing was written.".to_string());
     }
-    let result = execute(&disk, &repair);
-    report_write("Repair", &disk, result, esp_lost);
+    let result = execute(&disk, &repair, esp_lost);
+    report_write("Repair", result);
 }
 
 /// Capture both tables to the ESP before a repair rewrites them.
@@ -1364,15 +1372,19 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
 
     let mut warning =
         alloc::vec![bad("  This REPLACES both partition tables with the saved copy.")];
-    if !archive.health.tables_were_sound() {
+    // What the file says about itself, and what its own bytes say. The
+    // health byte is the capturing build's note; `tables_verify` reads the
+    // headers and arrays actually in the file, which is the half a crafted
+    // snapshot cannot quietly set to "healthy".
+    if !archive.health.tables_were_sound() || !backup::tables_verify(archive, &CRC) {
         warning.push(Line::blank());
         warning.push(bad("  WARNING: this snapshot was taken from a DAMAGED table."));
     }
     if !ui::confirm_sequence("Authorise write", &warning) {
         return show_note("Restore GPT", "Cancelled. Nothing was written.".to_string());
     }
-    let result = execute(&disk, &restore);
-    report_write("Restore GPT", &disk, result, esp_lost);
+    let result = execute(&disk, &restore, esp_lost);
+    report_write("Restore GPT", result);
 }
 
 /// Close the gap that the corrupting writer's arithmetic depends on.
@@ -1409,8 +1421,8 @@ fn run_prevent(boot_device: &BootDevice, esp_lost: &mut bool) {
     if !ui::confirm_sequence("Authorise write", &warning) {
         return show_note("Prevent", "Cancelled. Nothing was written.".to_string());
     }
-    let result = execute(&disk, &gap_plan);
-    report_write("Prevent", &disk, result, esp_lost);
+    let result = execute(&disk, &gap_plan, esp_lost);
+    report_write("Prevent", result);
 }
 
 // --------------------------------------------------- NVRAM boot entries
