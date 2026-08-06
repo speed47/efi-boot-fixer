@@ -614,7 +614,7 @@ fn variable_store() -> Vec<Line> {
         };
     }
     let count = keys.len();
-    keys.sort_by(|a, b| a.name.to_string().cmp(&b.name.to_string()));
+    keys.sort_by_key(|a| a.name.to_string());
 
     for var in &keys {
         let name = &var.name;
