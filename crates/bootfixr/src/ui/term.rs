@@ -13,11 +13,18 @@
 //! usable framebuffer at all. Two renderings of one set of screens is the
 //! only version of that which stays honest.
 
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
 use crate::gfx::console::{rgb, Console};
 use crate::gfx::{Framebuffer, Rotation};
+
+// Re-exported rather than reached for directly: `ui` is written against this
+// module and nothing above it names `gfx`, which is what keeps the menus
+// unable to tell the two backends apart.
+pub use crate::gfx::console::{Layout, Upgrade};
+pub use crate::gfx::Mode;
 use uefi::proto::console::text::Color;
 use uefi::system;
 
@@ -93,6 +100,56 @@ pub fn set_rotation(rotation: Rotation) {
 pub fn resize_text(bigger: bool) -> bool {
     with(|b| match b {
         Backend::Gfx(console) => console.resize_text(bigger),
+        Backend::Text => false,
+    })
+}
+
+/// The grid and the cell size drawing it, or `None` on the text console,
+/// where there is no cell of ours to report.
+pub fn layout() -> Option<Layout> {
+    with(|b| match b {
+        Backend::Gfx(console) => Some(console.layout()),
+        Backend::Text => None,
+    })
+}
+
+/// The framebuffer's extent in pixels, as the firmware has it.
+pub fn resolution() -> Option<(usize, usize)> {
+    with(|b| match b {
+        Backend::Gfx(console) => Some(console.resolution()),
+        Backend::Text => None,
+    })
+}
+
+/// Every resolution the graphics device offers.
+///
+/// Empty on the text console: the firmware owns the mode there and does not
+/// tell us what else it could do.
+pub fn modes() -> Vec<Mode> {
+    with(|b| match b {
+        Backend::Gfx(console) => console.modes(),
+        Backend::Text => Vec::new(),
+    })
+}
+
+/// The mode worth stepping up to, out of `modes`, or `None` if the one in
+/// force is already the best on offer.
+pub fn upgrade(modes: &[Mode]) -> Option<Upgrade> {
+    with(|b| match b {
+        Backend::Gfx(console) => console.upgrade(modes),
+        Backend::Text => None,
+    })
+}
+
+/// Change the framebuffer mode, reporting whether it took.
+///
+/// A `true` here says the firmware programmed the mode and this program can
+/// draw in it. It does not say the panel is showing anything — see
+/// [`crate::gfx::Framebuffer::set_mode`] — so the caller owes the operator a
+/// way back.
+pub fn set_mode(width: usize, height: usize) -> bool {
+    with(|b| match b {
+        Backend::Gfx(console) => console.set_mode(width, height),
         Backend::Text => false,
     })
 }

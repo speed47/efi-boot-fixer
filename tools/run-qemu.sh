@@ -86,6 +86,8 @@ expected_effect() {
         # disk being backed up.
         none|overview|check|menu|display|inspect|scroll|repair-cancel|backup|backup-twice)
             want=no-change ;;
+        display-mode|display-revert)
+            want=no-change ;;
         backup-usb|backup-usb-only|bootentries|report|report-usb)
             want=no-change ;;
         # The test disk is not attached at all, so there is nothing to say
@@ -326,6 +328,25 @@ drive() {
             keys "$TAB"                             # View, from the menu
             keys "$DOWN" "$DOWN" "$UP"              # text size down, down, up
             keys "$LEFT" "$RIGHT"                   # turn away and back
+            keys "$A"                               # done, back to the menu
+            keys "$B" ;;                            # exit
+        display-mode)                               # take the offered mode
+            # The offer is only made where the firmware's own mode is too
+            # small to lay the menus out in the largest cell the display
+            # could carry, so this walk wants a RES that is: 800x600 is one,
+            # and is what a desktop firmware often picks unasked.
+            keys "$TAB"                             # View, from the menu
+            keys "$TAB"                             # View again: try the mode
+            keys "$A"                               # confirm, inside the timer
+            keys "$A"                               # done, back to the menu
+            keys "$B" ;;                            # exit
+        display-revert)                             # say nothing, and get it back
+            keys "$TAB"                             # View, from the menu
+            keys "$TAB"                             # View again: try the mode
+            # Longer than the confirmation is given, so the mode goes back
+            # on its own. This is the path a panel that shows nothing takes,
+            # and the only one that cannot be checked by pressing anything.
+            sleep 10
             keys "$A"                               # done, back to the menu
             keys "$B" ;;                            # exit
         *)
