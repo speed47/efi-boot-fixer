@@ -181,7 +181,7 @@ Four operations write to NVRAM. None of them touches a disk.
 | Register a bootloader | `Boot####` then `BootOrder` | the firmware's own boot menu |
 | Set the default | `BootOrder` | the same screen |
 | Boot something once | `BootNext` | itself, as the firmware consumes it |
-| Restore the boot configuration | every variable in a `boot-NNN.bkp` | an earlier snapshot |
+| Restore boot configuration from backup | every variable in a `boot-NNN.bkp` | an earlier snapshot |
 
 ### The snapshot that comes first
 
@@ -193,6 +193,12 @@ operation gets there first — the whole thing is saved to
 of destination: the ESP, removable media, or both, asked once per session
 because that is how often the snapshot is taken. See
 [backups.md](backups.md).
+
+The same save is also available on demand, from "Back up the boot
+configuration" in this submenu — writing a file only, same as its GPT
+counterpart, so it is not in the table above. Taking one there before the
+session's first edit satisfies the mandatory save above, so the destination
+question is not asked twice.
 
 Variables go in as opaque name/bytes pairs and are never re-encoded. A
 `Boot####` this build cannot parse is exactly the one worth having an exact

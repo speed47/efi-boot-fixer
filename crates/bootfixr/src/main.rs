@@ -2075,6 +2075,59 @@ fn run_boot_once(snapshot: &mut bool, esp_lost: bool) {
     authorise_and_write("Boot something once", review, warning, &writes, snapshot, esp_lost);
 }
 
+/// Save the whole boot configuration to a file, on request.
+///
+/// The manual counterpart to [`ensure_boot_snapshot`], which takes the same
+/// copy automatically, but only as a side effect of the first NVRAM write of
+/// the session. An operator who wants an off-device copy before trying
+/// something else entirely — or before closing the lid — had no way to ask
+/// for one until an edit forced it, which is the same gap "Back up both
+/// GPTs to a file" closes on the GPT side.
+///
+/// A snapshot taken here counts as this session's mandatory one: `snapshot`
+/// is set just as it is in [`ensure_boot_snapshot`], so the first edit that
+/// follows does not ask the destination question a second time.
+fn run_boot_backup(snapshot: &mut bool, esp_lost: bool) {
+    const TITLE: &str = "Back up the boot configuration";
+    if esp_lost && !warn_esp_may_be_gone() {
+        return;
+    }
+    let Some(dests) = choose_destinations("Where should the boot configuration go?") else {
+        return;
+    };
+    let written = match take_boot_snapshot(&dests) {
+        Ok((written, unread)) if written.any() => Ok((written, unread)),
+        Ok((refused, _)) => Err(refused.lines()),
+        Err(e) => Err(alloc::vec![bad(format!("  {e}"))]),
+    };
+
+    match written {
+        Ok((written, missed_note)) => {
+            *snapshot = true;
+            let mut lines = alloc::vec![good("  Saved as:")];
+            lines.extend(written.lines());
+            if let Some(unread) = missed_note.as_deref() {
+                lines.push(Line::blank());
+                lines.push(warn("  This copy is PARTIAL. These could not be read, and"));
+                lines.push(warn("  are not in it:"));
+                lines.push(warn(format!("    {unread}")));
+            }
+            lines.push(Line::blank());
+            lines.push(dim("  \"Restore boot configuration from backup\" offers"));
+            lines.push(dim("  whatever it finds, on the ESP and on any removable"));
+            lines.push(dim("  media attached at the time."));
+            lines.extend(attach_hint(&dests));
+            ui::message(TITLE, &lines);
+        }
+        Err(why) => {
+            let mut lines = why;
+            lines.push(Line::blank());
+            lines.push(bad("  Nothing was written."));
+            ui::message("Back up the boot configuration FAILED", &lines);
+        }
+    }
+}
+
 /// Put a saved boot configuration back into NVRAM.
 ///
 /// The counterpart to the snapshot [`ensure_boot_snapshot`] takes before the
@@ -2083,7 +2136,7 @@ fn run_boot_once(snapshot: &mut bool, esp_lost: bool) {
 /// an NVRAM edit made from a screen with no keyboard has something behind
 /// it — true only for someone with a second machine and a hex editor.
 fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
-    const TITLE: &str = "Restore the boot configuration";
+    const TITLE: &str = "Restore boot configuration from backup";
     if esp_lost && !warn_esp_may_be_gone() {
         return;
     }
@@ -2309,6 +2362,7 @@ enum Nvram {
     Register,
     Default,
     Once,
+    Backup,
     Restore,
 }
 
@@ -2355,8 +2409,16 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
             &["Try an entry without committing to it. The", "firmware clears this as it uses it."]
         ),
         row(
+            Nvram::Backup,
+            "Back up the boot configuration",
+            &[
+                "Save the entries and the boot order to the ESP, to",
+                "removable media, or to both, on request."
+            ]
+        ),
+        row(
             Nvram::Restore,
-            "Restore the boot configuration",
+            "Restore boot configuration from backup",
             &[
                 "Write back a saved copy of the entries and the",
                 "boot order, from a snapshot on any volume here."
@@ -2365,7 +2427,7 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
     ]);
 
     let intro = alloc::vec![
-        dim("  The first two screens read only."),
+        dim("  The first two screens read only; backing up writes one file."),
         dim("  The rest change NVRAM, and say so before they do."),
     ];
     loop {
@@ -2375,6 +2437,7 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
             Some(Nvram::Register) => run_boot_register(boot_device, snapshot, esp_lost),
             Some(Nvram::Default) => run_boot_default(snapshot, esp_lost),
             Some(Nvram::Once) => run_boot_once(snapshot, esp_lost),
+            Some(Nvram::Backup) => run_boot_backup(snapshot, esp_lost),
             Some(Nvram::Restore) => run_boot_restore(snapshot, esp_lost),
             None => return,
         }
