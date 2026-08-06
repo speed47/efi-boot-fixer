@@ -29,7 +29,7 @@
 pub(crate) mod term;
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -234,10 +234,15 @@ pub fn wrapped(text: &str, style: Style, hang: &str) -> Vec<Line> {
 
 fn fit(line: &str, columns: usize) -> String {
     let limit = text_width(columns);
+    // Control characters are neutralised in `gptcore::style::Line::new`,
+    // and again here, because a menu row's label is a bare `String` that
+    // never becomes a `Line` — and `pick_boot_entry` builds one out of a
+    // boot entry's own description.
+    let safe = line.chars().map(|c| if c.is_control() { '.' } else { c });
     if line.chars().count() <= limit {
-        return line.to_string();
+        return safe.collect();
     }
-    let mut out: String = line.chars().take(limit.saturating_sub(1)).collect();
+    let mut out: String = safe.take(limit.saturating_sub(1)).collect();
     out.push('~');
     out
 }

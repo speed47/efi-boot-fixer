@@ -44,8 +44,25 @@ pub struct Line {
 }
 
 impl Line {
+    /// Every line drawn on a screen or written to the report is built
+    /// here, which makes this the place to neutralise control characters.
+    ///
+    /// Partition names, boot entry descriptions and the variable names in
+    /// a snapshot are all text somebody else chose. The framebuffer
+    /// console honours `\r` and `\n` and *drops* whatever a newline pushes
+    /// past the last row, so a name carrying either can blank the row it
+    /// is drawn on, forge a plausible one, or push the list of writes off
+    /// the bottom of the page the operator is about to authorise from —
+    /// while `page` counts lines and sees nothing missing. Firmware
+    /// strings have been filtered like this since `diskinfo` was written;
+    /// the strings that come off a disk were not.
     pub fn new(text: impl Into<String>, style: Style) -> Self {
-        Line { text: text.into(), style }
+        let text: String = text.into();
+        let text = match text.chars().any(char::is_control) {
+            false => text,
+            true => text.chars().map(|c| if c.is_control() { '.' } else { c }).collect(),
+        };
+        Line { text, style }
     }
 
     pub fn blank() -> Self {
@@ -192,5 +209,25 @@ mod tests {
     #[test]
     fn empty_text_produces_nothing_to_draw() {
         assert!(wrap("", 40, Style::Dim, "  ").is_empty());
+    }
+
+    /// A partition name, a boot entry's description and a snapshot's
+    /// variable names are all somebody else's text. One line of it has to
+    /// stay one line: the console honours `\r` and `\n` and silently drops
+    /// what a newline pushes off the bottom, which is how a review screen
+    /// comes to show fewer writes than it is about to authorise.
+    #[test]
+    fn control_characters_never_reach_a_line() {
+        let l = Line::new("esp\r\n\n\nrootfs\u{7}", Style::Normal);
+        assert_eq!(l.text, "esp....rootfs.");
+        assert!(!l.text.chars().any(char::is_control));
+
+        // One line in, one line out, whatever the text tried to do.
+        let out = wrap("  a\nb\nc", 40, Style::Dim, "  ");
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].text.chars().any(char::is_control));
+
+        // Ordinary text is passed through untouched.
+        assert_eq!(Line::new("  Disk 1 - 931.5 GiB", Style::Dim).text, "  Disk 1 - 931.5 GiB");
     }
 }
