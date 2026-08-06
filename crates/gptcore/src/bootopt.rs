@@ -220,6 +220,31 @@ pub fn parse_slot(name: &str) -> Option<u16> {
     u16::from_str_radix(digits, 16).ok()
 }
 
+/// The settings saved and restored alongside the `Boot####` entries.
+///
+/// `BootCurrent` is deliberately absent: it is volatile and set by the
+/// firmware to describe the boot in progress, so a saved copy would be a
+/// statement about a boot that already happened.
+pub const SETTINGS: &[&str] = &["BootOrder", "BootNext", "Timeout"];
+
+/// Whether this tool may write a variable of this name.
+///
+/// One list, at both ends: the capture side fills a snapshot from exactly
+/// these names, so refusing everything else on the way back out cannot
+/// reject a file this tool wrote.
+///
+/// An allowlist rather than a denylist, because the dangerous names are
+/// the ones nobody thought of. `Driver####` and `SysPrep####` sit in the
+/// same `EFI_GLOBAL_VARIABLE` namespace with the same attributes as
+/// `Boot####`, and the firmware's boot manager is *required* to load and
+/// start them before it processes `BootOrder` — so a restore that took
+/// variable names from the file it was reading would let a snapshot on a
+/// USB stick install something that runs on every boot, appears in no boot
+/// menu, and outlives an OS reinstall. See [`crate::bootcfg::plan_restore`].
+pub fn may_write(name: &str) -> bool {
+    SETTINGS.contains(&name) || parse_slot(name).is_some()
+}
+
 /// The lowest slot not in `taken`.
 ///
 /// Deliberately unlike the snapshot naming in [`crate::backup::next_name`],

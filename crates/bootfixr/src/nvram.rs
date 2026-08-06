@@ -14,7 +14,11 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use gptcore::bootopt::{self, LoadOption};
+// `SETTINGS` is shared with `bootopt::may_write`, which refuses everything
+// outside it on the way back out: the names a snapshot may hold and the
+// names this tool may write have to be one list, or a restore reaches
+// further than a capture ever did.
+use gptcore::bootopt::{self, LoadOption, SETTINGS};
 use uefi::runtime::{self, VariableAttributes, VariableVendor};
 use uefi::{cstr16, CStr16, Status};
 
@@ -150,13 +154,6 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
     (slots, truncated)
 }
 
-/// The settings worth saving alongside the entries.
-///
-/// `BootCurrent` is deliberately absent: it is volatile and set by the
-/// firmware to describe the boot in progress, so a saved copy would be a
-/// statement about a boot that already happened.
-const SETTINGS: &[&str] = &["BootOrder", "BootNext", "Timeout"];
-
 /// Every variable the boot process depends on, verbatim.
 ///
 /// Raw bytes, not decoded entries: this feeds a snapshot whose whole
@@ -222,7 +219,18 @@ fn write_error(name: &str, status: Status) -> String {
 }
 
 /// Write one variable.
+///
+/// The name is checked against [`bootopt::may_write`] here as well as
+/// where the plan is built, because this is the only place a name becomes
+/// a `SetVariable` call. Everything upstream of it — a snapshot decoded
+/// off a USB stick, a plan, a review screen the operator may have skimmed
+/// — is a description of what to write; this is the writing. A refusal
+/// costs a line on screen, and the alternative is a variable the firmware
+/// executes on every boot.
 pub fn write(w: &bootopt::VarWrite) -> Result<(), String> {
+    if !bootopt::may_write(&w.name) {
+        return Err(format!("{} is not a variable this tool writes", w.name));
+    }
     let name = uefi::CString16::try_from(w.name.as_str())
         .map_err(|_| format!("{} is not a usable variable name", w.name))?;
     runtime::set_variable(&name, &VariableVendor::GLOBAL_VARIABLE, ATTRS, &w.data)
