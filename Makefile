@@ -45,8 +45,8 @@ FONT       ?= /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 FONT_DATA  := $(EFI_CRATE)/src/gfx/font_data.rs
 
 .PHONY: help build debug test test-unit test-integration fmt fmt-check \
-        clippy check size dist images qemu qemu-repair qemu-shots verify-image \
-        font tiny install clean distclean
+        clippy check size dist images qemu qemu-repair qemu-shots qemu-check \
+        verify-image font tiny install clean distclean
 
 help: ## Show this help
 	@echo "bootfixr targets:"
@@ -147,6 +147,9 @@ QRES ?= 800x1280
 qemu-shots: images ## Boot with a $(QRES) framebuffer and screendump the menus
 	SHOTS=$(BUILD)/shots RES=$(QRES) ./tools/run-qemu.sh $(IMAGES) $(SCRIPT)
 	@echo "screenshots in $(BUILD)/shots (PPM; any viewer or ImageMagick)"
+
+qemu-check: build ## Boot every supported QEMU walk and verify each one (slow; needs OVMF)
+	./tools/qemu-test-all.sh $(IMAGES) $(EFI)
 
 verify-image: ## Ask sgdisk what it thinks of the test disk
 	@sgdisk -v $(IMAGES)/test.img 2>&1 \

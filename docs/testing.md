@@ -41,6 +41,17 @@ sgdisk -v build/images/test.img           # verify the result independently
 scripts, including the boot-entry ones (`bootnext`, `bootdefault`,
 `bootregister`, `bootrestore`) exercised in [boot.md](boot.md).
 
+`make qemu-check` runs every walk `run-qemu.sh` knows, one after another,
+each against its own freshly built images so an earlier walk's leftovers
+never fool a later one's post-condition check -- except the pairs that are
+*supposed* to share a build (`backup-usb-only`+`restore-usb`,
+`backup-twice`+`inspect`+`scroll`, `bootregister`+`bootrestore`), which
+`tools/qemu-test-all.sh` knows about and runs back to back on purpose. It
+exits non-zero and lists which walks failed if any of them did not verify.
+Expect it to take a long time -- it is dozens of QEMU boots, each with its
+own `BOOT_WAIT` -- and to need OVMF, `sgdisk` and `mtools` installed, same
+as the individual walks above.
+
 `run-qemu.sh` drives the menus over the serial console, where OVMF's
 `TerminalDxe` turns `ESC[A`..`ESC[D` into D-pad scan codes, CR into A and a
 lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
