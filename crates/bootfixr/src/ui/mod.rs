@@ -28,7 +28,9 @@
 
 pub(crate) mod term;
 
+use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -845,15 +847,228 @@ pub fn init(is_steam_deck: bool) {
 /// judgement about a particular person looking at a particular panel from
 /// wherever they happen to be holding it, and no amount of arithmetic here
 /// settles it.
+/// The modes the firmware says it could set, and what the largest would give.
+///
+/// Here because the tool deliberately leaves the firmware's own choice of
+/// mode alone — see [`crate::gfx::Framebuffer::open`] — which means a screen
+/// laid out in the smallest cell might be a display that can do no better,
+/// or might be a firmware that picked 800x600 on a panel capable of far
+/// more. Those look identical from the operator's chair, and they are not
+/// the same problem: in the second, both text sizes are refused, because
+/// nothing above 8x16 reaches 80 columns at that resolution, and a font
+/// that will not change reads as a font that was never there.
+///
+/// Reporting only. Nothing on this screen calls `SetMode`.
+fn display_modes(
+    modes: &[term::Mode],
+    upgrade: Option<&term::Upgrade>,
+    cols: usize,
+    rows: usize,
+    layout: Option<term::Layout>,
+) {
+    if modes.is_empty() {
+        return;
+    }
+    // Rows already spent: the header, four of prose, two blanks, the two
+    // status lines, the pixel line if it was printed, and the blank and
+    // heading below. Three more are held back for the two lines the offer
+    // takes and for the note a press can add. What is left must stop short
+    // of the footer's rule.
+    let used = header_rows() + 10 + usize::from(layout.is_some());
+    let budget = rows.saturating_sub(3).saturating_sub(used + 3).max(1);
+
+    outln!();
+    paint(colors(Style::Dim));
+    let undrawable = modes.iter().any(|m| !m.drawable);
+    outln!(
+        "  Modes this display offers (* in use{}):",
+        if undrawable { ", ! not ours to draw in" } else { "" }
+    );
+    body();
+    for line in mode_lines(modes, text_width(cols).saturating_sub(4), budget) {
+        outln!("    {line}");
+    }
+
+    // The offer, where there is one worth making. Said in full — the mode,
+    // the grid it comes to, and how it undoes itself — because an operator
+    // about to risk the only picture they have needs to know the way back
+    // before the picture is gone, not after.
+    if let Some(upgrade) = upgrade {
+        paint(colors(Style::Dim));
+        outln!(
+            "  [{}] tries {} x {}: {} x {} characters in cells of {}x{}.",
+            key_label("View"),
+            upgrade.width,
+            upgrade.height,
+            upgrade.layout.cols,
+            upgrade.layout.rows,
+            upgrade.layout.cell_w,
+            upgrade.layout.cell_h
+        );
+        outln!("  If the picture does not survive it, waiting brings this one back.");
+        body();
+    }
+}
+
+/// The mode list, packed into as few rows as the width allows.
+fn mode_lines(modes: &[term::Mode], width: usize, rows: usize) -> Vec<String> {
+    let entries: Vec<String> = modes
+        .iter()
+        .map(|m| {
+            let mark = if m.current {
+                "*"
+            } else if m.drawable {
+                ""
+            } else {
+                "!"
+            };
+            format!("{}x{}{mark}", m.width, m.height)
+        })
+        .collect();
+
+    let (lines, shown) = pack(&entries, width, rows);
+    if shown == entries.len() {
+        return lines;
+    }
+    // A list quietly cut short reads as the whole truth, so one of the rows
+    // goes to saying how much of it is missing.
+    let (mut lines, shown) = pack(&entries, width, rows.saturating_sub(1));
+    lines.push(format!("+{} more", entries.len() - shown));
+    lines
+}
+
+/// Greedily fill at most `rows` lines of at most `width` characters,
+/// reporting how many entries fitted.
+fn pack(entries: &[String], width: usize, rows: usize) -> (Vec<String>, usize) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut shown = 0;
+    for entry in entries {
+        // Two spaces between entries, so a row of them reads as a list
+        // rather than as one long number.
+        let room = |last: &&mut String| last.chars().count() + 2 + entry.chars().count() <= width;
+        if let Some(last) = lines.last_mut().filter(room) {
+            last.push_str("  ");
+            last.push_str(entry);
+        } else if lines.len() < rows {
+            lines.push(entry.clone());
+        } else {
+            break;
+        }
+        shown += 1;
+    }
+    (lines, shown)
+}
+
+/// Said when a press finds the end of the cell-size ladder.
+///
+/// One text per direction, and they name the direction rather than say
+/// "no further that way". Where a single cell size is all that fits — which
+/// is the case this screen most needs to explain — every press lands on one
+/// of these, and a single shared wording would sit there unchanged however
+/// the operator pressed, which is indistinguishable from a screen that has
+/// stopped reading the buttons at all. Two texts alternate, so the display
+/// visibly answers each press.
+///
+/// Both blame the resolution, because that is what is doing it, and the mode
+/// offer sitting a line or two above is what can be done about it.
+const NO_BIGGER_SIZE: &str = "No bigger font available at this resolution.";
+const NO_SMALLER_SIZE: &str = "No smaller font available at this resolution.";
+
+/// Seconds a mode change is given to be confirmed in before it is undone.
+///
+/// Long enough to take in a screen that has just changed shape and press one
+/// button; short enough that somebody looking at a black panel is not left
+/// wondering whether the tool has hung. The operator was told what was about
+/// to happen before it happened, so this is a reaction, not a decision.
+const MODE_SECONDS: usize = 6;
+
+/// Put a mode change to the operator, and report whether they confirmed it.
+///
+/// The confirmation has to be a keypress, and silence has to count as a no.
+/// A mode the panel will not display looks, from in here, exactly like one it
+/// will: the firmware reports success either way. So the question is asked on
+/// the new mode itself — if it can be read, it works, and if nothing comes
+/// back the only safe reading is that nobody can see it.
+///
+/// Only A and B are answers. The arrows are ignored, and so is View: the
+/// press that opened this screen repeats while held on a Deck, and a
+/// confirmation a held button can give is not a confirmation.
+fn confirm_mode(previous: (usize, usize)) -> bool {
+    let ticks_per_second = 1_000_000 / TICK_US;
+    for left in (1..=MODE_SECONDS).rev() {
+        let (cols, rows) = size();
+        clear();
+        header("Display");
+        paint(colors(Style::Key));
+        outln!("  This is a new display mode, {cols} x {rows} characters.");
+        body();
+        outln!();
+        outln!("  If you can read it, keep it. If you cannot, wait: the mode");
+        outln!("  you had comes back on its own and nothing is lost by it.");
+        outln!();
+        paint(colors(Style::Warn));
+        let (width, height) = previous;
+        outln!("  Going back to {width} x {height} in {left}...");
+        body();
+        footer(rows, &[hint("A", "keep this mode"), hint("B", "go back now")]);
+
+        term::flush();
+        for _ in 0..ticks_per_second {
+            match poll() {
+                Some(Input::Select) => return true,
+                Some(Input::Cancel) => return false,
+                _ => boot::stall(TICK_US),
+            }
+        }
+    }
+    false
+}
+
+/// Ask the firmware for a larger framebuffer mode, keeping it only if the
+/// operator can see it. Returns what the display screen should say, if
+/// anything.
+///
+/// Every way this can go wrong ends with the operator looking at a picture
+/// they can read: a mode the firmware refuses changes nothing, a mode this
+/// program cannot draw in is put back by [`crate::gfx::Framebuffer::set_mode`]
+/// before it returns, and a mode that reaches nothing is put back by the
+/// clock. The one irrecoverable case — a switch that works, is not confirmed,
+/// and cannot be undone — is reported rather than papered over, though there
+/// is by then nobody who can read the report.
+fn try_mode(width: usize, height: usize) -> Option<&'static str> {
+    let previous = term::resolution()?;
+    // View repeats while held, and the confirmation must not be answered by
+    // the press that got here.
+    drain();
+
+    if !term::set_mode(width, height) {
+        return Some("The firmware would not set that mode.");
+    }
+    if confirm_mode(previous) {
+        return None;
+    }
+    if term::set_mode(previous.0, previous.1) {
+        return Some("That mode went unconfirmed, so this one is back.");
+    }
+    Some("That mode went unconfirmed, and the old one will not come back.")
+}
+
 fn display() {
     let Some(mut rotation) = term::rotation() else {
         return;
     };
-    let mut at_limit = false;
+    // Asked once, then again after any mode change: `QueryMode` allocates on
+    // every call and this screen redraws on every press, but which mode is
+    // the current one is baked into the answer, so it does go stale when the
+    // one thing here that can change it does.
+    let mut modes = term::modes();
+    let mut note: Option<&'static str> = None;
     drain();
 
     loop {
         let (cols, rows) = size();
+        let layout = term::layout();
+        let upgrade = term::upgrade(&modes);
         clear();
         header("Display");
         outln!("  This screen is drawn by the toolkit itself rather than by the");
@@ -864,35 +1079,60 @@ fn display() {
         paint(colors(Style::Key));
         outln!("  Now showing: {}, {cols} x {rows} characters", fit(rotation.name(), cols));
         body();
+        if let (Some((width, height)), Some(layout)) = (term::resolution(), layout) {
+            outln!(
+                "  Drawn on {width} x {height} pixels, cells of {}x{}",
+                layout.cell_w,
+                layout.cell_h
+            );
+        }
         outln!();
         outln!("  If you can read this the right way up, there is nothing to do.");
 
-        if at_limit {
+        display_modes(&modes, upgrade.as_ref(), cols, rows, layout);
+
+        if let Some(note) = note {
             paint(colors(Style::Dim));
-            outln!("  No further text size that way.");
+            outln!("  {}", fit(note, cols));
             body();
         }
 
-        footer(
-            rows,
-            &[hint("LEFT/RIGHT", "turn"), hint("UP/DOWN", "text size"), hint("A", "done")],
-        );
+        // View earns a hint only where it does something: a Steam Deck has
+        // no button left to give this — X, Y, the bumpers, the triggers and
+        // the back buttons all report nothing at all, measured in
+        // `docs/steamdeck-input.log` — so the button that opens this screen
+        // is the button that acts on it, and it keeps its old meaning of
+        // leaving on every screen where there is no mode worth trying.
+        let mut hints = vec![hint("LEFT/RIGHT", "turn"), hint("UP/DOWN", "text size")];
+        if upgrade.is_some() {
+            hints.push(hint("View", "bigger mode"));
+        }
+        hints.push(hint("A", "done"));
+        footer(rows, &hints);
 
-        at_limit = false;
+        note = None;
         // Raw, or View would open this screen on top of itself.
         match wait_raw() {
             Input::Left => rotation = rotation.previous(),
             Input::Right => rotation = rotation.next(),
-            Input::Up => at_limit = !term::resize_text(true),
-            Input::Down => at_limit = !term::resize_text(false),
-            Input::Select | Input::Cancel | Input::View => {
-                // The press that leaves is held long enough to repeat as
-                // often as any other, and the screen this returns to would
-                // act on what it left behind.
-                drain();
-                return;
-            }
+            Input::Up => note = (!term::resize_text(true)).then_some(NO_BIGGER_SIZE),
+            Input::Down => note = (!term::resize_text(false)).then_some(NO_SMALLER_SIZE),
+            Input::View => match upgrade {
+                Some(upgrade) => {
+                    note = try_mode(upgrade.width, upgrade.height);
+                    // Which mode is the current one is part of the answer,
+                    // and so of the offer built from it.
+                    modes = term::modes();
+                }
+                // Nothing worth trying, so View means what it means
+                // everywhere else on this screen.
+                None => break,
+            },
+            Input::Select | Input::Cancel => break,
         }
         term::set_rotation(rotation);
     }
+    // The press that leaves is held long enough to repeat as often as any
+    // other, and the screen this returns to would act on what it left behind.
+    drain();
 }

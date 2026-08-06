@@ -30,7 +30,9 @@ pub mod font;
 #[cfg_attr(feature = "tiny", allow(dead_code))]
 mod font_data;
 
-use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
+use alloc::vec::Vec;
+
+use uefi::proto::console::gop::{GraphicsOutput, ModeInfo, PixelFormat};
 
 /// A colour, before it is packed into whatever the framebuffer wants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -69,6 +71,19 @@ impl Rotation {
     /// Whether width and height trade places.
     const fn swaps_axes(self) -> bool {
         matches!(self, Rotation::Cw90 | Rotation::Ccw90)
+    }
+
+    /// A physical extent as the logical one it presents at this rotation.
+    ///
+    /// Taken as an argument rather than read off a framebuffer because the
+    /// mode chooser asks it about modes that are not set: what a mode is
+    /// worth depends on which way round the picture will be.
+    const fn logical(self, width: usize, height: usize) -> (usize, usize) {
+        if self.swaps_axes() {
+            (height, width)
+        } else {
+            (width, height)
+        }
     }
 
     pub const fn name(self) -> &'static str {
@@ -113,6 +128,61 @@ impl Channel {
     }
 }
 
+/// Where each colour channel sits, for a mode described by the firmware.
+///
+/// Shared by [`Framebuffer::open`], which is about to draw into the mode,
+/// and [`Framebuffer::modes`], which is only reporting on it. One function
+/// so the two cannot disagree about what this program can drive: a mode the
+/// display screen calls drawable has passed exactly the checks `open` makes.
+///
+/// `None` means there is no 32-bit RGB reading of this mode. Everything
+/// under this module indexes the framebuffer as 32-bit words, so a narrower
+/// pixel would put every write at the wrong offset and run half of `fill`
+/// past the end of the buffer. Rather than grow a second code path for
+/// hardware nobody has seen this tool on, such a mode is simply not ours to
+/// draw in.
+fn channels(info: &ModeInfo) -> Option<(Channel, Channel, Channel)> {
+    match info.pixel_format() {
+        PixelFormat::Rgb => Some((Channel::fixed(0), Channel::fixed(8), Channel::fixed(16))),
+        PixelFormat::Bgr => Some((Channel::fixed(16), Channel::fixed(8), Channel::fixed(0))),
+        PixelFormat::Bitmask => {
+            let mask = info.pixel_bitmask()?;
+            // The masks also settle how wide a pixel is, and a bitmask mode
+            // is free to be 16 bits — "5 bits of red in a 16-bit word" is
+            // legal. See the note above for why that is refused here.
+            let union = mask.red | mask.green | mask.blue | mask.reserved;
+            if (32 - union.leading_zeros()) < 25 {
+                return None;
+            }
+            Some((
+                Channel::from_mask(mask.red),
+                Channel::from_mask(mask.green),
+                Channel::from_mask(mask.blue),
+            ))
+        }
+        // No CPU-addressable framebuffer, so there is nothing to draw into.
+        PixelFormat::BltOnly => None,
+    }
+}
+
+/// A graphics mode the firmware says it can set, as the display screen
+/// reports it.
+///
+/// One entry per resolution rather than per mode index: firmware routinely
+/// offers the same resolution several times over, once per pixel format it
+/// can drive it in, and that is not a distinction an operator is choosing
+/// between.
+pub struct Mode {
+    pub width: usize,
+    pub height: usize,
+    /// Whether this program could draw in it — see [`channels`]. Reported
+    /// rather than filtered out, because a firmware that offers nothing but
+    /// modes we cannot draw in is worth being able to see.
+    pub drawable: bool,
+    /// Whether this is the mode currently on the glass.
+    pub current: bool,
+}
+
 /// The firmware's framebuffer, plus the rotation applied on every write.
 pub struct Framebuffer {
     base: *mut u32,
@@ -125,9 +195,10 @@ pub struct Framebuffer {
     green: Channel,
     blue: Channel,
     rotation: Rotation,
-    /// Held only so the protocol stays open for the life of the image; the
-    /// framebuffer address below would otherwise outlive our claim on it.
-    _gop: uefi::boot::ScopedProtocol<GraphicsOutput>,
+    /// Held so the protocol stays open for the life of the image — the
+    /// framebuffer address above would otherwise outlive our claim on it —
+    /// and so [`Framebuffer::modes`] can ask what else this device offers.
+    gop: uefi::boot::ScopedProtocol<GraphicsOutput>,
 }
 
 impl Framebuffer {
@@ -145,7 +216,7 @@ impl Framebuffer {
         //
         // SAFETY: GetProtocol neither installs nor removes interfaces, and
         // the ScopedProtocol is kept alive in the returned value.
-        let mut gop = unsafe {
+        let gop = unsafe {
             uefi::boot::open_protocol::<GraphicsOutput>(
                 uefi::boot::OpenProtocolParams {
                     handle,
@@ -157,45 +228,57 @@ impl Framebuffer {
         }
         .ok()?;
 
-        let info = gop.current_mode_info();
-        // The mode the firmware picked is left alone. It is the one the
+        // The mode the firmware picked is left alone here. It is the one the
         // panel is actually driving, and on a fixed internal display,
-        // changing it is a good way to end up looking at nothing.
+        // changing it unasked is a good way to end up looking at nothing.
+        // [`Framebuffer::set_mode`] is the operator's business, not this
+        // function's.
+        let mut fb = Framebuffer {
+            base: core::ptr::null_mut(),
+            stride: 0,
+            width: 0,
+            height: 0,
+            red: Channel::fixed(0),
+            green: Channel::fixed(8),
+            blue: Channel::fixed(16),
+            rotation: Rotation::default(),
+            gop,
+        };
+        // Every field above is a placeholder until this succeeds, and if it
+        // does not the half-built value is dropped here and never drawn on.
+        fb.adopt()?;
+        Some(fb)
+    }
+
+    /// Re-read everything that describes the mode now in force, or `None` if
+    /// it is not one this program can draw in.
+    ///
+    /// The single point at which a mode becomes this program's to write to,
+    /// which is what makes [`Framebuffer::set_mode`] as careful as
+    /// [`Framebuffer::open`] was without either having to remember to be.
+    fn adopt(&mut self) -> Option<()> {
+        // A description that does not match the mode in force is worse than
+        // no description at all: `SetMode` invalidates the framebuffer the
+        // old fields point into, so drawing through them afterwards would
+        // write somewhere this program no longer owns. Zeroing first means
+        // every path out of here leaves the extent either correct or empty,
+        // and an empty one makes `put` and `fill` write nothing whatsoever.
+        self.width = 0;
+        self.height = 0;
+        self.stride = 0;
+
+        let info = self.gop.current_mode_info();
         let (width, height) = info.resolution();
         let stride = info.stride();
 
-        // BltOnly means there is no CPU-addressable framebuffer, so there
-        // is nothing here to draw into.
-        let (red, green, blue) = match info.pixel_format() {
-            PixelFormat::Rgb => (Channel::fixed(0), Channel::fixed(8), Channel::fixed(16)),
-            PixelFormat::Bgr => (Channel::fixed(16), Channel::fixed(8), Channel::fixed(0)),
-            PixelFormat::Bitmask => {
-                let mask = info.pixel_bitmask()?;
-                // The masks also settle how wide a pixel is, and a bitmask
-                // mode is free to be 16 bits — "5 bits of red in a 16-bit
-                // word" below is legal. Everything under this module
-                // indexes the framebuffer as 32-bit words, so any
-                // narrower pixel would put every write at the wrong
-                // offset and run half of `fill` past the framebuffer.
-                // Rather than grow a second code path for hardware nobody
-                // has seen this tool on, fall back to the text console.
-                let union = mask.red | mask.green | mask.blue | mask.reserved;
-                if (32 - union.leading_zeros()) < 25 {
-                    return None;
-                }
-                (
-                    Channel::from_mask(mask.red),
-                    Channel::from_mask(mask.green),
-                    Channel::from_mask(mask.blue),
-                )
-            }
-            PixelFormat::BltOnly => return None,
-        };
+        // A mode this program cannot index as 32-bit RGB words is a mode it
+        // must not draw in.
+        let (red, green, blue) = channels(&info)?;
         if width == 0 || height == 0 || stride < width {
             return None;
         }
 
-        let mut fb = gop.frame_buffer();
+        let mut fb = self.gop.frame_buffer();
         // The SAFETY comments on `put` and `fill` assume the framebuffer
         // holds at least `stride * height` 32-bit pixels. That is what the
         // formats accepted above imply, but it is the firmware's buffer
@@ -206,18 +289,102 @@ impl Framebuffer {
         if fb.size() < needed {
             return None;
         }
-        let base = fb.as_mut_ptr().cast::<u32>();
-        Some(Framebuffer {
-            base,
-            stride,
-            width,
-            height,
-            red,
-            green,
-            blue,
-            rotation: Rotation::default(),
-            _gop: gop,
-        })
+
+        self.base = fb.as_mut_ptr().cast::<u32>();
+        self.stride = stride;
+        self.width = width;
+        self.height = height;
+        self.red = red;
+        self.green = green;
+        self.blue = blue;
+        Some(())
+    }
+
+    /// Ask the firmware for the mode at this resolution.
+    ///
+    /// `true` only if the change went through and left something this
+    /// program can draw in. On anything else the mode in force when this was
+    /// called is put back, so a refusal costs the caller nothing but the
+    /// call — and the caller is then still looking at the picture it had.
+    ///
+    /// What this cannot promise is that the new mode reaches the glass:
+    /// `SetMode` reporting success says the firmware programmed the
+    /// controller, not that the panel accepted it. Only the operator can
+    /// settle that, which is why the screen that calls this puts the old
+    /// mode back unless somebody confirms the new one.
+    pub fn set_mode(&mut self, width: usize, height: usize) -> bool {
+        // Kept whole rather than as a resolution: firmware may offer the same
+        // resolution in several pixel formats, and going back has to mean the
+        // mode that was working, not one that merely measures the same.
+        let before = self.gop.current_mode_info();
+        if before.resolution() == (width, height) {
+            return false;
+        }
+
+        let Some(wanted) = self
+            .gop
+            .modes()
+            .find(|m| m.info().resolution() == (width, height) && channels(m.info()).is_some())
+        else {
+            return false;
+        };
+        if self.gop.set_mode(&wanted).is_err() {
+            return false;
+        }
+        if self.adopt().is_some() {
+            return true;
+        }
+
+        // The firmware set a mode it had described as drawable and then
+        // handed back something else — a buffer too small for its own
+        // stride, most likely. Nothing to do but go back, and if even that
+        // fails there is no reading left worth having: `adopt` has left the
+        // fields describing whichever mode last passed it, so the caller is
+        // no worse off than a refusal.
+        if let Some(previous) = self.gop.modes().find(|m| *m.info() == before) {
+            let _ = self.gop.set_mode(&previous);
+            let _ = self.adopt();
+        }
+        false
+    }
+
+    /// Every resolution the firmware says this device can be set to.
+    ///
+    /// `QueryMode` only, which is a pure question: nothing about the picture
+    /// changes by asking, on any hardware. Setting one of these is a
+    /// different matter and is not done here.
+    ///
+    /// Reported to the operator rather than acted on. The tool leaves the
+    /// firmware's own choice of mode alone (see [`Framebuffer::open`]), so
+    /// on a machine whose firmware picked a mode too small to lay the menus
+    /// out in anything but the smallest cell, this list is the only way to
+    /// see whether the hardware had a better one to offer.
+    pub fn modes(&self) -> Vec<Mode> {
+        let mut modes: Vec<Mode> = Vec::new();
+        for mode in self.gop.modes() {
+            let info = mode.info();
+            let (width, height) = info.resolution();
+            if width == 0 || height == 0 {
+                continue;
+            }
+            let drawable = info.stride() >= width && channels(info).is_some();
+            // One entry per resolution; see [`Mode`]. Drawable in any of the
+            // formats offered for it means drawable.
+            if let Some(seen) = modes.iter_mut().find(|m| m.width == width && m.height == height) {
+                seen.drawable |= drawable;
+                continue;
+            }
+            let current = width == self.width && height == self.height;
+            modes.push(Mode { width, height, drawable, current });
+        }
+        modes.sort_unstable_by_key(|m| (m.width, m.height));
+        modes
+    }
+
+    /// The extent the firmware reports, in its own coordinates — before any
+    /// rotation of ours. What the panel is actually being driven at.
+    pub const fn resolution(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
     /// The orientation to start in.
@@ -246,11 +413,7 @@ impl Framebuffer {
     /// The drawable area in logical coordinates, which is the physical one
     /// with its axes swapped for the quarter turns.
     pub const fn logical_size(&self) -> (usize, usize) {
-        if self.rotation.swaps_axes() {
-            (self.height, self.width)
-        } else {
-            (self.width, self.height)
-        }
+        self.rotation.logical(self.width, self.height)
     }
 
     pub const fn pack(&self, Rgb(r, g, b): Rgb) -> u32 {
@@ -292,8 +455,10 @@ impl Framebuffer {
         let (px, py) = self.map(x, y);
         // SAFETY: `map` is a bijection onto the physical extent, and the
         // bounds check above puts (px, py) inside it. The framebuffer is at
-        // least `stride * height` pixels, and the mode is never changed
-        // after `open`, so `base` stays valid for the life of the image.
+        // least `stride * height` pixels. A mode change re-reads all four
+        // fields together in `adopt`, which zeroes the extent if the new
+        // mode cannot be described — so reaching this line at all means
+        // `base` and `stride` describe the mode now in force.
         unsafe { self.base.add(py * self.stride + px).write_volatile(packed) }
     }
 

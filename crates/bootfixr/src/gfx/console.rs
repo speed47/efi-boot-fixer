@@ -125,6 +125,54 @@ fn automatic(width: usize, height: usize) -> usize {
     best
 }
 
+/// A grid and the cell size that produced it, for the display screen.
+#[derive(Clone, Copy)]
+pub struct Layout {
+    pub cols: usize,
+    pub rows: usize,
+    pub cell_w: usize,
+    pub cell_h: usize,
+}
+
+/// What a framebuffer of this logical size would be laid out as, if it were
+/// the one in use.
+///
+/// The display screen's answer to "what would that mode be worth?", and it
+/// has to be [`automatic`]'s answer rather than a guess of its own, or the
+/// number shown would not be the number a mode change delivered.
+pub fn layout_for(width: usize, height: usize) -> Layout {
+    let font = FONTS[automatic(width, height)];
+    Layout {
+        cols: width / font.cell_w,
+        rows: height / font.cell_h,
+        cell_w: font.cell_w,
+        cell_h: font.cell_h,
+    }
+}
+
+/// How good a grid is to lay the menus out in, worst first.
+///
+/// The order the mode chooser sorts on, and it is the same judgement
+/// [`fits`] and [`TARGET_COLS`] already encode, in the order those two
+/// matter: a grid the menus fit in beats one they do not, whatever the cell
+/// size; then a bigger cell, because that is the whole point of changing
+/// mode; then the line length, to settle ties between modes that offer the
+/// same cell.
+fn score(layout: &Layout) -> (bool, usize, core::cmp::Reverse<usize>) {
+    (
+        layout.cols >= MIN_COLS && layout.rows >= MIN_ROWS,
+        layout.cell_w * layout.cell_h,
+        core::cmp::Reverse(layout.cols.abs_diff(TARGET_COLS)),
+    )
+}
+
+/// A mode worth changing to, and what changing to it would come to.
+pub struct Upgrade {
+    pub width: usize,
+    pub height: usize,
+    pub layout: Layout,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     /// ASCII only; everything drawn by this application is.
@@ -224,6 +272,73 @@ impl Console {
 
     pub const fn size(&self) -> (usize, usize) {
         (self.cols, self.rows)
+    }
+
+    /// The grid as it stands, which is not always [`layout_for`]'s answer
+    /// for this framebuffer: the operator may have stepped the cell size
+    /// away from the automatic choice, and the display screen has to show
+    /// what is on the glass rather than what would have been chosen.
+    pub fn layout(&self) -> Layout {
+        let font = self.font();
+        Layout { cols: self.cols, rows: self.rows, cell_w: font.cell_w, cell_h: font.cell_h }
+    }
+
+    /// The modes the device offers, and the extent of the one in use.
+    pub fn modes(&self) -> Vec<super::Mode> {
+        self.fb.modes()
+    }
+
+    pub const fn resolution(&self) -> (usize, usize) {
+        self.fb.resolution()
+    }
+
+    /// The mode worth stepping up to, out of what the firmware offers, or
+    /// `None` if this one is already the best of them.
+    ///
+    /// Judged against what the mode in force can do *at best* — its
+    /// [`automatic`] layout — and not against the cell the operator happens
+    /// to have stepped to. Someone who has just chosen a smaller font by
+    /// hand has not thereby asked to be offered a different mode.
+    ///
+    /// Turned before it is scored, because the value of a mode depends on
+    /// which way round the picture goes: 2560x1600 is a wide grid the way
+    /// the firmware has it and a tall one on a panel mounted sideways.
+    pub fn upgrade(&self, modes: &[super::Mode]) -> Option<Upgrade> {
+        let rotation = self.fb.rotation();
+        let layout_of = |mode: &super::Mode| {
+            let (width, height) = rotation.logical(mode.width, mode.height);
+            layout_for(width, height)
+        };
+
+        let (width, height) = self.fb.logical_size();
+        let now = layout_for(width, height);
+        let best = modes
+            .iter()
+            .filter(|mode| mode.drawable && !mode.current)
+            .max_by_key(|mode| score(&layout_of(mode)))?;
+
+        let layout = layout_of(best);
+        (score(&layout) > score(&now)).then_some(Upgrade {
+            width: best.width,
+            height: best.height,
+            layout,
+        })
+    }
+
+    /// Change the framebuffer mode and lay the grid out again in it.
+    ///
+    /// The cell size is chosen afresh rather than carried over: getting a
+    /// bigger one is the reason to be here, and [`Console::relayout`] only
+    /// asks again when the cell it has stopped fitting — which, on a step up
+    /// to a larger framebuffer, is exactly when it has not.
+    pub fn set_mode(&mut self, width: usize, height: usize) -> bool {
+        if !self.fb.set_mode(width, height) {
+            return false;
+        }
+        let (width, height) = self.fb.logical_size();
+        self.font = automatic(width, height);
+        self.relayout();
+        true
     }
 
     pub const fn rotation(&self) -> Rotation {
