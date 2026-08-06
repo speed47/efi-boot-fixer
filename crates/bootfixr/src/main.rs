@@ -2640,7 +2640,11 @@ fn main() -> Status {
         // itself and never hands control back here, so a width changed
         // there leaves these lines truncated until a submenu is entered
         // and left again.
-        let mut intro = alloc::vec![dim(format!("  version {}", env!("BOOTFIXR_VERSION")))];
+        let mut intro = alloc::vec![dim(format!(
+            "  version {} compiled {}",
+            env!("BOOTFIXR_VERSION"),
+            env!("BOOTFIXR_COMPILE_DATE")
+        ))];
         if boot_device.is_known() {
             intro.extend(ui::wrapped(
                 &format!("  launched from {}", path_text(boot_device.path())),

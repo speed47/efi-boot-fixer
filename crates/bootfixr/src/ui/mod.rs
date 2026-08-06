@@ -1188,7 +1188,13 @@ fn resolution_menu(modes: &[term::Mode]) -> Option<&'static str> {
         }
 
         outln!();
-        outln!("{}", fit("  If screen becomes unreadable, it'll revert automatically after a few seconds.", cols));
+        outln!(
+            "{}",
+            fit(
+                "  If screen becomes unreadable, it'll revert automatically after a few seconds.",
+                cols
+            )
+        );
 
         footer(rows, &[hint("D-pad", "move"), hint("A", "apply"), hint("B", "back")]);
 
