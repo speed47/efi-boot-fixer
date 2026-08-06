@@ -8,6 +8,7 @@
 use crate::crc::Crc32;
 use crate::disk::{read_lbas, BlockDevice, IoError};
 use crate::entry::{parse_array, PartitionEntry};
+use crate::guid::Guid;
 use crate::header::{Defect, GptHeader};
 use crate::layout::{self, Confidence, Recognition, StructuralIssue};
 use crate::mbr::{self, MbrStatus};
@@ -136,6 +137,41 @@ pub enum Implausible {
         entry_blocks: u64,
         first_usable: u64,
     },
+}
+
+/// Whether the two tables describe different disks.
+///
+/// Each table is validated on its own — signature, CRCs, ranges, role —
+/// and nothing compares the pair, so a secondary GPT with valid checksums
+/// and a completely different set of extents is reported as OK. It stays
+/// OK right up until the day the main table breaks and this one becomes
+/// the source a repair is built from, at which point the tool proposes it
+/// with no idea it disagrees with what was there yesterday. `sgdisk -v`,
+/// the oracle these tests are written against, says "main and backup
+/// partition tables differ"; saying nothing is the gap.
+///
+/// Compared: the usable range, the array geometry, and the used entries'
+/// extents and unique GUIDs. `None` when either table could not be read,
+/// which is its own report elsewhere.
+pub fn tables_differ(analysis: &Analysis) -> Option<bool> {
+    let (Ok(main), Ok(secondary)) = (&analysis.main, &analysis.secondary) else {
+        return None;
+    };
+    if main.header.first_usable_lba != secondary.header.first_usable_lba
+        || main.header.last_usable_lba != secondary.header.last_usable_lba
+        || main.header.number_of_partition_entries != secondary.header.number_of_partition_entries
+        || main.header.size_of_partition_entry != secondary.header.size_of_partition_entry
+    {
+        return Some(true);
+    }
+    let used = |t: &TableView| -> Vec<(u64, u64, Guid)> {
+        t.entries
+            .iter()
+            .filter(|e| e.is_used())
+            .map(|e| (e.starting_lba, e.ending_lba, e.unique_guid))
+            .collect()
+    };
+    Some(used(main) != used(secondary))
 }
 
 #[derive(Clone, Debug)]

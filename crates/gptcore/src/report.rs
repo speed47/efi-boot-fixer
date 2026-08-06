@@ -119,6 +119,12 @@ pub fn render_analysis(analysis: &Analysis) -> Vec<Line> {
     out.push(Line::new(format!("  {:<14}: {}", "Protective MBR", mbr_text), mbr_style));
     push_defects(&mut out, "Main GPT", &analysis.main);
     push_defects(&mut out, "Secondary GPT", &analysis.secondary);
+    // Two tables that each verify can still describe different disks, and
+    // one of them is what a repair would be built from.
+    if crate::repair::tables_differ(analysis) == Some(true) {
+        out.push(warn(format!("  {:<14}: the two GPTs describe different layouts", "Disagree")));
+        out.push(dim("      one of them is what a repair would copy from"));
+    }
 
     if let Some(rec) = &analysis.recognition {
         let (verdict, style) = match rec.confidence {

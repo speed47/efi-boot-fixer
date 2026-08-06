@@ -699,6 +699,37 @@ impl core::fmt::Display for Mismatch {
     }
 }
 
+/// Whether the tables inside a snapshot actually verify.
+///
+/// [`Health`] is one byte the capturing build wrote down, and it is what
+/// decides whether the operator is warned that a snapshot came from a
+/// damaged table. A byte in the file cannot be the authority on the file:
+/// anyone editing one sets it to zero and the warning disappears. The
+/// bytes it describes are right here, so ask them instead — both headers,
+/// their own CRCs, and the entry arrays they claim.
+pub fn tables_verify(archive: &Archive, crc: &impl Crc32) -> bool {
+    for (header_role, entries_role, read_from) in [
+        (Role::MainHeader, Role::MainEntries, 1),
+        (Role::SecondaryHeader, Role::SecondaryEntries, archive.last_block),
+    ] {
+        let Some(chunk) = archive.chunk(header_role) else { return false };
+        let Some(header) = GptHeader::parse(&chunk.data) else { return false };
+        let entries = archive.chunk(entries_role).map(|c| c.data.as_slice());
+        let defects = header.validate(
+            &chunk.data,
+            entries,
+            read_from,
+            archive.last_block,
+            archive.block_size,
+            crc,
+        );
+        if !defects.is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Build the ordered restore for `archive` onto the disk `analysis` came
 /// from.
 ///

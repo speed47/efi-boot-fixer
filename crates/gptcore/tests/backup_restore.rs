@@ -499,3 +499,64 @@ fn the_real_corruptions_snapshot_is_still_restorable() {
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
     restore_plan(&archive, &analysis).expect("the 2016 array sits clear of every partition");
 }
+
+/// The "this came from a damaged table" warning is the operator's one clue
+/// that a snapshot is not what it looks like, and it hung on a single byte
+/// in the file. A snapshot's own bytes are a better witness than its own
+/// claim about them.
+#[test]
+fn a_snapshots_health_is_checked_rather_than_read_off_the_file() {
+    let img = deck_image();
+    let healthy = snapshot(&img);
+    assert_eq!(healthy.health, Health::Healthy);
+    assert!(backup::tables_verify(&healthy, &CRC), "a real snapshot of a healthy disk verifies");
+
+    // Damage the table inside the file and claim it was fine.
+    let mut lying = snapshot(&img);
+    let chunk = lying.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.data[0] ^= 0xff;
+    lying.health = Health::Healthy;
+    assert!(!backup::tables_verify(&lying, &CRC), "the entry array no longer matches its CRC");
+}
+
+/// Two tables can each verify and still describe different disks. That is
+/// the state a planted secondary GPT sits in, unremarked, until the main
+/// table breaks and it becomes the source a repair copies from. sgdisk
+/// says "main and backup partition tables differ"; so should this.
+#[test]
+fn two_tables_that_disagree_are_reported_even_though_both_verify() {
+    let img = deck_image();
+    {
+        let mut disk = img.disk();
+        let analysis = analyze(&mut disk, &CRC).expect("analyze");
+        assert_eq!(gptcore::repair::tables_differ(&analysis), Some(false), "a real disk agrees");
+    }
+
+    // Shift every extent in the secondary's array and reseal both CRCs, so
+    // the secondary is valid in isolation and contradicts the main table.
+    let last = img.last_block();
+    let mut header = gptcore::GptHeader::parse(&img.read_lba(last, 1)).expect("parse");
+    let mut entries = img.read_lba(header.partition_entry_lba, 32);
+    for i in 0..128 {
+        let e = i * 128;
+        let start = u64::from_le_bytes(entries[e + 32..e + 40].try_into().unwrap());
+        if start == 0 {
+            continue;
+        }
+        let end = u64::from_le_bytes(entries[e + 40..e + 48].try_into().unwrap());
+        entries[e + 32..e + 40].copy_from_slice(&(start + 40_000_000).to_le_bytes());
+        entries[e + 40..e + 48].copy_from_slice(&(end + 40_000_000).to_le_bytes());
+    }
+    header.partition_entry_array_crc32 = gptcore::Crc32::crc32(&CRC, &entries);
+    img.write_lba(header.partition_entry_lba, &entries);
+    img.write_lba(last, &header.to_block(512, &CRC));
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    assert!(analysis.main.as_ref().is_ok_and(|t| t.is_valid()), "the main table still verifies");
+    assert!(analysis.secondary.as_ref().is_ok_and(|t| t.is_valid()), "and so does the secondary");
+    assert_eq!(gptcore::repair::tables_differ(&analysis), Some(true));
+
+    let text = gptcore::style::plain(&gptcore::report::render_analysis(&analysis));
+    assert!(text.contains("describe different layouts"), "{text}");
+}
