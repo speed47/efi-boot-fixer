@@ -66,7 +66,7 @@ fn preamble() -> Vec<Line> {
     let rule = "=".repeat(gptcore::diag::WIDTH);
     alloc::vec![
         title(rule.clone()),
-        title(crate::APP_NAME),
+        title(crate::app_name()),
         title("Diagnostic report"),
         title(rule),
         Line::blank(),

@@ -374,6 +374,10 @@ static STEAM_DECK: AtomicBool = AtomicBool::new(false);
 /// Public within the crate as well as used by [`footer`]: a few screens
 /// name a button in their own body text rather than only in the footer, and
 /// those have to agree with it.
+pub fn is_steam_deck() -> bool {
+    STEAM_DECK.load(Ordering::Relaxed)
+}
+
 pub(crate) fn key_label(key: &str) -> &str {
     if STEAM_DECK.load(Ordering::Relaxed) {
         return key;
