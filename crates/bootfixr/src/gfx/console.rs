@@ -21,7 +21,7 @@ use super::font::Font;
 use super::font_data::MEDIUM;
 #[cfg(not(feature = "tiny"))]
 use super::font_data::{LARGE, SMALL};
-use super::{Framebuffer, Rgb, Rotation};
+use super::{Framebuffer, ModeChange, Rgb, Rotation};
 use uefi::proto::console::text::Color;
 
 /// The sixteen console colours, as this renderer draws them.
@@ -228,6 +228,17 @@ impl Console {
         self.fb.fill(self.bg);
     }
 
+    /// Forget what is believed to be on the screen, leaving what is meant
+    /// to be there alone.
+    ///
+    /// [`Console::relayout`] is the fuller version of this and rebuilds the
+    /// grid; this one is for the case where the grid is still right and only
+    /// the glass has been cleared underneath it.
+    fn forget(&mut self) {
+        self.shown.iter_mut().for_each(|c| *c = None);
+        self.fb.fill(self.bg);
+    }
+
     /// Step one cell size up or down, if there is one that still fits.
     ///
     /// Returns whether anything changed, so the caller can tell the
@@ -288,8 +299,19 @@ impl Console {
     /// asks again when the cell it has stopped fitting — which, on a step up
     /// to a larger framebuffer, is exactly when it has not.
     pub fn set_mode(&mut self, width: usize, height: usize) -> bool {
-        if !self.fb.set_mode(width, height) {
-            return false;
+        match self.fb.set_mode(width, height) {
+            ModeChange::Set => {}
+            ModeChange::Refused => return false,
+            // The firmware set a mode, could not be adopted, and the old
+            // one was put back — two `SetMode` calls, each of which clears
+            // the display. The grid still stands, because the geometry is
+            // where it started, but nothing is on the glass and [`flush`]
+            // draws only what differs from `shown`. Forget the screen so
+            // that whatever is drawn next is drawn whole.
+            ModeChange::Restored => {
+                self.forget();
+                return false;
+            }
         }
         let (width, height) = self.fb.logical_size();
         self.font = automatic(width, height);
