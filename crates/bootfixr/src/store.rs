@@ -222,6 +222,12 @@ impl Volume {
     /// matters is concerned. Filtering directories out here — as the
     /// listing that decodes files rightly does — would hand `save` a name
     /// it then refuses, in this session and every session after it.
+    ///
+    /// `.` and `..` are the exception, and are dropped. They are not names
+    /// anything could be saved under, and this listing is read twice over:
+    /// once to number the next snapshot, and once by [`crate::diag`], which
+    /// prints it. Leaving them in makes the report call an empty directory
+    /// two files and then name them.
     pub fn names(&self) -> Result<Vec<String>, String> {
         let Some(mut dir) = self.open_dir(false)? else {
             return Ok(Vec::new());
@@ -229,7 +235,12 @@ impl Volume {
         let mut names = Vec::new();
         loop {
             match dir.read_entry_boxed() {
-                Ok(Some(info)) => names.push(info.file_name().to_string()),
+                Ok(Some(info)) => {
+                    let name = info.file_name().to_string();
+                    if name != "." && name != ".." {
+                        names.push(name);
+                    }
+                }
                 Ok(None) => break,
                 Err(e) => return Err(err(&format!("cannot read \\{DIR}"), e.status())),
             }

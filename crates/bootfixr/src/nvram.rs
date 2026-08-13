@@ -115,6 +115,17 @@ fn get_u16(name: &CStr16) -> Option<u16> {
 /// bound `crate::diag` uses.
 pub(crate) const MAX_VARIABLES: usize = 1024;
 
+/// The same refusal, applied to the walk rather than to what it looks for.
+///
+/// [`MAX_VARIABLES`] counts global names only, so that a store carrying a
+/// few hundred vendor variables cannot end the walk before the entries
+/// this tool came for have been seen. That leaves the loop unbounded on a
+/// firmware which repeats a *vendor* key for ever — the very bug class the
+/// bound exists for — so the walk itself is counted too. Sixteen times the
+/// room, because this one is a backstop and not a budget: no honest store
+/// comes near it.
+pub(crate) const MAX_KEYS: usize = 16 * MAX_VARIABLES;
+
 /// Every `Boot####` in the store, and why enumeration stopped if it did.
 ///
 /// Two passes: collect the slot numbers first, then fetch each one.
@@ -131,10 +142,19 @@ fn enumerate() -> (Vec<u16>, Option<String>) {
     // some firmwares really do carry — end the walk before this tool has
     // seen the entries it came for.
     let mut seen = 0usize;
-    for key in runtime::variable_keys() {
+    // `walked` counts before that filter, so that a firmware repeating a
+    // key this walk skips is still a walk that ends. See [`MAX_KEYS`].
+    for (walked, key) in runtime::variable_keys().enumerate() {
         if seen >= MAX_VARIABLES {
             truncated = Some(format!(
                 "the variable store walk was stopped after {MAX_VARIABLES} global names; \
+                 the firmware may be repeating itself"
+            ));
+            break;
+        }
+        if walked >= MAX_KEYS {
+            truncated = Some(format!(
+                "the variable store walk was stopped after {MAX_KEYS} variables; \
                  the firmware may be repeating itself"
             ));
             break;

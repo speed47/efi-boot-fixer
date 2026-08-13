@@ -183,6 +183,25 @@ pub struct Mode {
     pub current: bool,
 }
 
+/// What [`Framebuffer::set_mode`] did, which is not the same question as
+/// whether it succeeded.
+///
+/// A refusal costs the caller nothing, but going back does not: `SetMode`
+/// clears the display, so the path that puts the previous mode back leaves
+/// the geometry exactly as it was and the glass holding nothing at all.
+/// A caller which repaints only what it believes has changed has to be
+/// able to tell those two failures apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ModeChange {
+    /// The mode is in force and the fields describe it.
+    Set,
+    /// Nothing was asked of the firmware; the picture is untouched.
+    Refused,
+    /// A mode was set, could not be adopted, and the previous one was put
+    /// back. The geometry is as it was; the screen has been cleared.
+    Restored,
+}
+
 /// The firmware's framebuffer, plus the rotation applied on every write.
 pub struct Framebuffer {
     base: *mut u32,
@@ -302,23 +321,25 @@ impl Framebuffer {
 
     /// Ask the firmware for the mode at this resolution.
     ///
-    /// `true` only if the change went through and left something this
-    /// program can draw in. On anything else the mode in force when this was
-    /// called is put back, so a refusal costs the caller nothing but the
-    /// call — and the caller is then still looking at the picture it had.
+    /// [`ModeChange::Set`] only if the change went through and left
+    /// something this program can draw in. On anything else the mode in
+    /// force when this was called is put back, so a refusal costs the
+    /// caller nothing but the call — and the caller is then still looking
+    /// at the picture it had, unless the answer is
+    /// [`ModeChange::Restored`], which says the picture is gone.
     ///
     /// What this cannot promise is that the new mode reaches the glass:
     /// `SetMode` reporting success says the firmware programmed the
     /// controller, not that the panel accepted it. Only the operator can
     /// settle that, which is why the screen that calls this puts the old
     /// mode back unless somebody confirms the new one.
-    pub fn set_mode(&mut self, width: usize, height: usize) -> bool {
+    pub fn set_mode(&mut self, width: usize, height: usize) -> ModeChange {
         // Kept whole rather than as a resolution: firmware may offer the same
         // resolution in several pixel formats, and going back has to mean the
         // mode that was working, not one that merely measures the same.
         let before = self.gop.current_mode_info();
         if before.resolution() == (width, height) {
-            return false;
+            return ModeChange::Refused;
         }
 
         let Some(wanted) = self
@@ -326,13 +347,13 @@ impl Framebuffer {
             .modes()
             .find(|m| m.info().resolution() == (width, height) && channels(m.info()).is_some())
         else {
-            return false;
+            return ModeChange::Refused;
         };
         if self.gop.set_mode(&wanted).is_err() {
-            return false;
+            return ModeChange::Refused;
         }
         if self.adopt().is_some() {
-            return true;
+            return ModeChange::Set;
         }
 
         // The firmware set a mode it had described as drawable and then
@@ -345,7 +366,7 @@ impl Framebuffer {
             let _ = self.gop.set_mode(&previous);
             let _ = self.adopt();
         }
-        false
+        ModeChange::Restored
     }
 
     /// Every resolution the firmware says this device can be set to.

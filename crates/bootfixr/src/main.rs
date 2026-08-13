@@ -1897,13 +1897,16 @@ fn run_boot_register(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bo
     // an addition, and the snapshot taken moments before came from the
     // same short walk, so the copy to go back to would not hold it either.
     if let Some(why) = &state.truncated {
-        return show_error(
-            "Register a bootloader",
-            format!(
-                "{why}\n\nChoosing a slot from a partial list of entries could \
-                 overwrite one that already exists."
-            ),
-        );
+        // Built as lines rather than handed to `show_error`, which is for a
+        // single short sentence: this one is two paragraphs and the reason
+        // it gives comes from the firmware, so its length is not ours to
+        // know. A message that far over the width loses its second half to
+        // `fit`, and the half that matters here is the second.
+        let mut lines = ui::wrapped(&format!("  {why}"), Style::Bad, "  ");
+        lines.push(Line::blank());
+        lines.push(bad("  Choosing a slot from a partial list of entries"));
+        lines.push(bad("  could overwrite one that already exists."));
+        return ui::message("Register a bootloader", &lines);
     }
     let scan = espscan::scan(boot_device, &known_paths(&state));
 
