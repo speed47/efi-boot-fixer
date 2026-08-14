@@ -334,6 +334,37 @@ fn vet_entries_region(
     vetted
 }
 
+/// The one placement that needs no witness at all: where this tool would
+/// have put the array itself, at the size it would have written.
+fn conventional_placement(archive: &Archive, role: Role, lba: u64, blocks: u64) -> bool {
+    blocks <= default_array_blocks(archive.block_size)
+        && match role {
+            Role::MainEntries => lba == 2,
+            _ => lba.saturating_add(blocks) == archive.last_block,
+        }
+}
+
+/// Whether a region avoids every partition the snapshot itself lists.
+///
+/// A usable range is a claim about where partitions are allowed; the
+/// entries are the partitions. Asked of a snapshot's own headers the two
+/// are not equivalent — a header declaring a usable range of 2..2 objects
+/// to nothing above LBA 2, whereas the entries beside it still say where
+/// the filesystems start. So a snapshot vouching for its own array has to
+/// clear both, and this is the half that cannot be narrowed into a
+/// blessing.
+///
+/// An entry whose extent does not decode as a range is treated as
+/// occupying the region, because the point here is to be sure.
+fn clear_of_archive_partitions(archive: &Archive, lba: u64, blocks: u64) -> bool {
+    let Some(end) = lba.checked_add(blocks) else { return false };
+    archive
+        .entries()
+        .iter()
+        .filter(|e| e.is_used())
+        .all(|e| e.ending_lba >= e.starting_lba && (e.ending_lba < lba || e.starting_lba >= end))
+}
+
 /// Read the structures worth saving off `dev`.
 ///
 /// Where a header is intact its own pointers are followed, so a snapshot
@@ -633,12 +664,26 @@ pub enum Mismatch {
         role: Role,
         blocks: u64,
     },
-    /// An entry-array chunk would land inside the area the archive's own
-    /// table says belongs to partitions. A snapshot taken while a header
-    /// was corrupt can record its array from anywhere that header pointed;
-    /// writing that back would put 32 stale blocks in the middle of a
-    /// filesystem.
+    /// An entry-array chunk would land inside the area a table says belongs
+    /// to partitions. A snapshot taken while a header was corrupt can
+    /// record its array from anywhere that header pointed; writing that
+    /// back would put 32 stale blocks in the middle of a filesystem.
     OverlapsPartitions {
+        role: Role,
+        lba: u64,
+        blocks: u64,
+    },
+    /// Nothing left anywhere can say where this disk's partitions are — no
+    /// readable table on the medium, and none in the file either — and the
+    /// array is not at the one placement that needs no witness.
+    ///
+    /// Distinct from [`Mismatch::OverlapsPartitions`] because it is not an
+    /// accusation: nothing has said a partition is there. It is the absence
+    /// of anything able to say otherwise, which is a different thing to
+    /// read off a screen at two in the morning, and points somewhere else —
+    /// at another snapshot, or at the same one on a disk whose secondary
+    /// GPT still reads.
+    UnvouchedEntries {
         role: Role,
         lba: u64,
         blocks: u64,
@@ -651,6 +696,31 @@ pub enum Mismatch {
     HybridMbrInArchive,
     /// Nothing to write: the archive has no header chunks.
     Incomplete,
+    /// A header is present with no entry array to go under it.
+    ///
+    /// The header carries a CRC over an array this file does not hold, so
+    /// installing it would leave a table pointing at whatever those blocks
+    /// happen to contain — turning a disk with one good table into one with
+    /// none, which every write path here then refuses. Capture drops a
+    /// chunk it could not read, so this is an I/O error at snapshot time
+    /// surfacing at the last moment it can still be refused.
+    MissingEntries {
+        role: Role,
+    },
+    /// An entry array is present but shorter than the header over it says.
+    ///
+    /// The same fault as [`Mismatch::MissingEntries`], one step subtler:
+    /// the header's CRC covers bytes past the end of what the file holds,
+    /// so restoring the pair still leaves a table describing blocks nobody
+    /// wrote. [`capture`] produces this shape when it refuses a header's
+    /// own array pointer and falls back to the conventional location and
+    /// size, having recorded that header — which may name a larger array —
+    /// verbatim.
+    ShortEntries {
+        role: Role,
+        have: usize,
+        need: usize,
+    },
 }
 
 impl core::fmt::Display for Mismatch {
@@ -686,6 +756,15 @@ impl core::fmt::Display for Mismatch {
                     role.describe()
                 )
             }
+            Mismatch::UnvouchedEntries { role, lba, blocks } => {
+                write!(
+                    f,
+                    "neither this disk nor the snapshot can say where the partitions are, \
+                     so the {} ({blocks} blocks at LBA {lba}) cannot be shown to be clear \
+                     of them",
+                    role.describe()
+                )
+            }
             Mismatch::HybridMbr => {
                 write!(f, "this disk carries a hybrid MBR, which this tool never modifies")
             }
@@ -695,6 +774,18 @@ impl core::fmt::Display for Mismatch {
                  this tool never modifies"
             ),
             Mismatch::Incomplete => write!(f, "the snapshot does not contain both GPT headers"),
+            Mismatch::MissingEntries { role } => write!(
+                f,
+                "the snapshot holds no {}, so its header would describe bytes \
+                 the file does not carry",
+                role.describe()
+            ),
+            Mismatch::ShortEntries { role, have, need } => write!(
+                f,
+                "the snapshot holds {have} bytes of {}, but its header describes \
+                 {need} — the rest is not in the file",
+                role.describe()
+            ),
         }
     }
 }
@@ -707,6 +798,12 @@ impl core::fmt::Display for Mismatch {
 /// anyone editing one sets it to zero and the warning disappears. The
 /// bytes it describes are right here, so ask them instead — both headers,
 /// their own CRCs, and the entry arrays they claim.
+///
+/// A missing or short array is a failure, not an abstention.
+/// [`GptHeader::validate`] has nothing to compare against and skips the
+/// array CRC in that case, which would let the one file that cannot be
+/// restored safely — a header with no array under it — report itself as
+/// verified.
 pub fn tables_verify(archive: &Archive, crc: &impl Crc32) -> bool {
     for (header_role, entries_role, read_from) in [
         (Role::MainHeader, Role::MainEntries, 1),
@@ -714,10 +811,14 @@ pub fn tables_verify(archive: &Archive, crc: &impl Crc32) -> bool {
     ] {
         let Some(chunk) = archive.chunk(header_role) else { return false };
         let Some(header) = GptHeader::parse(&chunk.data) else { return false };
-        let entries = archive.chunk(entries_role).map(|c| c.data.as_slice());
+        let Some(entries) = archive.chunk(entries_role) else { return false };
+        let Some(len) = header.entry_array_len() else { return false };
+        if entries.data.len() < len {
+            return false;
+        }
         let defects = header.validate(
             &chunk.data,
-            entries,
+            Some(&entries.data),
             read_from,
             archive.last_block,
             archive.block_size,
@@ -780,6 +881,38 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     let main_header = archive.chunk(Role::MainHeader).ok_or(Mismatch::Incomplete)?;
     let secondary_header = archive.chunk(Role::SecondaryHeader).ok_or(Mismatch::Incomplete)?;
 
+    // A header is only worth installing with the array it points at. Both
+    // are always captured together; a file missing one was written over an
+    // I/O error, and putting its headers back would leave both tables
+    // naming bytes that were never restored.
+    let main_entries = archive
+        .chunk(Role::MainEntries)
+        .ok_or(Mismatch::MissingEntries { role: Role::MainEntries })?;
+    let secondary_entries = archive
+        .chunk(Role::SecondaryEntries)
+        .ok_or(Mismatch::MissingEntries { role: Role::SecondaryEntries })?;
+
+    // Present is not the same as whole. Capture that refuses a header's
+    // own array pointer falls back to the conventional location and the
+    // conventional size, while recording that header as it found it — so a
+    // file can hold a 256-entry header over a 128-entry array. The tail
+    // the header names is then not in the file, which is the missing-array
+    // fault again with most of the array there to disguise it. A header
+    // whose declared geometry is nonsense makes no claim to fall short of,
+    // and is left to the checks that already deal with it.
+    for (role, header_chunk, entries) in [
+        (Role::MainEntries, main_header, main_entries),
+        (Role::SecondaryEntries, secondary_header, secondary_entries),
+    ] {
+        let Some(need) = GptHeader::parse(&header_chunk.data).and_then(|h| h.entry_array_len())
+        else {
+            continue;
+        };
+        if entries.data.len() < need {
+            return Err(Mismatch::ShortEntries { role, have: entries.data.len(), need });
+        }
+    }
+
     // The report needs a header and a table to show, and the placement
     // checks below need its usable range. Prefer the main copy; fall back
     // to the secondary so a snapshot with a damaged main GPT still renders
@@ -811,42 +944,55 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     // from anywhere that header pointed, and this is the last place able
     // to refuse them.
     //
-    // Where the partitions are is a question about the disk, so the answer
-    // comes from the disk — the same references [`capture`] vets against,
-    // at the other end of the same journey. The archive's headers are the
-    // bytes about to be installed and can say anything at all: a file
-    // declaring a usable range of 2..2 satisfies every sanity test here
-    // and then vetoes nothing, which would let a snapshot on a USB stick
-    // place megabytes of "entry array" anywhere above LBA 2. They keep
-    // their veto, because an honest snapshot knows things a wrecked disk
-    // has forgotten, but they no longer confer permission.
+    // Where the partitions are is a question about the disk, so the disk
+    // answers it where it still can — the same references [`capture`] vets
+    // against, at the other end of the same journey. Where it cannot, the
+    // snapshot answers, because a disk with neither table readable is the
+    // one case a snapshot exists for and it would be perverse to refuse a
+    // good file precisely then. A file's headers are weaker evidence than
+    // a disk's, so they are asked for two things rather than one: a usable
+    // range that leaves the region clear, and no listed partition over it
+    // either. A disk header that objects still outranks both.
+    //
+    // What this deliberately does not defend against is a file written to
+    // deceive. That is out of scope: the honest producer of these files is
+    // [`capture`], and the operator has to have carried the thing here and
+    // authorised it against a named disk.
     let disk_refs = [
         analysis.main.as_ref().ok().map(|t| t.header),
         analysis.secondary.as_ref().ok().map(|t| t.header),
     ];
     let archive_refs =
         [GptHeader::parse(&main_header.data), GptHeader::parse(&secondary_header.data)];
-    for role in [Role::MainEntries, Role::SecondaryEntries] {
-        let Some(c) = archive.chunk(role) else { continue };
+    for (role, c) in
+        [(Role::MainEntries, main_entries), (Role::SecondaryEntries, secondary_entries)]
+    {
         let blocks = c.blocks(archive.block_size);
-        let vetoed_by_archive =
-            vet_entries_region(c.lba, blocks, &archive_refs, archive.last_block) == Some(false);
-        let ok = !vetoed_by_archive
-            && match vet_entries_region(c.lba, blocks, &disk_refs, analysis.last_block) {
-                Some(ok) => ok,
-                // No header on this disk offers a usable range to vet
-                // against, so only the conventional locations, at the
-                // conventional size, can be trusted.
-                None => {
-                    blocks <= default_array_blocks(archive.block_size)
-                        && match role {
-                            Role::MainEntries => c.lba == 2,
-                            _ => c.lba.saturating_add(blocks) == archive.last_block,
-                        }
-                }
-            };
-        if !ok {
-            return Err(Mismatch::OverlapsPartitions { role, lba: c.lba, blocks });
+        let by_disk = vet_entries_region(c.lba, blocks, &disk_refs, analysis.last_block);
+        let by_archive = vet_entries_region(c.lba, blocks, &archive_refs, archive.last_block);
+        let overlaps = Mismatch::OverlapsPartitions { role, lba: c.lba, blocks };
+        let refusal = match (by_disk, by_archive) {
+            // Any sane header, on the medium or in the file, that puts a
+            // partition over this region settles the matter.
+            (Some(false), _) | (_, Some(false)) => Some(overlaps),
+            // This disk still has a table able to say the region is clear.
+            (Some(true), _) => None,
+            // It has not, so the file's headers stand in for it: in a
+            // moment they will be this disk's table, and a region clear of
+            // every partition they name is a region no partition here will
+            // occupy.
+            (None, Some(true)) => {
+                (!clear_of_archive_partitions(archive, c.lba, blocks)).then_some(overlaps)
+            }
+            // Nothing anywhere can say where the partitions are. Only the
+            // placement that needs no witness is left — and refusing any
+            // other is not the same statement as the one above, so it does
+            // not borrow its words.
+            (None, None) => (!conventional_placement(archive, role, c.lba, blocks))
+                .then_some(Mismatch::UnvouchedEntries { role, lba: c.lba, blocks }),
+        };
+        if let Some(why) = refusal {
+            return Err(why);
         }
     }
 
@@ -872,13 +1018,11 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     push(&mut steps, archive, Role::SecondaryHeader);
     steps.push(Step::Flush { why: "commit headers" });
 
-    let entries = archive
-        .chunk(Role::MainEntries)
-        .or_else(|| archive.chunk(Role::SecondaryEntries))
-        .map(|c| {
-            parse_array(&c.data, header.number_of_partition_entries, header.size_of_partition_entry)
-        })
-        .unwrap_or_default();
+    let entries = parse_array(
+        &main_entries.data,
+        header.number_of_partition_entries,
+        header.size_of_partition_entry,
+    );
 
     Ok(RepairPlan { steps, header, entries })
 }

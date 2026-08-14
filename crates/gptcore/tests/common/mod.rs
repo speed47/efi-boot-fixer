@@ -302,6 +302,25 @@ pub fn steamos_image() -> Image {
     img
 }
 
+/// A SteamOS disk whose partition table was enlarged with a plain
+/// `sgdisk --resize-table=256`.
+///
+/// Nothing exotic — one supported flag of the tool this suite uses as its
+/// oracle — but it doubles the entry array to 64 blocks, which is what
+/// makes it interesting: a snapshot of it is not at the conventional size,
+/// and used to be refused on a disk with nothing left to vet it against.
+pub fn resized_table_image() -> Image {
+    let img = blank("resized");
+    run(sgdisk().arg("-o").arg(&img.path));
+    run(sgdisk().args(["-S", "256"]).arg(&img.path));
+    run(sgdisk()
+        .args(["-n", "1:2048:+256M", "-t", "1:ef00", "-c", "1:esp"])
+        .args(["-n", "2:0:+5G", "-t", "2:8304", "-c", "2:rootfs-A"])
+        .args(["-n", "3:0:+10G", "-t", "3:8302", "-c", "3:home"])
+        .arg(&img.path));
+    img
+}
+
 /// A disk that is emphatically not a SteamOS install.
 pub fn foreign_image() -> Image {
     let img = blank("foreign");

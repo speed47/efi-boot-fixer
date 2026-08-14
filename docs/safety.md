@@ -19,15 +19,29 @@ Applied in order, before anything is written:
 - never a table without an `esp` and a `rootfs-A`, which is the stale-table
   guard
 - never a saved snapshot whose block size or disk size does not match, and
-  never one whose entry-array chunks would land inside the partition area its
-  own table describes — a snapshot taken while a corrupt header pointed its
-  array somewhere wild must not write those blocks back there
-- never a repair without first saving the sectors it is about to rewrite:
-  a snapshot goes to the ESP automatically, labelled "automatic, before
-  repair", between the review page and the gate. A failure to save it is a
-  question with the consequence spelled out, not a silent skip and not a
-  hard refusal — on a machine whose ESP will not take the file, the repair
-  may be the only remedy left
+  never one whose entry-array chunks would land inside the partition area
+  either the disk's own table or the snapshot's describes — a snapshot taken
+  while a corrupt header pointed its array somewhere wild must not write
+  those blocks back there. Where both tables on the disk are gone and it can
+  no longer say where its partitions are, the snapshot answers for it: its
+  headers must leave the region outside the usable range *and* clear of every
+  partition it lists. This is the one moment a snapshot is most needed, so
+  refusing a sound file with an unconventional array — an enlarged partition
+  table, an array the firmware put somewhere else — would be refusing exactly
+  when it matters
+- never a header without the whole of the entry array it points at — neither
+  a missing chunk nor one that stops short of the length the header declares
+  — so a snapshot that lost or truncated an array cannot install a table
+  naming bytes that were never written back
+- never a repair or a restore without first saving the sectors it is about to
+  rewrite: a snapshot goes to the ESP automatically, labelled "automatic,
+  before repair" or "automatic, before restore", between the review page and
+  the gate. A restore takes one for a stronger reason than a repair does — a
+  repair only runs on a disk something is already wrong with, while a restore
+  is aimed by hand and can be aimed at a healthy one. A failure to save it is
+  a question with the consequence spelled out, not a silent skip and not a
+  hard refusal — on a machine whose ESP will not take the file, the write may
+  be the only remedy left
 - never without the operator entering the confirmation sequence, on a screen
   whose header names the disk about to be written to — which is what allows
   the picker to be skipped when there is only one disk to pick

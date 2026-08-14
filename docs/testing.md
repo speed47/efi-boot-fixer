@@ -7,7 +7,11 @@ Host unit and integration tests, in `crates/gptcore/tests/`:
   independent implementation is the oracle, so a bug shared between our
   reader and our writer cannot hide
 - `backup_restore.rs` covers the snapshot format, including decoding an
-  older format version
+  older format version, and what restore will and will not write: the
+  refusals in [safety.md](safety.md), and the disk with neither table left
+  readable — the case a snapshot exists for — against a conventional table,
+  an enlarged one (`sgdisk --resize-table=256`) and the real corruption's
+  array at LBA 2016
 - `bootopt.rs` covers NVRAM load-option parsing, `bootwrite.rs` the write
   plans described in [boot.md](boot.md)
 - `corrupt_script.rs` and `deck_corrupt.rs` exercise `tools/deck-corrupt.py`
