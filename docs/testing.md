@@ -47,9 +47,10 @@ scripts, including the boot-entry ones (`bootnext`, `bootdefault`,
 
 `make qemu-check` runs every walk `run-qemu.sh` knows, one after another,
 each against its own freshly built images so an earlier walk's leftovers
-never fool a later one's post-condition check -- except the pairs that are
+never fool a later one's post-condition check -- except the runs that are
 *supposed* to share a build (`backup-usb-only`+`restore-usb`,
-`backup-twice`+`inspect`+`scroll`, `bootregister`+`bootrestore`), which
+`backup-twice`+`inspect`+`scroll`+`restore`, `bootregister`+`bootrestore`),
+which
 `tools/qemu-test-all.sh` knows about and runs back to back on purpose. It
 exits non-zero and lists which walks failed if any of them did not verify.
 Expect it to take a long time -- it is dozens of QEMU boots, each with its
@@ -132,6 +133,18 @@ Screendumps land in `build/shots` as PPM, one every few seconds, taken over
 QMP by `tools/qemu-shots.py`. `RES` is delivered as the EDID preferred mode of
 the emulated VGA adapter, which is the way to get OVMF outside its built-in
 mode table — its video PCDs are fixed at build time and ignore `fw_cfg`.
+
+Two walks cover the resolution picker, and both want a `RES` that OVMF's own
+mode list runs past, so there is something bigger to choose: `800x600` is one.
+`display-mode` picks a larger mode and confirms it inside the six-second
+prompt; `display-revert` picks one and then says nothing at all, waiting the
+prompt out, which is the path a panel showing nothing takes and the only one
+that cannot be checked by pressing anything. See [display.md](display.md).
+
+```sh
+RES=800x600 ./tools/run-qemu.sh build/images display-mode
+RES=800x600 ./tools/run-qemu.sh build/images display-revert
+```
 
 `RES=none` removes the video adapter altogether, so the firmware publishes no
 graphics protocol and the application falls back to the text console. That run

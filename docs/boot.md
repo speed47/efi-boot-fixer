@@ -84,12 +84,23 @@ breaks the moment the stick comes out, and that matches the refusal list in
 which reads and writes the tool's own backups — and which, going the other
 way, treats a removable volume as a perfectly good place to keep one.
 
-Probing is two explicit lists rather than a guessed vendor table:
+Probing walks the volume rather than consulting a guessed vendor table:
+every directory from the root down, to a depth of eight, reporting **every**
+`.efi` file it passes with the size the directory walk already gives. Eight
+is deep enough for anything a vendor actually ships — `bootmgfw.efi` sits
+three levels down, at `\EFI\Microsoft\Boot\` — with room to spare, while
+still bounding the recursion against a corrupt filesystem. This replaced a
+sweep one level under `\EFI` plus a hardcoded path to `bootmgfw.efi`, which
+was the same guess in a different shape: it found what somebody had thought
+of in advance and nothing else.
 
-- a one-level sweep of the directories under `\EFI`, reporting **every**
-  `.efi` file in each;
-- plus `\EFI\Microsoft\Boot\bootmgfw.efi`, which is two levels down and so
-  out of the sweep's reach.
+Hitting the depth limit is recorded, never silent, and the screens say "there
+may be more" when it happens. A loader the scan missed without saying so
+reads as a loader that is gone, which is the failure this whole screen exists
+to avoid.
+
+Results are sorted by depth first, then alphabetically, so the loaders a
+firmware would find sit above the ones buried in a vendor tree.
 
 A filename table decides what a binary is *called* — `grubx64.efi` is GRUB,
 `steamcl.efi` is the SteamOS chainloader — but a file missing from that

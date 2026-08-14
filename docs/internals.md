@@ -5,8 +5,9 @@
 ```
 crates/gptcore/      no_std, no UEFI dependency - parsing, validation, planning
 crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
+  src/main.rs        every screen, and the operations behind them
   src/ui/            the menus, and the two backends they can be drawn on
-  src/gfx/           framebuffer, rotation, baked font, character console
+  src/gfx/           framebuffer, rotation, resolution, baked font, console
   src/blockdev.rs    gptcore::BlockDevice over EFI_BLOCK_IO_PROTOCOL
   src/diskinfo.rs    drive vendor/model via EFI_DISK_INFO_PROTOCOL
   src/selfdev.rs     identifying which disk booted this image
@@ -14,6 +15,9 @@ crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/espscan.rs     read-only scan of every ESP for bootloaders
   src/store.rs       the tool's own snapshots, on the ESP and on any
                      removable volume attached
+  src/diag.rs        the half of the diagnostic report that needs firmware
+  src/smbios.rs      copying the SMBIOS table out of firmware memory
+  src/secureboot.rs  the Secure Boot flags and databases, read-only
   src/fwcrc.rs       CRC-32 via the firmware's CalculateCrc32, with a fallback
 tools/               image builders, the QEMU harness, the font rasteriser
 ```
