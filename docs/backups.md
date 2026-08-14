@@ -81,9 +81,15 @@ things a raw dump does not:
   writing a table that describes a different device;
 - restore refuses a disk that now carries a hybrid MBR — the same refusal
   repair and prevention make, for the same reason — and refuses any snapshot
-  whose entry-array chunks would land inside the area its own table hands to
-  partitions, which is what a snapshot taken while a header pointed somewhere
-  wild would otherwise write back there;
+  whose entry-array chunks would land inside the area the disk's own table, or
+  the snapshot's, hands to partitions, which is what a snapshot taken while a
+  header pointed somewhere wild would otherwise write back there. A disk with
+  neither table left can no longer say where its partitions are, and that is
+  the day a snapshot is needed most, so the file stands in for it: its headers
+  must put the region outside the usable range *and* clear of every partition
+  it lists. An array is not required to be at LBA 2 or 16 KiB long to come
+  back — an enlarged table is one `sgdisk --resize-table` away, and the real
+  corruption this tool was written for keeps its array at LBA 2016;
 - the operator is told, before authorising, whether the snapshot was taken
   from a healthy table — restoring a corrupt one is a real way to make things
   worse, and the screen says so in as many words;
@@ -95,15 +101,30 @@ truncated or bit-rotted snapshot is rejected outright rather than
 half-restored. Files that fail to decode are listed as rejected and never
 offered as a choice.
 
-Snapshots are not only taken by hand. A repair saves one to the ESP by
-itself, between the review page and the confirmation gate, so "back up
-before you repair" is enforced by the operation rather than by menu
-ordering. The metadata section records why each file exists under the
-`label` key — "manual backup", "automatic, before repair" — and the restore
-picker shows it, which is what lets an operator with six rows of `gpt-NNN`
-recall which is which. It is a metadata key rather than a format bump on
-purpose: older builds skip keys they do not know, and files they wrote
-simply have no label.
+A header is only ever restored together with the whole of the entry array it
+points at. Capture drops a chunk it could not read, and where it refuses a
+header's own array pointer it falls back to the conventional location and
+size while recording that header — which may name a larger array — as it
+found it. Either way the file would otherwise install a table describing
+bytes that were never written back, turning a disk with one good table into
+a disk with none, which every write path here then refuses. So both are
+checked: the array has to be there, and it has to be as long as the header
+over it says.
+
+Snapshots are not only taken by hand. A repair and a restore each save one
+to the ESP by themselves, between the review page and the confirmation gate,
+so "back up before you write" is enforced by the operation rather than by
+menu ordering. A restore needs it more than a repair does: a repair only ever
+runs on a disk something is already wrong with, whereas a restore is aimed by
+hand and can be aimed at a disk with nothing wrong with it at all — the wrong
+drive of the same size, or the right drive and the wrong snapshot. Without
+that file there is nothing to go back to, because the thing worth going back
+to is what the restore overwrote. The metadata section records why each file
+exists under the `label` key — "manual backup", "automatic, before repair",
+"automatic, before restore" — and the restore picker shows it, which is what
+lets an operator with six rows of `gpt-NNN` recall which is which. It is a
+metadata key rather than a format bump on purpose: older builds skip keys
+they do not know, and files they wrote simply have no label.
 
 The listing now sweeps removable media the operator keeps their own files on,
 so anything over 4 MiB is rejected on sight rather than read: a coincidental

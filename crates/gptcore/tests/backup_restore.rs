@@ -407,10 +407,11 @@ fn an_archived_array_inside_the_partition_area_is_refused() {
     }
 }
 
-/// A snapshot is a file on removable media, so its headers cannot be the
-/// authority on where this disk's partitions are. Declaring a usable range
-/// of 2..2 passes every sanity test and then vetoes nothing, which is a
-/// blessing for any LBA above 2 — unless the question is put to the disk.
+/// A snapshot's headers are weaker evidence than a live disk's, so while
+/// the disk can still speak it is the disk that is asked. Declaring a
+/// usable range of 2..2 passes every sanity test and then vetoes nothing,
+/// which is a blessing for any LBA above 2 — and is refused here because
+/// the disk in front of us says rootfs-A is there.
 #[test]
 fn an_archives_own_header_cannot_authorise_its_array_into_a_partition() {
     let img = deck_image();
@@ -463,6 +464,199 @@ fn a_snapshot_restores_onto_a_disk_with_no_readable_table() {
 
     assert_eq!(img.read_lba(0, 34), before, "restore was not byte-exact");
     assert!(img.is_clean(), "{}", img.verify());
+}
+
+/// The same trick on a disk with nothing left to contradict it. The usable
+/// range is no longer the only thing the snapshot is asked for: the entries
+/// beside it still put rootfs-A at that LBA, and a snapshot vouching for
+/// its own array has to clear those too.
+#[test]
+fn a_narrowed_usable_range_still_cannot_bless_an_array_into_a_partition() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+    for role in [Role::MainHeader, Role::SecondaryHeader] {
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("header chunk");
+        let mut header = gptcore::GptHeader::parse(&chunk.data).expect("parse");
+        header.first_usable_lba = 2;
+        header.last_usable_lba = 2;
+        chunk.data = header.to_block(512, &CRC);
+    }
+    let chunk =
+        archive.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.lba = 1_000_000;
+
+    // Both tables gone, so nothing on the disk can object.
+    img.zero_lba(1, 1);
+    img.zero_lba(img.last_block(), 1);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    match restore_plan(&archive, &analysis) {
+        Err(Mismatch::OverlapsPartitions { role: Role::MainEntries, lba: 1_000_000, .. }) => {}
+        other => panic!("expected an overlap refusal, got {other:?}"),
+    }
+}
+
+/// With no readable table on the disk and none in the file either, an
+/// unconventional array is refused — but not for overlapping anything,
+/// because nothing has said a partition is there. The two refusals read
+/// differently on purpose: one says where the partitions are, the other
+/// says nobody knows.
+#[test]
+fn an_array_nothing_can_vouch_for_is_refused_without_accusing_it_of_overlapping() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+    // Neither header offers a usable range worth consulting.
+    for role in [Role::MainHeader, Role::SecondaryHeader] {
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("header chunk");
+        let mut header = gptcore::GptHeader::parse(&chunk.data).expect("parse");
+        header.first_usable_lba = 0;
+        chunk.data = header.to_block(512, &CRC);
+    }
+    let chunk =
+        archive.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.lba = 5000;
+
+    img.zero_lba(1, 1);
+    img.zero_lba(img.last_block(), 1);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let err = restore_plan(&archive, &analysis).expect_err("nothing can vouch for LBA 5000");
+    match err {
+        Mismatch::UnvouchedEntries { role: Role::MainEntries, lba: 5000, .. } => {}
+        other => panic!("expected an unvouched refusal, got {other:?}"),
+    }
+    let text = format!("{err}");
+    assert!(text.contains("can say where the partitions are"), "{text}");
+    assert!(!text.contains("would land inside"), "{text}");
+}
+
+/// An enlarged partition table is a supported `sgdisk -S 256` away, and its
+/// array is 64 blocks rather than the conventional 32. The disk it came
+/// from is the one that can vet that, and on the day it is needed the disk
+/// is exactly what has stopped being able to: refusing then is refusing a
+/// good snapshot of the right disk in the only situation it exists for.
+#[test]
+fn an_enlarged_table_restores_onto_a_disk_with_no_readable_table() {
+    let img = common::resized_table_image();
+    let before = img.read_lba(0, 66);
+    let before_print = img.print();
+    let archive = snapshot(&img);
+    let main = archive.chunk(Role::MainEntries).expect("main array");
+    assert_eq!((main.lba, main.data.len() / 512), (2, 64), "the fixture is not an enlarged table");
+
+    img.zero_lba(1, 1);
+    img.zero_lba(img.last_block(), 1);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let plan = restore_plan(&archive, &analysis).expect("the snapshot's own headers vouch for it");
+    apply(&mut disk, &plan).expect("apply");
+
+    assert_eq!(img.read_lba(0, 66), before, "restore was not byte-exact");
+    assert_eq!(img.print(), before_print);
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+/// And the real corruption's array at 2016, which is neither at LBA 2 nor
+/// derivable from anything left on a wrecked disk. Its own headers put
+/// first usable at 2048, so it is recorded and restored from the gap.
+#[test]
+fn the_real_corruptions_snapshot_restores_onto_a_disk_with_no_readable_table() {
+    let img = deck_corrupt_image();
+    let archive = snapshot(&img);
+    assert_eq!(archive.chunk(Role::MainEntries).unwrap().lba, 2016);
+
+    img.zero_lba(1, 1);
+    img.zero_lba(img.last_block(), 1);
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let plan = restore_plan(&archive, &analysis).expect("evidence stays restorable");
+    apply(&mut disk, &plan).expect("apply");
+
+    // Put back as found: the secondary is sound, the main still points at
+    // 2016, and repair is what fixes that.
+    let mut disk = img.disk();
+    let after = analyze(&mut disk, &CRC).expect("analyze");
+    assert_eq!(after.verdict, gptcore::Verdict::MainRepairable);
+}
+
+/// A header is worth nothing without the array it names. Capture drops a
+/// chunk it could not read, and installing the header anyway would leave
+/// the table pointing at whatever those blocks happen to hold — both
+/// tables invalid where the disk may have had one good one, which is a
+/// state this tool then refuses to write to at all.
+#[test]
+fn a_snapshot_missing_its_entry_array_is_refused() {
+    for role in [Role::MainEntries, Role::SecondaryEntries] {
+        let img = deck_image();
+        let mut archive = snapshot(&img);
+        archive.chunks.retain(|c| c.role != role);
+
+        assert!(
+            !backup::tables_verify(&archive, &CRC),
+            "a header with no array under it must not verify as sound"
+        );
+
+        let mut disk = img.disk();
+        let analysis = analyze(&mut disk, &CRC).expect("analyze");
+        match restore_plan(&archive, &analysis) {
+            Err(Mismatch::MissingEntries { role: got }) if got == role => {}
+            other => panic!("expected a missing-array refusal for {role:?}, got {other:?}"),
+        }
+    }
+}
+
+/// Most of an array is not the array either. The header's CRC covers the
+/// tail as much as the head, so a chunk that stops short leaves exactly
+/// the state a missing one would: a table naming blocks the restore never
+/// wrote.
+#[test]
+fn a_snapshot_whose_entry_array_stops_short_is_refused() {
+    for role in [Role::MainEntries, Role::SecondaryEntries] {
+        let img = deck_image();
+        let mut archive = snapshot(&img);
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("array chunk");
+        chunk.data.truncate(chunk.data.len() - 512);
+
+        assert!(
+            !backup::tables_verify(&archive, &CRC),
+            "a header over a short array must not verify as sound"
+        );
+
+        let mut disk = img.disk();
+        let analysis = analyze(&mut disk, &CRC).expect("analyze");
+        match restore_plan(&archive, &analysis) {
+            Err(Mismatch::ShortEntries { role: got, have: 15872, need: 16384 }) if got == role => {}
+            other => panic!("expected a short-array refusal for {role:?}, got {other:?}"),
+        }
+    }
+}
+
+/// And the shape capture itself can write: an enlarged table whose header
+/// aims its array into a partition. The pointer is refused and the array
+/// taken from the conventional place at the conventional size, while the
+/// header — which names twice that much — is recorded as found. The file
+/// that comes out is not restorable, and saying so is this end's job.
+#[test]
+fn a_captured_short_array_under_an_enlarged_header_is_refused() {
+    let img = common::resized_table_image();
+    let mut header = gptcore::GptHeader::parse(&img.read_lba(1, 1)).expect("parse");
+    header.partition_entry_lba = 1_000_000;
+    img.write_lba(1, &header.to_block(512, &CRC));
+
+    let archive = snapshot(&img);
+    let main = archive.chunk(Role::MainEntries).expect("main array");
+    assert_eq!(
+        (main.lba, main.data.len()),
+        (2, 16384),
+        "the pointer must not be followed, and the fallback is the conventional size"
+    );
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    match restore_plan(&archive, &analysis) {
+        Err(Mismatch::ShortEntries { role: Role::MainEntries, have: 16384, need: 32768 }) => {}
+        other => panic!("expected a short-array refusal, got {other:?}"),
+    }
 }
 
 /// Fixing where a structural chunk starts says nothing about where it

@@ -635,7 +635,8 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     // its own copy, the way the NVRAM writes always have. A failure is a
     // question rather than a refusal — on a machine whose ESP will not
     // take the file, this repair may be the only remedy left.
-    let mut warning = match auto_snapshot(&disk, analysis, boot_device) {
+    let mut warning = match auto_snapshot(&disk, analysis, boot_device, "automatic, before repair")
+    {
         Ok(saved) => saved,
         Err(why) => {
             let mut lines = why;
@@ -678,7 +679,8 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
     report_write("Repair", result);
 }
 
-/// Capture both tables to the ESP before a repair rewrites them.
+/// Capture both tables to the ESP before a repair or a restore rewrites
+/// them.
 ///
 /// Silently to the ESP alone, unlike the manual backup: this runs between
 /// the review page and the confirmation gate, where a destination menu
@@ -687,13 +689,18 @@ fn run_repair(boot_device: &BootDevice, esp_lost: &mut bool) {
 /// rather than on a screen of its own — a screen costs a press, and the
 /// QEMU walks count presses. `Err` is the lines saying why not, for the
 /// continue-anyway question.
+///
+/// `label` is what the restore picker will show for the file years later,
+/// and is the whole reason this takes one: "automatic, before restore" is
+/// the row an operator has to find to undo a restore they did not mean.
 fn auto_snapshot(
     disk: &Disk,
     analysis: &Analysis,
     boot_device: &BootDevice,
+    label: &str,
 ) -> Result<Vec<Line>, Vec<Line>> {
     let mut dev = open_disk(disk.handle).map_err(|e| alloc::vec![bad(format!("  {e}"))])?;
-    let meta = provenance(disk, boot_device, "automatic, before repair");
+    let meta = provenance(disk, boot_device, label);
     let archive = backup::capture(&mut dev, analysis, now(), meta)
         .map_err(|e| alloc::vec![bad(format!("  could not read the tables ({e})"))])?;
     drop(dev);
@@ -1414,8 +1421,31 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
         return;
     }
 
-    let mut warning =
-        alloc::vec![bad("  This REPLACES both partition tables with the saved copy.")];
+    // The table this is about to replace, saved first — the same copy a
+    // repair takes, for a stronger reason. A repair only ever runs on a
+    // disk something is already wrong with; a restore is aimed by hand and
+    // can be aimed at a disk with nothing wrong with it at all: the wrong
+    // drive of the same size, or the right drive and the wrong snapshot.
+    // Without this there was no file to go back to, because the state
+    // worth going back to was the one being overwritten.
+    let mut warning = match auto_snapshot(&disk, analysis, boot_device, "automatic, before restore")
+    {
+        Ok(saved) => saved,
+        Err(why) => {
+            let mut lines = why;
+            lines.push(Line::blank());
+            lines.push(warn("  Nothing has been written yet. Continuing means"));
+            lines.push(warn("  restoring with no saved copy of the table this"));
+            lines.push(warn("  operation is about to replace."));
+            lines.push(Line::blank());
+            lines.push(key("  Continue without a saved copy?"));
+            if !ui::page("Could not save a snapshot", &lines) {
+                return show_note("Restore GPT", "Cancelled. Nothing was written.".to_string());
+            }
+            alloc::vec![bad("  NO saved copy of the current table exists.")]
+        }
+    };
+    warning.push(bad("  This REPLACES both partition tables with the saved copy."));
     // What the file says about itself, and what its own bytes say. The
     // health byte is the capturing build's note; `tables_verify` reads the
     // headers and arrays actually in the file, which is the half a crafted
