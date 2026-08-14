@@ -1,5 +1,7 @@
 # EFI Boot Fixer for Steam Deck
 
+![Logo](docs/img/efibootfixr.png)
+
 A UEFI application for inspecting, repairing, backing up and restoring GUID
 partition tables (GPT), along with viewing and modifying the NVRAM boot entries
 that might get modified or deleted during a SteamOS or Windows upgrade in a

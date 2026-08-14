@@ -16,7 +16,7 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "bootfixr"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "gptcore",
  "uefi",
@@ -31,7 +31,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "gptcore"
-version = "1.2.0"
+version = "1.2.1"
 
 [[package]]
 name = "log"
