@@ -19,9 +19,10 @@ than raising `rust-version`.
 
 `make dist` stages both binaries — `bootfixr.efi` and `bootfixr-tiny.efi` —
 plus a `SHA256SUMS` in `build/dist`, and `make install ESP=/boot/efi`
-copies `bootfixr.efi` onto a mounted ESP without touching NVRAM. `make check`
-runs the same `fmt-check`, `clippy` and test suite as CI's `test` job; the
-`build` job does a bit more than `make build` alone, see the CI table below.
+copies `bootfixr.efi` to `$ESP/EFI/` without touching NVRAM. `make check` runs
+the same `fmt-check`, `clippy` and test suite as CI's `test` job, and builds
+the application on top; the `build` job does more than that again, see the CI
+table below.
 
 `bootfixr-tiny.efi` is `bootfixr.efi` built with the `tiny` feature — only
 the 12x24 font cell, see [display.md](display.md) — and then run through
@@ -50,9 +51,18 @@ specimen image next to the result; see [display.md](display.md).
 | Job | Trigger | What it does |
 | --- | --- | --- |
 | `test` | every push and PR | `fmt-check`, `clippy -D warnings`, full test suite (installs `gdisk`) |
-| `build` | every push and PR | builds both `.efi` binaries (`make dist`), asserts `bootfixr.efi` really is a PE32+ x86_64 EFI application, checks that `bootfixr.efi` is stamped with the commit it was built from (`git describe` — `bootfixr-tiny.efi` is skipped, since UPX compresses that string away), uploads them as artifacts |
-| `continuous` | push to the default branch | deletes and recreates the `continuous` **prerelease** with the binary attached |
-| `release` | tag `v*` | creates a **draft** release with the binary attached |
+| `build` | every push and PR | builds both `.efi` binaries (`make dist`), asserts each really is a PE32+ x86_64 EFI application, checks that `bootfixr.efi` is stamped with the commit it was built from (`git describe` — `bootfixr-tiny.efi` is skipped for the stamp, since UPX compresses that string away), uploads them as artifacts |
+| `continuous` | push to `main` or `master` | deletes and recreates the `continuous` **prerelease** with the binaries attached |
+| `release` | tag `v*` | creates a **draft** release with the binaries attached |
+
+The `on:` block carries no branch or tag filter, deliberately. The two jobs
+that only read the code run on everything, and which pushes *publish*
+something is decided by each release job's own `if`. A filter up top has to
+be widened every time one of those conditions changes, and the last one that
+sat there did the opposite: dropping `branches:` from under `push:` left
+`tags:` as the only filter, so branch pushes stopped triggering the workflow
+at all and `continuous` — which asks for a push whose ref is a branch —
+could no longer fire on any event that reached it.
 
 The `continuous` release is deliberately deleted and recreated rather than
 edited, so its tag always points at the current default branch. Both the

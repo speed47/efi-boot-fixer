@@ -30,25 +30,95 @@ A framebuffer taller than it is wide means a panel mounted sideways, and the
 correction is a quarter turn clockwise; anything else is taken at face value.
 That guess is taken as the answer and the session opens on the menu.
 
-Arguing with it is the Display screen, which **View** reaches from any screen
-that waits for a press. LEFT and RIGHT turn the picture — controls that work
-no matter which way round the text came out, which is the only reason the
-screen can rescue a wrong guess. UP and DOWN step the text size, because how
-big is comfortable depends on a particular person holding a particular panel
-at whatever distance they hold it, and no amount of arithmetic settles that
-here.
+Arguing with it is the **Display configuration** screen, which **View** reaches
+from any screen that waits for a press. LEFT and RIGHT turn the picture —
+controls that work no matter which way round the text came out, which is the
+only reason the screen can rescue a wrong guess. UP and DOWN step the text
+size, because how big is comfortable depends on a particular person holding a
+particular panel at whatever distance they hold it, and no amount of
+arithmetic settles that here. A second **View** opens the resolution list,
+where the firmware has offered more than one mode to choose between — one
+mode is not a choice, so where there is only one the button keeps its usual
+meaning of leaving.
 
 It used to be the first screen, on a six-second timer. That charged every
 launch for a correction almost nobody needs, and still offered it only once —
 so a guess that turned out wrong three screens in, or a report of device paths
 that wanted more columns than the menu it came from, had no answer at all. A
-button that works everywhere is the same rescue without the toll. The timer
-went with it: there is nothing left to time out into.
+button that works everywhere is the same rescue without the toll. Nothing
+times out into the menus any more; the one clock left is the one that takes
+back a resolution nobody confirmed.
 
 The one screen that keeps View for itself is the snapshot list, where it opens
 the selected record; its footer says so. On the firmware's own text console
 the orientation and the font belong to the firmware, so there is no Display
 screen and no footer offers one.
+
+## Choosing a resolution
+
+The mode the firmware picked is left exactly as it is at startup. It is the
+one actually driving the panel, and on a fixed internal display changing it
+unasked is a good way to end up looking at nothing.
+
+The cost of that restraint is an ambiguity the operator cannot see through.
+A screen laid out in the smallest cell might be a display that can do no
+better, or it might be a firmware that settled on 800x600 on a panel capable
+of far more. Those look identical from the operator's chair, and they are not
+the same problem: in the second, both text sizes are refused, because nothing
+above 8x16 reaches 80 columns at that resolution — and a font that will not
+change reads as a font that was never there.
+
+So the Display configuration screen lists what `QueryMode` reports, packed
+into as few rows as the width allows, with the current mode marked `*` and
+anything this program could not draw in marked `!`:
+
+```
+  Available screen resolutions (* currently in use, ! not ours to draw in):
+    640x480  800x600*  1024x768  1280x1024!  1920x1080
+```
+
+The `!` clause appears in that heading only when there is something to
+explain with it.
+
+One entry per resolution rather than per mode index: firmware routinely
+offers the same resolution several times over, once per pixel format it can
+drive it in, and that is not a distinction anyone is choosing between. Modes
+this program cannot draw in are reported rather than filtered out, because a
+firmware offering nothing else is worth being able to see. That list is
+reporting only — nothing on this screen calls `SetMode`.
+
+Picking one is the second **View**, which opens "Choose a resolution". Each
+row says what grid the mode would come to, worked out by the same rule that
+chose the current one, so the number shown is the number a change delivers:
+
+```
+   800x600 - 100 cols x 37 rows (current)
+   1024x768 - 85 cols x 32 rows                       <- highlighted
+   1920x1080 - 120 cols x 33 rows
+```
+
+## Getting a bad mode back
+
+A mode the panel will not display looks, from inside the program, exactly
+like one it will: the firmware reports success either way. So the question is
+put on the new mode itself — if it can be read, it works, and if nothing
+comes back the only safe reading is that nobody can see it. The screen counts
+six seconds down and reverts unless A confirms it. Only A and B answer:
+the arrows are ignored, and so is View, because the press that opened the
+screen repeats while held on a Deck and a confirmation a held button can give
+is not a confirmation.
+
+Every way this can go wrong ends with a picture somebody can read:
+
+| What happens | What puts it back |
+| --- | --- |
+| the firmware refuses the mode | nothing changed; the screen says so |
+| the firmware sets it and hands back a buffer this program cannot draw in | `Framebuffer::set_mode` restores the previous mode before returning |
+| the mode takes, and nobody confirms it — whether because it reaches no one or because nobody wanted it | the clock, and the screen names the mode that came back |
+
+The one irrecoverable case — a switch that takes, goes unconfirmed, and will
+not come back — is reported rather than papered over, though by then there is
+nobody who can read the report.
 
 ## The font
 

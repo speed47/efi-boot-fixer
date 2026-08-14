@@ -130,7 +130,11 @@ The listing now sweeps removable media the operator keeps their own files on,
 so anything over 4 MiB is rejected on sight rather than read: a coincidental
 namesake of a few hundred MiB would otherwise be pulled into memory in full
 merely to be turned down, and an allocation the firmware refuses is not a
-rejection line — in `no_std` it is the allocation error handler.
+rejection line — in `no_std` it is the allocation error handler. The set is
+bounded as well as each file: 64 files, or 16 MiB of them, and the listing
+stops with a line saying which limit it hit. One file at a time is the wrong
+question to ask of a directory somebody has been dropping snapshots into for
+a year.
 
 The checksum is written by `gBS->CalculateCrc32` under firmware and verified
 by `gptcore`'s own implementation on the host; a snapshot taken under OVMF was
@@ -155,7 +159,7 @@ the attached disks each one belongs to:
 
   Belongs to: Disk 2 - 10 of 10 partitions still carry the same unique GUID
   disk GUID 0FBB6478-4344-4767-A49E-A95B8F30CCF8
-  written by bootfixr 0.1.0
+  written by bootfixr 1.2.0
   ----------------------------------------------------------
   [D-pad] move   [A] choose   [View] details   [B] back
 ```
@@ -182,7 +186,7 @@ section exists for:
     Entry array   128 entries x 128 B at LBA 2
 
   Recorded when it was written
-    tool          bootfixr 0.1.0
+    tool          bootfixr 1.2.0
     firmware      Valve rev 0x10033
     uefi          2.70
     device        PciRoot(0x0)/Pci(0x3,0x0)/NVMe(0x1,...)

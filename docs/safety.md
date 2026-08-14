@@ -49,8 +49,12 @@ Applied in order, before anything is written:
 Prevent recurrence, being experimental, adds its own refusals on top: the
 table must already be healthy, `PartitionEntryLBA` must already be 2 (the
 shape this operation exists to close, not to repair), both headers must
-agree on where the entry array lives, geometry must be known, and no
-partition may already sit where the closed gap would need to start. One
+agree on `FirstUsableLBA` — the field this operation moves — the entry
+array's geometry must be usable, and no partition may already sit where the
+closed gap would need to start. It also re-checks for a hybrid MBR on its
+own account rather than trusting the list above: nothing about a hybrid MBR
+makes either GPT *invalid*, so a disk the tool has already promised not to
+write to would sail through every other check here. One
 disagreement is deliberately not refused: a power cut between its own two
 header writes leaves one header lowered and the other not, and that exact
 half-state is recognised so that re-running the operation finishes the job.

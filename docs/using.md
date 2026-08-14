@@ -9,9 +9,9 @@ The selected item's description appears below the list, which doubles as
 inline help:
 
 ```
-EFI Boot Fixer for Steam Deck
+EFI Boot Fixer for Steam Deck - github.com/speed47/efi-boot-fixer
 ------------------------------------------------------------------
-  version 0.1.0+3.g1a2b3c4
+  version 1.2.0+3.g1a2b3c4 compiled 2026-08-14 16:36
   launched from PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,...)/HD(1,GPT,...)
 
   Check this machine [read only]                     <- highlighted
@@ -19,6 +19,7 @@ EFI Boot Fixer for Steam Deck
    Partition tables (GPT) ...
    Boot entries (NVRAM) ...
 
+   Boot a loader now (chainloading)
    Reboot
    Shutdown
    Exit to the firmware
@@ -27,8 +28,14 @@ EFI Boot Fixer for Steam Deck
   firmware's boot list, and what is on the EFI System
   Partitions (ESPs).
   ----------------------------------------------------------
-  [D-pad] move   [A] choose   [View] display   [B] exit
+  [D-pad] move   [A] choose   [View] configure display   [B] exit
 ```
+
+The title carries the project's URL, so a photograph of a screen is enough
+to find the tool it came from. "for Steam Deck" is in it only when SMBIOS
+says this really is a Deck: the code has no hardware dependency left, and
+naming somebody else's laptop after a handheld reads as a tool that has
+misunderstood the machine it is looking at.
 
 ## The shape of the menus
 
@@ -47,8 +54,18 @@ Partition tables (GPT)                      Boot entries (NVRAM)
   Prevent recurrence (experimental)           Boot something once (next boot only)
                                               Back up the boot configuration
                                               Restore boot configuration from backup
+
+Boot a loader now (chainloading)
 Reboot / Shutdown / Exit to the firmware
 ```
+
+A separator sets those last four rows apart. They are not things the program
+does to a disk, they are ways to leave: to one specific program, restarted,
+powered off, or handed back to the firmware in general. "Boot a loader now"
+belongs with them for that reason and not with the NVRAM screens, even
+though it is the ESP scan that finds what it can start — it writes nothing
+anywhere and this session is over the moment it works. See
+[boot.md](boot.md#booting-a-loader-immediately).
 
 Read-only screens come first in both submenus, then anything that writes.
 On the GPT side, backing up sits above the three operations that overwrite a
@@ -74,23 +91,42 @@ text file meant to be attached to a forum post. See [report.md](report.md).
 Nothing is more than two rows deep: the row that opens a submenu, then the
 operation. The rows ending in `...` are the doors; the rest do something.
 
-`[View] display` is offered on every screen that waits for a press, and opens
-the screen that turns the picture and changes the text size — see
-[display.md](display.md). It is absent when the firmware's own text console is
-drawing, which has neither to offer.
+`[View] configure display` is offered on every screen that waits for a press,
+and opens the screen that turns the picture, changes the text size and
+chooses a screen resolution — see [display.md](display.md). It is absent when
+the firmware's own text console is drawing, which has none of the three to
+offer.
 
 ## The version line
 
-A release built from a tag reports its version alone — `0.1.0`. Anything else,
+A release built from a tag reports its version alone — `1.2.0`. Anything else,
 including every continuous build, appends the commit it was compiled from as
-semver build metadata: `0.1.0+3.g1a2b3c4` is three commits past `v0.1.0` at
-`1a2b3c4`, and `0.1.0+g1a2b3c4` is a build made before any tag existed. A
+semver build metadata: `1.2.0+3.g1a2b3c4` is three commits past `v1.2.0` at
+`1a2b3c4`, and `1.2.0+g1a2b3c4` is a build made before any tag existed. A
 `.dirty` on the end means the working tree had uncommitted changes.
 
 That suffix is the only way to tell which build someone is running, since the
 package version does not move between releases, so quote the whole line when
 reporting anything. It is computed by `crates/bootfixr/build.rs` at compile
 time, and the same string is stored in snapshot metadata.
+
+The build date sits next to it, and answers a question the version cannot
+when somebody is holding a binary they copied onto an ESP months ago and no
+longer remembers where from.
+
+## The buttons the footer names
+
+The footer is written for the hardware it is running on. On a Deck it names
+the buttons — `[A]`, `[B]`, `[View]`, `[D-pad]` — and everywhere else the
+same four hints come out as `[Enter]`, `[Escape]`, `[Tab]` and `[Arrows]`,
+which is what a keyboard in front of a desktop firmware actually has. It is
+the same test that puts "for Steam Deck" in the title: SMBIOS, read once at
+startup. Promising a D-pad to somebody at a keyboard is a footer that has to
+be decoded rather than read, and this tool is used by people who are already
+having a bad day.
+
+Every transcript in this document is written in the Deck's spelling, since
+that is the hardware the screens were laid out for.
 
 ## The disk picker
 
@@ -182,8 +218,9 @@ living in the application:
 
 Two colours are not in that table because they are not a `Style` at all: the
 cyan bar on the selected row of a menu, and the **light magenta** the key
-hints use for button names — `[A]`, `[B]`, `[View]`, `[D-pad]`. Nothing else
-on any screen names a physical button, so that colour means exactly one
+hints use for button names — `[A]`, `[B]`, `[View]`, `[D-pad]`, or their
+keyboard spellings on anything that is not a Deck. Nothing else on any screen
+names a control the operator can press, so that colour means exactly one
 thing. The hints sit under a rule at the bottom of every screen; they used to
 be dim throughout, which read as chrome and got skipped, taking `[View]` with
 it.
