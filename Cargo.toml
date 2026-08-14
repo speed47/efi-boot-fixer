@@ -6,7 +6,7 @@ members = ["crates/gptcore"]
 exclude = ["crates/bootfixr"]
 
 [workspace.package]
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 license = "MIT"
 # Keep this buildable on the toolchain the dev sandbox pins (1.85), not just
