@@ -1006,17 +1006,38 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
         }
     }
 
-    // Same rule as a repair: an array must be durable before any header
-    // claims it is there with a given CRC.
+    // Commit one complete GPT before touching the other: replacing both
+    // arrays first invalidates both existing headers until a new one lands.
+    // Preserve a sound main GPT while rebuilding the secondary; otherwise
+    // rebuild the main first, leaving any surviving secondary untouched.
+    let main = (Role::MainEntries, Role::MainHeader);
+    let secondary = (Role::SecondaryEntries, Role::SecondaryHeader);
+    let tables = if analysis.main.as_ref().is_ok_and(|t| t.is_valid()) {
+        [secondary, main]
+    } else {
+        [main, secondary]
+    };
     let mut steps = Vec::new();
-    push(&mut steps, archive, Role::MainEntries);
-    push(&mut steps, archive, Role::SecondaryEntries);
-    steps
-        .push(Step::Flush { why: "entry arrays must be durable before the headers point at them" });
-    push(&mut steps, archive, Role::Mbr);
-    push(&mut steps, archive, Role::MainHeader);
-    push(&mut steps, archive, Role::SecondaryHeader);
-    steps.push(Step::Flush { why: "commit headers" });
+    for (i, (entries, header)) in tables.into_iter().enumerate() {
+        push(&mut steps, archive, entries);
+        steps.push(Step::Flush { why: "entry array must be durable before its header" });
+        push(&mut steps, archive, header);
+        steps.push(Step::Flush {
+            why: if i == 0 {
+                "commit this GPT before the other copy is touched"
+            } else {
+                "commit the second GPT"
+            },
+        });
+    }
+    // A file carrying no MBR chunk gets no MBR write, and no barrier for a
+    // write that is not there: the plan is shown to the operator before it
+    // is authorised, and every step in it has to be one they can account
+    // for.
+    if archive.chunk(Role::Mbr).is_some() {
+        push(&mut steps, archive, Role::Mbr);
+        steps.push(Step::Flush { why: "commit protective MBR" });
+    }
 
     let entries = parse_array(
         &main_entries.data,

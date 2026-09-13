@@ -10,7 +10,10 @@ use common::{deck_corrupt_image, deck_image, Op};
 use gptcore::backup::{
     self, decode, encode, restore_plan, DecodeError, Health, Mismatch, Role, Timestamp,
 };
-use gptcore::{analyze, apply, SoftCrc32};
+use gptcore::disk::BlockDevice;
+use gptcore::header::GptHeader;
+use gptcore::repair::Step;
+use gptcore::{analyze, apply, Crc32, SoftCrc32};
 
 const CRC: SoftCrc32 = SoftCrc32;
 
@@ -119,15 +122,107 @@ fn entry_arrays_are_durable_before_the_headers_that_name_them() {
     apply(&mut disk, &plan).expect("apply");
 
     let ops = disk.writes();
-    let first_flush = ops.iter().position(|o| *o == Op::Flush).expect("a flush");
-    let header_lbas = [1u64, img.last_block()];
-    for (i, op) in ops.iter().enumerate() {
-        if let Op::Write { lba, .. } = op {
-            if header_lbas.contains(lba) {
-                assert!(i > first_flush, "header at LBA {lba} was written before the flush");
-            }
-        }
+    let position = |lba| {
+        ops.iter().position(|op| matches!(op, Op::Write { lba: at, .. } if *at == lba)).unwrap()
+    };
+    let mut commits = Vec::new();
+    for (entries, header) in
+        [(Role::MainEntries, Role::MainHeader), (Role::SecondaryEntries, Role::SecondaryHeader)]
+    {
+        let array = position(archive.chunk(entries).unwrap().lba);
+        let header = position(archive.chunk(header).unwrap().lba);
+        assert!(array < header);
+        assert!(ops[array + 1..header].contains(&Op::Flush));
+        let commit = header + 1 + ops[header + 1..].iter().position(|op| *op == Op::Flush).unwrap();
+        commits.push((array, commit));
     }
+    commits.sort_unstable();
+    assert!(commits[0].1 < commits[1].0, "the first GPT must be committed before the next array");
+    assert!(commits[1].1 < position(0), "both GPTs must be committed before the MBR");
+}
+
+/// Capture always records the protective MBR, but decode accepts a file
+/// without that chunk, and the plan is read and authorised by an operator:
+/// a barrier for a write that is not in it is a step nobody can account for.
+#[test]
+fn a_snapshot_without_an_mbr_chunk_plans_no_mbr_step() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+    archive.chunks.retain(|c| c.role != Role::Mbr);
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let plan = restore_plan(&archive, &analysis).expect("plan");
+
+    assert!(!plan.steps.iter().any(|s| matches!(s, Step::Write { lba: 0, .. })));
+    let last_write = plan.steps.iter().rposition(|s| matches!(s, Step::Write { .. })).unwrap();
+    assert_eq!(plan.steps.len(), last_write + 2, "one barrier after the last write, no more");
+
+    apply(&mut disk, &plan).expect("apply");
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+fn interrupted_restore(damaged_header: Option<Role>) {
+    let img = deck_image();
+    let archive = snapshot(&img);
+
+    // A legitimate rename makes the saved arrays differ from the current
+    // ones. Restoring an unchanged array cannot expose the two-invalid-GPT
+    // window, because the old header's checksum would still match.
+    for (entries, header) in
+        [(Role::MainEntries, Role::MainHeader), (Role::SecondaryEntries, Role::SecondaryHeader)]
+    {
+        let array = archive.chunk(entries).unwrap();
+        let mut data = array.data.clone();
+        data[56] ^= 1;
+        img.write_lba(array.lba, &data);
+        let chunk = archive.chunk(header).unwrap();
+        let mut h = GptHeader::parse(&chunk.data).unwrap();
+        h.partition_entry_array_crc32 = CRC.crc32(&data[..h.entry_array_len().unwrap()]);
+        img.write_lba(chunk.lba, &h.to_block(archive.block_size, &CRC));
+    }
+    assert!(img.is_clean(), "{}", img.verify());
+    if let Some(role) = damaged_header {
+        img.zero_lba(archive.chunk(role).unwrap().lba, 1);
+    }
+
+    let mut disk = img.disk();
+    let before = analyze(&mut disk, &CRC).unwrap();
+    let plan = restore_plan(&archive, &before).unwrap();
+    for (i, step) in plan.steps.iter().enumerate() {
+        match step {
+            Step::Write { lba, data, .. } => disk.write_blocks(*lba, data).unwrap(),
+            Step::Flush { .. } => disk.flush().unwrap(),
+        }
+        // Every prefix is a possible stop after an I/O failure or power
+        // cut with writes persisted. The ordering test also requires the
+        // barriers that protect against losing unflushed writes.
+        let after = analyze(&mut disk, &CRC).unwrap();
+        assert!(
+            after.main.as_ref().is_ok_and(|t| t.is_valid())
+                || after.secondary.as_ref().is_ok_and(|t| t.is_valid()),
+            "both GPTs invalid after step {i}: {step:?}"
+        );
+    }
+    for chunk in &archive.chunks {
+        assert_eq!(img.read_lba(chunk.lba, chunk.blocks(archive.block_size)), chunk.data);
+    }
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+#[test]
+fn interrupted_restore_preserves_a_gpt_when_both_were_healthy() {
+    interrupted_restore(None);
+}
+
+#[test]
+fn interrupted_restore_preserves_the_only_usable_main_gpt() {
+    interrupted_restore(Some(Role::SecondaryHeader));
+}
+
+#[test]
+fn interrupted_restore_preserves_the_only_usable_secondary_gpt() {
+    interrupted_restore(Some(Role::MainHeader));
 }
 
 #[test]

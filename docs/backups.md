@@ -93,8 +93,14 @@ things a raw dump does not:
 - the operator is told, before authorising, whether the snapshot was taken
   from a healthy table — restoring a corrupt one is a real way to make things
   worse, and the screen says so in as many words;
-- the write order puts entry arrays on the medium and flushes them before the
-  headers that name them, exactly as a repair does.
+- the write order puts each entry array on the medium and flushes it before
+  the header that names it, exactly as a repair does, and then goes further
+  than a repair has to: one whole GPT is committed before the other copy is
+  touched, and whichever copy is sound at the time is the one rebuilt last.
+  Writing both arrays first would instead leave both of the old headers
+  describing arrays that are no longer under them, so an interrupted restore
+  could take a disk with two good tables down to none. The protective MBR
+  follows both. [safety.md](safety.md) has the ordering in full.
 
 Everything is little-endian and ends with a CRC32 over the whole file, so a
 truncated or bit-rotted snapshot is rejected outright rather than
