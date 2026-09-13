@@ -36,6 +36,28 @@ impl TableView {
         self.defects.is_empty() && self.entries_error.is_none()
     }
 
+    /// Whether the header's own fields are this disk's genuine claim.
+    ///
+    /// Narrower than [`TableView::is_valid`] on purpose. The usable range
+    /// lives in the header and is covered by the header CRC, so a header
+    /// that authenticates still says where this disk's partitions are even
+    /// when the array beside it is corrupt or was never readable — which is
+    /// an ordinary way for a GPT to break, and no reason to stop believing
+    /// the half of it that survived.
+    pub fn header_is_authentic(&self) -> bool {
+        !self.defects.iter().any(|d| {
+            matches!(
+                d,
+                Defect::BadSignature { .. }
+                    | Defect::BadRevision { .. }
+                    | Defect::HeaderSizeOutOfRange { .. }
+                    | Defect::ReservedNonZero { .. }
+                    | Defect::HeaderCrcMismatch { .. }
+                    | Defect::UsableRangeInvalid { .. }
+            )
+        })
+    }
+
     /// Everything checks out except the alternate pointer.
     ///
     /// The one defect a header can carry while its entry array, CRCs and

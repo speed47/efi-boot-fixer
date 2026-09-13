@@ -20,12 +20,15 @@ Applied in order, before anything is written:
   guard
 - never a saved snapshot whose block size or disk size does not match, and
   never one whose entry-array chunks would land inside the partition area
-  either the disk's own table or the snapshot's describes — a snapshot taken
-  while a corrupt header pointed its array somewhere wild must not write
-  those blocks back there. Where both tables on the disk are gone and it can
-  no longer say where its partitions are, the snapshot answers for it: its
-  headers must leave the region outside the usable range *and* clear of every
-  partition it lists. This is the one moment a snapshot is most needed, so
+  either an authentic disk header or the snapshot's describes — a snapshot
+  taken while a corrupt header pointed its array somewhere wild must not
+  write those blocks back there. A header that fails its own CRC cannot veto
+  a restore merely because its damaged usable-range fields still look
+  plausible; a header that passes keeps its say even when the entry array
+  beside it is corrupt or unreadable, because the range is a header field and
+  the CRC covers it. Where neither disk header authenticates, the snapshot
+  answers for it: its headers must leave the region outside the usable range
+  *and* clear of every partition it lists. This is the one moment a snapshot is most needed, so
   refusing a sound file with an unconventional array — an enlarged partition
   table, an array the firmware put somewhere else — would be refusing exactly
   when it matters
