@@ -443,12 +443,16 @@ pub fn capture<D: BlockDevice + ?Sized>(
         },
     });
 
+    // The disk GUID is covered by the header CRC, so use the header's own
+    // integrity, as [`restore_plan`] does for the usable range. Requiring a
+    // sound entry array too would discard a surviving GUID, permanently
+    // losing identification evidence from the snapshot.
     let disk_guid = analysis
         .main
         .as_ref()
         .ok()
-        .filter(|t| t.is_valid())
-        .or_else(|| analysis.secondary.as_ref().ok().filter(|t| t.is_valid()))
+        .filter(|t| t.header_is_authentic())
+        .or_else(|| analysis.secondary.as_ref().ok().filter(|t| t.header_is_authentic()))
         .map(|t| t.header.disk_guid)
         .unwrap_or(Guid::ZERO);
 
@@ -944,23 +948,28 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
     // from anywhere that header pointed, and this is the last place able
     // to refuse them.
     //
-    // Where the partitions are is a question about the disk, so the disk
-    // answers it where it still can — the same references [`capture`] vets
-    // against, at the other end of the same journey. Where it cannot, the
-    // snapshot answers, because a disk with neither table readable is the
-    // one case a snapshot exists for and it would be perverse to refuse a
-    // good file precisely then. A file's headers are weaker evidence than
-    // a disk's, so they are asked for two things rather than one: a usable
-    // range that leaves the region clear, and no listed partition over it
-    // either. A disk header that objects still outranks both.
+    // Only an authentic disk header can vouch for a usable range: a
+    // corrupt one can still parse and claim that the saved array is
+    // partition space, blocking the very restore meant to replace it. The
+    // test is the header's own integrity, not the table's — the range is a
+    // header field under the header CRC, so it remains this disk's genuine
+    // claim while the array beside it is corrupt or unreadable, which is
+    // both an ordinary way to arrive here and no reason to stop listening.
+    // Otherwise the snapshot answers, because a disk with neither header
+    // authentic is the one case a snapshot exists for and it would be
+    // perverse to refuse a good file precisely then. A file's headers are
+    // weaker evidence than a disk's, so they are asked for two things
+    // rather than one: a usable range that leaves the region clear, and no
+    // listed partition over it either. An authentic disk header that
+    // objects still outranks both.
     //
     // What this deliberately does not defend against is a file written to
     // deceive. That is out of scope: the honest producer of these files is
     // [`capture`], and the operator has to have carried the thing here and
     // authorised it against a named disk.
     let disk_refs = [
-        analysis.main.as_ref().ok().map(|t| t.header),
-        analysis.secondary.as_ref().ok().map(|t| t.header),
+        analysis.main.as_ref().ok().filter(|t| t.header_is_authentic()).map(|t| t.header),
+        analysis.secondary.as_ref().ok().filter(|t| t.header_is_authentic()).map(|t| t.header),
     ];
     let archive_refs =
         [GptHeader::parse(&main_header.data), GptHeader::parse(&secondary_header.data)];
@@ -972,10 +981,10 @@ pub fn restore_plan(archive: &Archive, analysis: &Analysis) -> Result<RepairPlan
         let by_archive = vet_entries_region(c.lba, blocks, &archive_refs, archive.last_block);
         let overlaps = Mismatch::OverlapsPartitions { role, lba: c.lba, blocks };
         let refusal = match (by_disk, by_archive) {
-            // Any sane header, on the medium or in the file, that puts a
-            // partition over this region settles the matter.
+            // An authentic disk header or a sane archive range that puts
+            // partition space over this region settles the matter.
             (Some(false), _) | (_, Some(false)) => Some(overlaps),
-            // This disk still has a table able to say the region is clear.
+            // This disk still has a header able to say the region is clear.
             (Some(true), _) => None,
             // It has not, so the file's headers stand in for it: in a
             // moment they will be this disk's table, and a region clear of

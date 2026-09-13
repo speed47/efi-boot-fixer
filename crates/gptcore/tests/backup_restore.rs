@@ -346,6 +346,36 @@ fn a_snapshot_recognises_the_disk_it_came_from() {
     assert!(c.archive_partitions >= 8, "{c:?}");
 }
 
+/// The disk GUID sits in the header under the header CRC, so a header that
+/// authenticates still names its disk however corrupt the array beside it
+/// has become. Filing zero there would discard, permanently and silently,
+/// evidence the disk was stating plainly — and `compare` settles for a
+/// damaged table when it reads the field back, so a stricter rule at
+/// capture time would leave the two ends disagreeing about which table
+/// speaks for the disk.
+#[test]
+fn a_corrupt_entry_array_does_not_cost_the_snapshot_its_disk_guid() {
+    let img = deck_image();
+    let healthy = snapshot(&img);
+    assert!(!healthy.disk_guid.is_zero());
+
+    for lba in [2, img.last_block() - 32] {
+        let mut raw = img.read_lba(lba, 32);
+        raw[0] ^= 0xff;
+        img.write_lba(lba, &raw);
+    }
+
+    let archive = snapshot(&img);
+    assert_eq!(archive.disk_guid, healthy.disk_guid);
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    assert!(!analysis.main.as_ref().unwrap().is_valid());
+    let c = backup::compare(&archive, &analysis);
+    assert!(c.disk_guid);
+    assert_eq!(c.verdict(), backup::Match::SameDisk, "{c:?}");
+}
+
 #[test]
 fn partition_guids_identify_the_disk_even_after_the_disk_guid_changes() {
     let img = deck_image();
@@ -527,10 +557,13 @@ fn an_archives_own_header_cannot_authorise_its_array_into_a_partition() {
 
     let mut disk = img.disk();
     let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    assert!(analysis.main.as_ref().unwrap().is_valid());
+    assert!(analysis.secondary.as_ref().unwrap().is_valid());
     match restore_plan(&archive, &analysis) {
         Err(Mismatch::OverlapsPartitions { role: Role::MainEntries, lba: 1_000_000, .. }) => {}
         other => panic!("expected an overlap refusal, got {other:?}"),
     }
+    assert!(disk.writes().is_empty());
 }
 
 /// A disk with nothing left to read is the case the tool exists for, and
@@ -558,6 +591,134 @@ fn a_snapshot_restores_onto_a_disk_with_no_readable_table() {
     apply(&mut disk, &plan).expect("apply");
 
     assert_eq!(img.read_lba(0, 34), before, "restore was not byte-exact");
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+fn restore_despite_corrupt_disk_ranges(damaged: &[Role]) {
+    let img = deck_image();
+    let archive = snapshot(&img);
+    assert!(backup::tables_verify(&archive, &CRC));
+
+    for role in damaged {
+        let chunk = archive.chunk(*role).unwrap();
+        let mut raw = chunk.data.clone();
+        // Keep the range numerically plausible but extend it over the
+        // secondary array, without updating the header's checksum.
+        raw[48..56].copy_from_slice(&(img.last_block() - 1).to_le_bytes());
+        img.write_lba(chunk.lba, &raw);
+    }
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).unwrap();
+    for (role, table) in
+        [(Role::MainHeader, &analysis.main), (Role::SecondaryHeader, &analysis.secondary)]
+    {
+        let table = table.as_ref().unwrap();
+        assert_eq!(table.is_valid(), !damaged.contains(&role));
+        if damaged.contains(&role) {
+            assert!(table
+                .defects
+                .iter()
+                .any(|d| matches!(d, gptcore::header::Defect::HeaderCrcMismatch { .. })));
+            assert!(
+                table.header.last_usable_lba >= archive.chunk(Role::SecondaryEntries).unwrap().lba
+            );
+        }
+    }
+
+    let plan =
+        restore_plan(&archive, &analysis).expect("invalid disk headers cannot veto a restore");
+    apply(&mut disk, &plan).unwrap();
+    for chunk in &archive.chunks {
+        assert_eq!(img.read_lba(chunk.lba, chunk.blocks(archive.block_size)), chunk.data);
+    }
+    assert!(img.is_clean(), "{}", img.verify());
+}
+
+#[test]
+fn a_corrupt_disk_range_cannot_overrule_the_surviving_gpt() {
+    for role in [Role::MainHeader, Role::SecondaryHeader] {
+        restore_despite_corrupt_disk_ranges(&[role]);
+    }
+}
+
+#[test]
+fn two_corrupt_disk_ranges_cannot_overrule_a_healthy_snapshot() {
+    restore_despite_corrupt_disk_ranges(&[Role::MainHeader, Role::SecondaryHeader]);
+}
+
+/// A broken entry array is not a broken header. The usable range is a
+/// header field under the header CRC, so a header that still authenticates
+/// keeps saying where this disk's partitions are however corrupt the array
+/// beside it has become — which is one of the ordinary ways to end up
+/// needing a restore, and the moment the disk's word matters most.
+#[test]
+fn a_corrupt_entry_array_does_not_cost_the_disk_its_veto() {
+    let img = deck_image();
+    let mut archive = snapshot(&img);
+
+    // Both arrays corrupt, both headers untouched.
+    for lba in [2, img.last_block() - 32] {
+        let mut raw = img.read_lba(lba, 32);
+        raw[0] ^= 0xff;
+        img.write_lba(lba, &raw);
+    }
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    for table in [&analysis.main, &analysis.secondary] {
+        let table = table.as_ref().unwrap();
+        assert!(!table.is_valid());
+        assert!(table.header_is_authentic());
+        assert!(table
+            .defects
+            .iter()
+            .all(|d| matches!(d, gptcore::header::Defect::EntryArrayCrcMismatch { .. })));
+    }
+
+    // The disk in front of us still puts rootfs-A at LBA 1_000_000, and is
+    // the only thing left that does: the snapshot is stripped of every way
+    // to object to the region its own array is now aimed at.
+    for role in [Role::MainHeader, Role::SecondaryHeader] {
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("header chunk");
+        let mut header = GptHeader::parse(&chunk.data).expect("parse");
+        header.first_usable_lba = 2;
+        header.last_usable_lba = 2;
+        chunk.data = header.to_block(512, &CRC);
+    }
+    for role in [Role::MainEntries, Role::SecondaryEntries] {
+        let chunk = archive.chunks.iter_mut().find(|c| c.role == role).expect("array chunk");
+        chunk.data = vec![0u8; chunk.data.len()];
+    }
+    let chunk =
+        archive.chunks.iter_mut().find(|c| c.role == Role::MainEntries).expect("main array");
+    chunk.lba = 1_000_000;
+
+    match restore_plan(&archive, &analysis) {
+        Err(Mismatch::OverlapsPartitions { role: Role::MainEntries, lba: 1_000_000, .. }) => {}
+        other => panic!("expected an overlap refusal, got {other:?}"),
+    }
+    assert!(disk.writes().is_empty());
+}
+
+/// And the veto it keeps is the narrow one: a disk whose arrays are corrupt
+/// is exactly a disk wanting its snapshot back, so an honest file still
+/// restores onto it.
+#[test]
+fn a_corrupt_entry_array_still_admits_an_honest_restore() {
+    let img = deck_image();
+    let archive = snapshot(&img);
+
+    for lba in [2, img.last_block() - 32] {
+        let mut raw = img.read_lba(lba, 32);
+        raw[0] ^= 0xff;
+        img.write_lba(lba, &raw);
+    }
+
+    let mut disk = img.disk();
+    let analysis = analyze(&mut disk, &CRC).expect("analyze");
+    let plan = restore_plan(&archive, &analysis).expect("a sound snapshot still restores");
+    apply(&mut disk, &plan).unwrap();
     assert!(img.is_clean(), "{}", img.verify());
 }
 
