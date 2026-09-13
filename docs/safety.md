@@ -109,6 +109,14 @@ field rather than copying the secondary GPT's block, and recomputes both CRCs. T
 entry array is written and flushed *before* the header that points at it, so a
 power cut cannot leave a valid header describing garbage.
 
+Restore commits one complete GPT (array, flush, header, flush) before touching
+the other. If the main GPT is valid, the secondary is restored first;
+otherwise the main is restored first, preserving any usable secondary. This
+keeps a usable GPT available during an interrupted restore of a healthy
+snapshot when one existed beforehand. Writing both arrays first would instead
+invalidate both old headers whenever the saved arrays differ from the current
+ones. The protective MBR is restored after both GPTs are committed.
+
 `gBS->CalculateCrc32` is used when available, so the checksums written are
 produced by the same code that validates them at boot; `gptcore`'s own
 implementation is the fallback, and the app says which one it used.
