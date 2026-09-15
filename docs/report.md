@@ -25,7 +25,7 @@ that got dropped. So the report drops none of them.
 | Partition tables | Per disk: the verdict, the four MBR records as numbers, every field of both GPT headers, and every partition's range, type, unique GUID and attributes |
 | Boot entries in NVRAM | `BootCurrent`, `BootNext`, `Timeout`, `BootOrder`, then every `Boot####` in the store with its position, flags, device path and load options in hex |
 | Bootloaders on the ESPs | Each ESP, its partition GUID, every `.efi` found on it and whether NVRAM points at it |
-| Volumes | Where files can be saved, how much room is left, and what is already in `\BOOTFIXR` |
+| Filesystems searched for saved backups | Every volume a snapshot could be read from: whether it is removable, whether it can be written to at all, how much room is left, and what is already in `\BOOTFIXR` |
 | Every variable in the store | The name, size and vendor GUID of every variable the firmware will enumerate |
 
 The last one is a stock-take rather than a diagnosis, and it is last for that

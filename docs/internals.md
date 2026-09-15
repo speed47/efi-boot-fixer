@@ -13,8 +13,8 @@ crates/bootfixr/     the EFI_APPLICATION (its own workspace; UEFI target only)
   src/selfdev.rs     identifying which disk booted this image
   src/nvram.rs       read-only NVRAM boot-option parsing
   src/espscan.rs     read-only scan of every ESP for bootloaders
-  src/store.rs       the tool's own snapshots, on the ESP and on any
-                     removable volume attached
+  src/store.rs       the tool's own snapshots: written to the ESP and to
+                     removable media, read from every filesystem there is
   src/diag.rs        the half of the diagnostic report that needs firmware
   src/smbios.rs      copying the SMBIOS table out of firmware memory
   src/secureboot.rs  the Secure Boot flags and databases, read-only

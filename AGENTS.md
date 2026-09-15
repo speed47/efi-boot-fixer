@@ -16,7 +16,7 @@ crates/bootfixr/     the EFI_APPLICATION (its OWN workspace; UEFI target only)
   src/nvram.rs       reading Boot####/BootOrder out of the variable store
   src/secureboot.rs  the Secure Boot flags and key databases, read-only
   src/smbios.rs      copying the SMBIOS table out of firmware memory
-  src/store.rs       our own files, on the ESP and on removable media
+  src/store.rs       our own files: written narrowly, read everywhere
   src/espscan.rs     finding bootloaders on the ESPs (not src/store.rs)
   src/diag.rs        the firmware half of the diagnostic report
 tools/               image builders, the QEMU harness, the font rasteriser
@@ -85,7 +85,8 @@ land in the entry list. See [docs/boot.md](docs/boot.md).
 **"Never removable media" is a rule about disks, not about files.** The
 repair targets exclude removable and read-only *block devices*; `store.rs`
 deliberately offers removable *volumes* as backup destinations, through a
-filesystem. Under QEMU that path needs `USB=1`, and specifically
+filesystem, and reads snapshots back off volumes it would never write to.
+Under QEMU that path needs `USB=1`, and specifically
 `-device usb-storage,...,removable=on`: without `removable=on` QEMU leaves
 the RMB bit clear in the SCSI INQUIRY, EDK II marks the media fixed, and the
 destination menu never appears. See [docs/backups.md](docs/backups.md).
@@ -155,6 +156,16 @@ queued input first. See [docs/input.md](docs/input.md).
 - Snapshot names count up from the highest present and never fill a gap. So
   do diagnostic reports (`diag-NNN.txt`), which share the directory and the
   numbering pass with them.
+- **`store::sources` and `store::removable` are not the same list, and the
+  difference is the point.** Writing is narrow: the launch volume, plus
+  removable, writable, present media. Reading is as wide as the firmware
+  allows — every `SimpleFileSystem` handle, including the internal ESP when
+  the image was launched from a rescue stick, and including read-only media,
+  since putting a snapshot back only reads the file. Nothing `sources`
+  returns is ever passed to `write_snapshot`; check that before widening
+  either list. Both skip a handle whose media the firmware says is gone —
+  otherwise an empty card slot costs the restore screen a rejection line and
+  the press that clears it. See [docs/backups.md](docs/backups.md).
 - A snapshot written to two destinations gets **one name**, numbered from
   what is in use on every volume the tool can see — not just the
   destinations, or saving to one volume now and another later yields two

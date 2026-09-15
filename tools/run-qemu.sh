@@ -241,9 +241,13 @@ drive() {
             keys "$DOWN" "$A" "$A"                  # disk 2, review page
             confirm
             keys "$A" "$B" "$B" ;;
-        restore)                                    # GPT item 3
+        restore|restore-source-error)               # GPT item 3
             gpt_menu
-            keys "$DOWN" "$DOWN" "$A" "$A" "$DOWN" "$A" "$A"
+            keys "$DOWN" "$DOWN" "$A"
+            if [ "$SCRIPT" = restore-source-error ]; then
+                keys "$A"                           # unreadable source reported
+            fi
+            keys "$A" "$DOWN" "$A" "$A"
             confirm
             keys "$A" "$B" "$B" ;;
         inspect)                                    # browse snapshots, View
@@ -369,9 +373,17 @@ drive() {
 # for and the only way to exercise the picker being skipped. The disk left
 # out is test.img, so a run with this set has no post-condition to check.
 DISKS=()
+BOOT_INDEX=
+TEST_INDEX=
+if [ "${BOOT_USB:-0}" = 1 ]; then
+    # OVMF connects the devices named in QEMU's boot order. Keep both NVMe
+    # disks in it so they expose filesystems even when USB boots first.
+    BOOT_INDEX=,bootindex=2
+    TEST_INDEX=,bootindex=3
+fi
 if [ "${ONE_DISK:-0}" != 1 ]; then
     DISKS+=(-drive "file=$DIR/test.img,format=raw,if=none,id=testdisk"
-            -device nvme,drive=testdisk,serial=TESTDISK)
+            -device "nvme,drive=testdisk,serial=TESTDISK$TEST_INDEX")
 fi
 
 # A USB stick, for the walks that back up to removable media.
@@ -382,9 +394,13 @@ fi
 # anywhere to offer besides the ESP. Without it QEMU presents a fixed disk
 # over USB and the destination menu never appears.
 if [ "${USB:-0}" = 1 ]; then
+    USB_BOOT=
+    if [ "${BOOT_USB:-0}" = 1 ]; then
+        USB_BOOT=,bootindex=1
+    fi
     DISKS+=(-device qemu-xhci,id=xhci
-            -drive "file=$DIR/usb.img,format=raw,if=none,id=usbstick"
-            -device usb-storage,bus=xhci.0,drive=usbstick,removable=on)
+            -drive "file=$DIR/usb.img,format=raw,if=none,id=usbstick,readonly=${USB_READONLY:-off}"
+            -device "usb-storage,bus=xhci.0,drive=usbstick,removable=on$USB_BOOT")
 fi
 
 EXTRA=()
@@ -413,7 +429,7 @@ drive | timeout "$TIMEOUT" qemu-system-x86_64 \
     -drive if=pflash,format=raw,unit=0,readonly=on,file="$CODE" \
     -drive if=pflash,format=raw,unit=1,file="$VARS" \
     -drive file="$DIR/boot.img",format=raw,if=none,id=bootdisk \
-    -device nvme,drive=bootdisk,serial=BOOTDISK \
+    -device "nvme,drive=bootdisk,serial=BOOTDISK$BOOT_INDEX" \
     "${DISKS[@]}" \
     -net none \
     -nographic

@@ -10,7 +10,14 @@
 //! offered as a second destination and the ESP becomes the default rather
 //! than the only choice. Both are [`Volume`]s here and nothing above this
 //! module treats one differently from the other; what differs is only which
-//! ones are offered, and that is [`removable`]'s answer.
+//! ones are *written* to, and that is [`removable`]'s answer.
+//!
+//! Reading asks a wider question, and [`sources`] answers it: a backup is
+//! worth offering wherever it is, so every filesystem the firmware exposes
+//! is searched — the internal ESP when the image was launched from a rescue
+//! stick, and read-only media, which a file only has to be read from. The
+//! two lists are deliberately not the same list. Nothing [`sources`] finds
+//! is ever written to.
 //!
 //! Two consequences of the ESP placement are handled by the caller rather
 //! than here. Writing to a whole disk with
@@ -58,8 +65,8 @@ backup_dir!("BOOTFIXR");
 /// What the launch volume is called on screen.
 ///
 /// Lower case because it is read in the middle of a sentence as often as at
-/// the start of a line: "on the ESP this program was launched from".
-const BOOT_VOLUME: &str = "the ESP this program was launched from";
+/// the start of a line: "on the volume this program was launched from".
+const BOOT_VOLUME: &str = "the volume this program was launched from";
 
 /// A saved file, read into memory in full.
 pub struct Saved {
@@ -95,6 +102,15 @@ pub struct Volume {
     /// Bytes free, when the filesystem would say.
     pub free: Option<u64>,
     pub removable: bool,
+    /// Mounted read-only, as far as the filesystem says.
+    ///
+    /// A source may be read-only and is still a source, so this is carried
+    /// rather than acted on here. What it is for is the two places that
+    /// would otherwise offer free space on a volume nothing can be saved
+    /// to: the diagnostic report, and the launch volume on the review page
+    /// — which is the only read-only volume a destination list can contain,
+    /// since [`removable`] filters the rest out on exactly this flag.
+    pub read_only: bool,
 }
 
 impl Volume {
@@ -112,14 +128,30 @@ impl Volume {
             // written there is already off-device, and callers decide what
             // to say to the operator from this flag.
             removable: handle.is_some_and(is_removable),
+            read_only: false,
         };
         drop(device);
         // Best effort, and a failure is not disqualifying here the way it
         // is for a removable volume: the ESP is the fallback destination,
         // and a filesystem that will not report its free space is still one
         // that will very probably take a 40 KiB file.
-        volume.free = volume.info().ok().and_then(|(_, free)| free);
+        if let Ok((_, free, read_only)) = volume.info() {
+            volume.free = free;
+            volume.read_only = read_only;
+        }
         volume
+    }
+
+    fn from_handle(handle: Handle) -> Volume {
+        let device = crate::get_protocol::<DevicePath>(handle).ok();
+        Volume {
+            handle: Some(handle),
+            name: String::new(),
+            path: crate::path_text(device.as_deref()),
+            free: None,
+            removable: is_removable(handle),
+            read_only: false,
+        }
     }
 
     fn fs(&self) -> Result<ScopedProtocol<SimpleFileSystem>, String> {
@@ -131,27 +163,25 @@ impl Volume {
         }
     }
 
-    /// What the filesystem says about itself: its label, and its free space.
+    /// Label, free space and read-only state. Writability matters for
+    /// destinations, but must not exclude a readable backup source.
     ///
     /// Also the first thing that proves a volume can be opened at all,
     /// which is why [`removable`] drops the ones that fail it. A
     /// destination that cannot be read is not a destination that can be
     /// written, and finding that out while the choice is being offered
     /// beats finding it out after the operator has made it.
-    fn info(&self) -> Result<(Option<String>, Option<u64>), String> {
+    fn info(&self) -> Result<(Option<String>, Option<u64>, bool), String> {
         let mut fs = self.fs()?;
         let mut root = fs.open_volume().map_err(|e| err("cannot open the volume", e.status()))?;
         // A driver that will not answer is not a refusal: the label and the
         // free space are both decoration.
         let Ok(info) = root.get_boxed_info::<FileSystemInfo>() else {
-            return Ok((None, None));
+            return Ok((None, None, false));
         };
-        if info.read_only() {
-            return Err(String::from("mounted read-only"));
-        }
         let label = info.volume_label().to_string();
         let label = label.trim().to_string();
-        Ok(((!label.is_empty()).then_some(label), Some(info.free_space())))
+        Ok(((!label.is_empty()).then_some(label), Some(info.free_space()), info.read_only()))
     }
 
     /// Open the backup directory, creating it if `create`.
@@ -323,6 +353,74 @@ impl Volume {
     }
 }
 
+/// Every filesystem that might hold backups, with the launch volume first.
+///
+/// Wider than [`removable`] on purpose, and the width is the point: a
+/// snapshot is worth offering wherever it sits, so neither an ESP partition
+/// type nor a removable flag is required, and read-only media qualifies
+/// because putting a snapshot back only reads the file. None of these is a
+/// destination — see the module note — so nothing found here is written to.
+///
+/// Metadata is optional. A filesystem that will not give its label or its
+/// free space is still one a file can be read off, so a failed query costs
+/// the volume its name and nothing else; a directory that cannot be listed
+/// is reported by the caller, which is the screen that can say so.
+pub fn sources() -> Vec<Volume> {
+    let launched_from = image_volume();
+    let mut all = alloc::vec![Volume::boot()];
+    let Ok(handles) = boot::locate_handle_buffer(SearchType::ByProtocol(&SimpleFileSystem::GUID))
+    else {
+        return all;
+    };
+    let mut others = Vec::new();
+    for handle in handles.iter().copied() {
+        if Some(handle) == launched_from {
+            continue;
+        }
+        // An empty card slot can leave a filesystem handle standing until
+        // something touches it, and the Deck has one. Carrying it costs the
+        // restore screen a rejection line and the extra press that clears
+        // it, on the screen where noise is most expensive — so the same
+        // question [`removable`] asks of the media is asked here too.
+        if media_absent(handle) {
+            continue;
+        }
+        let mut volume = Volume::from_handle(handle);
+        if let Ok((label, free, read_only)) = volume.info() {
+            volume.name = label.unwrap_or_default();
+            volume.free = free;
+            volume.read_only = read_only;
+        }
+        others.push(volume);
+    }
+
+    // Same order every sweep, for the same reason [`removable`] sorts.
+    others.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Counted separately from the labelled volumes, and separately by kind,
+    // the way [`removable`] numbers its own: a list that runs "Volume 2,
+    // Volume 4" reads as though two rows went missing, and an unlabelled
+    // stick that is "Removable volume 1" in the destination menu should not
+    // become "Volume 3" on the screen that offers its snapshots back. Where
+    // the two lists still disagree — a read-only stick is a source and not
+    // a destination — the device path on the row settles it.
+    let (mut unlabelled, mut unlabelled_removable) = (0, 0);
+    for volume in others.iter_mut() {
+        if !volume.name.is_empty() {
+            continue;
+        }
+        volume.name = if volume.removable {
+            unlabelled_removable += 1;
+            format!("Removable volume {unlabelled_removable}")
+        } else {
+            unlabelled += 1;
+            format!("Volume {unlabelled}")
+        };
+    }
+    all.extend(others);
+    all
+}
+
 /// Every removable volume a backup could be written to.
 ///
 /// Not "every removable ESP". A stick formatted by whatever was to hand is
@@ -359,19 +457,11 @@ pub fn removable() -> Vec<Volume> {
             continue;
         }
 
-        let device = crate::get_protocol::<DevicePath>(handle).ok();
-        let mut volume = Volume {
-            handle: Some(handle),
-            name: String::new(),
-            path: crate::path_text(device.as_deref()),
-            free: None,
-            removable: true,
-        };
-        drop(device);
+        let mut volume = Volume::from_handle(handle);
 
         // Named from the filesystem where it has a label, since that is
         // what somebody with two sticks in front of them recognises.
-        let Ok((label, free)) = volume.info() else {
+        let Ok((label, free, false)) = volume.info() else {
             continue;
         };
         volume.name = label.unwrap_or_default();
@@ -399,7 +489,7 @@ pub fn removable() -> Vec<Volume> {
 
 /// The handle of the volume this image was launched from.
 ///
-/// Used to keep that volume out of [`removable`] and to ask what kind of
+/// Used to deduplicate [`sources`] and [`removable`] and to ask what kind of
 /// media it sits on; the volume itself is opened through
 /// `get_image_file_system`, never through this.
 fn image_volume() -> Option<Handle> {
@@ -412,6 +502,16 @@ fn image_volume() -> Option<Handle> {
 /// needs no walk up to the whole disk.
 fn is_removable(handle: Handle) -> bool {
     crate::get_protocol::<BlockIO>(handle).is_ok_and(|io| io.media().is_removable_media())
+}
+
+/// Whether the device behind this handle says its media has gone.
+///
+/// Phrased as the negative deliberately. "No block device at all" is not
+/// "no media": a filesystem the firmware publishes over something that is
+/// not a disk still holds files, and dropping it for failing to answer a
+/// question about disks would be the wrong way round.
+fn media_absent(handle: Handle) -> bool {
+    crate::get_protocol::<BlockIO>(handle).is_ok_and(|io| !io.media().is_media_present())
 }
 
 fn name16(name: &str) -> Result<CString16, String> {

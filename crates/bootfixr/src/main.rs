@@ -723,6 +723,13 @@ fn auto_snapshot(
 /// room is left on it, and where it is attached.
 fn volume_lines(volume: &store::Volume) -> Vec<Line> {
     let mut out = alloc::vec![key(format!("    {}", volume.name))];
+    // Ahead of the free space, which otherwise reads as an invitation. A
+    // read-only volume only reaches this list as the launch volume -- the
+    // removable ones are filtered on it -- and that is exactly the case
+    // worth saying out loud, since it is the destination nobody chose.
+    if volume.read_only {
+        out.push(warn("      mounted read-only; a write here will fail"));
+    }
     if let Some(free) = volume.free {
         out.push(dim(format!("      {} free", report::human_size(free))));
     }
@@ -770,28 +777,41 @@ fn choose_destinations(title: &str) -> Option<Vec<store::Volume>> {
         removable.remove(chosen)
     };
 
+    // "the ESP" is what an operator calls the volume this program sits on,
+    // and it is the right word whenever the machine booted off its own
+    // disk. Running from a rescue stick makes it something else, and a row
+    // that still said ESP would name the wrong volume in the one case
+    // where the two come apart -- which is also the case in which somebody
+    // is most likely to be reading the rows carefully.
+    let here = store::Volume::boot();
+    let here_name = if here.removable { "the launch volume" } else { "the ESP" };
+
     // Built here rather than as literals because the rows name the volume:
     // "Save to SD_CARD only" is a choice, "Save to the removable volume
     // only" is a thing to work out.
     let removable_only = format!("Save to {} only", stick.name);
+    let here_only = format!("Save to {here_name} only");
     let on_stick = format!("Write it to {} and nowhere else.", stick.name);
-    let and_stick = format!("One copy on the ESP, one on {}.", stick.name);
+    let not_here = format!("Nothing is written to {here_name}.");
+    let and_stick = format!("One copy on {here_name}, one on {}.", stick.name);
+    let found_again = format!("The copy on {here_name} is the one this");
     let menu = Menu::new(alloc::vec![
         row(
             Dest::Both,
             "Save to both",
             &[
                 &and_stick,
-                "The ESP copy is the one this program can always find",
-                "again; the other one survives the disk.",
+                &found_again,
+                "program can always find again; the other one",
+                "survives the disk.",
             ]
         ),
         row(
             Dest::Esp,
-            "Save to the ESP only",
+            &here_only,
             &["Write it next to this program, as earlier versions", "always did."]
         ),
-        row(Dest::Removable, &removable_only, &[&on_stick, "Nothing is written to the ESP."]),
+        row(Dest::Removable, &removable_only, &[&on_stick, &not_here]),
     ]);
 
     let intro = alloc::vec![
@@ -799,8 +819,8 @@ fn choose_destinations(title: &str) -> Option<Vec<store::Volume>> {
         dim("  somewhere other than this machine's own disk."),
     ];
     match menu.show(title, &intro, "back")? {
-        Dest::Both => Some(alloc::vec![store::Volume::boot(), stick]),
-        Dest::Esp => Some(alloc::vec![store::Volume::boot()]),
+        Dest::Both => Some(alloc::vec![here, stick]),
+        Dest::Esp => Some(alloc::vec![here]),
         Dest::Removable => Some(alloc::vec![stick]),
     }
 }
@@ -978,9 +998,20 @@ fn diag_name(taken: &[String]) -> Result<String, String> {
 /// one they expect to be offered, and a stick that is not attached simply
 /// contributes nothing.
 fn source_volumes() -> Vec<store::Volume> {
-    let mut all = alloc::vec![store::Volume::boot()];
-    all.extend(store::removable());
-    all
+    store::sources()
+}
+
+/// Where a saved file was found, as a snapshot's detail lines.
+///
+/// Two lines rather than one, and wrapped rather than truncated, because
+/// the name alone stopped being enough once every filesystem is searched:
+/// two machines' ESPs can both be labelled the same thing, and an
+/// unlabelled volume is only "Volume 2". The device path is the line that
+/// is always different, and a device path cut off mid-node says nothing.
+fn source_lines(volume: &store::Volume) -> Vec<Line> {
+    let mut lines = ui::wrapped(&format!("  found on {}", volume.name), Style::Dim, "    ");
+    lines.extend(ui::wrapped(&format!("    {}", volume.path), Style::Dim, "      "));
+    lines
 }
 
 /// Write everything this machine will say into one plain text file.
@@ -1138,8 +1169,8 @@ fn run_backup(boot_device: &BootDevice, esp_lost: bool) {
     let mut lines = alloc::vec![good("  Saved as:")];
     lines.extend(written.lines());
     lines.push(Line::blank());
-    lines.push(dim("  Restore offers whatever it finds, on the ESP and on"));
-    lines.push(dim("  any removable media attached at the time."));
+    lines.push(dim(format!("  Restore looks in \\{} on every filesystem the", store::DIR)));
+    lines.push(dim("  firmware exposes, including read-only media."));
     lines.extend(attach_hint(&dests));
     ui::message("Back up GPT", &lines);
 }
@@ -1200,7 +1231,7 @@ struct Saved {
     name: String,
     /// The volume it was found on. Carried because two volumes can each
     /// hold a `gpt-001.bkp`, and then the name alone names two files.
-    source: String,
+    source: Vec<Line>,
     archive: backup::Archive,
     /// The disk this most likely belongs to, and why we think so.
     best: Option<(usize, backup::Comparison)>,
@@ -1288,7 +1319,7 @@ fn load_saved() -> Found {
             match backup::decode(&data, &CRC) {
                 Ok(archive) => found.usable.push(Saved {
                     name: file.name,
-                    source: volume.name.clone(),
+                    source: source_lines(&volume),
                     archive,
                     best: None,
                 }),
@@ -1310,8 +1341,8 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
 
     if usable.is_empty() {
         let mut lines = alloc::vec![
-            warn(format!("  No usable snapshots in \\{}\\, on the ESP or on", store::DIR)),
-            warn("  any removable media attached now."),
+            warn(format!("  No usable snapshots in \\{}\\ on any filesystem", store::DIR)),
+            warn("  exposed by the firmware."),
         ];
         if !rejected.is_empty() {
             lines.push(Line::blank());
@@ -1351,7 +1382,7 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
             }
             // Before the disk GUID, because with the same name on two
             // volumes this is the line that says which row is which.
-            detail.push(dim(format!("  found on {}", sv.source)));
+            detail.extend(sv.source.iter().cloned());
             detail.push(dim(format!("  disk GUID {}", sv.archive.disk_guid)));
             detail.push(dim(match sv.archive.meta_get("tool") {
                 Some(t) => format!("  written by {t}"),
@@ -1370,11 +1401,9 @@ fn run_restore(boot_device: &BootDevice, esp_lost: &mut bool) {
             ui::Choice::Inspect(i) => {
                 selected = i;
                 let sv = &saved[i];
-                let mut lines = alloc::vec![
-                    key(format!("  {}", sv.name)),
-                    dim(format!("  found on {}", sv.source)),
-                    Line::blank(),
-                ];
+                let mut lines = alloc::vec![key(format!("  {}", sv.name))];
+                lines.extend(sv.source.iter().cloned());
+                lines.push(Line::blank());
                 let against =
                     sv.best.as_ref().map(|(d, c)| (format!("Disk {}", disks[*d].number), c));
                 lines.extend(backup::inspect(
@@ -2147,8 +2176,8 @@ fn run_boot_backup(snapshot: &mut bool, esp_lost: bool) {
             }
             lines.push(Line::blank());
             lines.push(dim("  \"Restore boot configuration from backup\" offers"));
-            lines.push(dim("  whatever it finds, on the ESP and on any removable"));
-            lines.push(dim("  media attached at the time."));
+            lines.push(dim("  files from every filesystem the firmware exposes,"));
+            lines.push(dim("  including read-only media."));
             lines.extend(attach_hint(&dests));
             ui::message(TITLE, &lines);
         }
@@ -2176,7 +2205,7 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
     // Same rule as the GPT snapshots: every volume is looked at, and a
     // volume that will not open is a rejection rather than the end of the
     // screen.
-    let mut usable: Vec<(String, String, bootcfg::Snapshot)> = Vec::new();
+    let mut usable: Vec<(String, Vec<Line>, bootcfg::Snapshot)> = Vec::new();
     let mut rejected: Vec<Line> = Vec::new();
     for volume in source_volumes() {
         let files = match volume.list_boot() {
@@ -2188,7 +2217,7 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
         };
         for file in files {
             match file.data.and_then(|d| bootcfg::decode(&d, &CRC).map_err(|e| e.to_string())) {
-                Ok(snap) => usable.push((file.name, volume.name.clone(), snap)),
+                Ok(snap) => usable.push((file.name, source_lines(&volume), snap)),
                 Err(e) => rejected.push(bad(format!("  {} on {} - {e}", file.name, volume.name))),
             }
         }
@@ -2196,8 +2225,8 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
 
     if usable.is_empty() {
         let mut lines = alloc::vec![
-            warn(format!("  No usable boot snapshots in \\{}\\, on the ESP or", store::DIR)),
-            warn("  on any removable media attached now."),
+            warn(format!("  No usable boot snapshots in \\{}\\ on any", store::DIR)),
+            warn("  filesystem exposed by the firmware."),
             Line::blank(),
             dim("  One is taken automatically before the first change"),
             dim("  of a session, so there is nothing here until then."),
@@ -2222,22 +2251,18 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
     let items: Vec<ui::Item> = usable
         .iter()
         .map(|(name, source, snap)| {
-            ui::Item::with_detail(
-                format!("{:<9} {}", name, bootcfg::summary(snap)),
-                alloc::vec![
-                    dim(format!("  found on {source}")),
-                    dim(match snap.meta_get("tool") {
-                        Some(t) => format!("  written by {t}"),
-                        None => String::from("  written by an older build"),
-                    }),
-                    // The one thing that makes a snapshot the wrong one to
-                    // put back: it was taken on a different machine.
-                    dim(match snap.meta_get("firmware") {
-                        Some(f) => format!("  on {f}"),
-                        None => String::from("  firmware not recorded"),
-                    }),
-                ],
-            )
+            let mut detail = source.clone();
+            detail.extend([
+                dim(match snap.meta_get("tool") {
+                    Some(t) => format!("  written by {t}"),
+                    None => String::from("  written by an older build"),
+                }),
+                dim(match snap.meta_get("firmware") {
+                    Some(f) => format!("  on {f}"),
+                    None => String::from("  firmware not recorded"),
+                }),
+            ]);
+            ui::Item::with_detail(format!("{:<9} {}", name, bootcfg::summary(snap)), detail)
         })
         .collect();
     let intro = alloc::vec![
@@ -2254,8 +2279,9 @@ fn run_boot_restore(snapshot: &mut bool, esp_lost: bool) {
         return show_note(TITLE, format!("{name} holds no variables to write."));
     }
 
-    let mut review =
-        alloc::vec![key(format!("  {name}")), dim(format!("  found on {source}")), Line::blank()];
+    let mut review = alloc::vec![key(format!("  {name}"))];
+    review.extend(source.iter().cloned());
+    review.push(Line::blank());
     review.extend(bootcfg::describe(snap));
     review.push(Line::blank());
     review.push(warn("  Only the variables listed above are written. An entry"));
@@ -2346,10 +2372,7 @@ fn run_gpt_menu(boot_device: &BootDevice, esp_lost: &mut bool) {
         row(
             Gpt::Backup,
             "Back up both GPTs to a file",
-            &[
-                "Save the tables to the ESP, to removable media, or",
-                "to both, so they can be put back as they are now."
-            ]
+            &["Save both tables to a file, so they can be put", "back exactly as they are now."]
         ),
         row(
             Gpt::Restore,
@@ -2445,8 +2468,8 @@ fn run_nvram_menu(boot_device: &BootDevice, snapshot: &mut bool, esp_lost: bool)
             Nvram::Backup,
             "Back up the boot configuration",
             &[
-                "Save the entries and the boot order to the ESP, to",
-                "removable media, or to both, on request."
+                "Save the entries and the boot order to a file,",
+                "on request rather than automatically."
             ]
         ),
         row(
