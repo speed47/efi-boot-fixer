@@ -29,6 +29,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN="$HERE/run-qemu.sh"
 MKIMAGES="$HERE/mkimages.sh"
 
+python3 "$HERE/test-qemu-harness.py"
+
 TOTAL=0
 FAILED=()
 
