@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run every walk run-qemu.sh knows against fresh QEMU images, and report
-# which ones verified. This is the QEMU-backed half of `make check` -- see
+# which ones verified. This is `make qemu-check`, separate from `make check` -- see
 # docs/testing.md for what each walk proves and why OVMF makes some
 # corruption modes untestable this way.
 #
@@ -24,6 +24,9 @@ set -euo pipefail
 IMAGES=${1:?usage: qemu-test-all.sh <image-dir> <path-to-efi>}
 EFI=${2:?usage: qemu-test-all.sh <image-dir> <path-to-efi>}
 CORRUPTION=${CORRUPTION:-bad-mbr}
+# The graphics backend cannot be read over serial. Only the display smoke
+# walks below override this; every other walk must pass screen assertions.
+export RES=none
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN="$HERE/run-qemu.sh"
@@ -48,7 +51,7 @@ walk() {
     TOTAL=$((TOTAL + 1))
     echo
     echo "=== [$TOTAL] $label ==="
-    if "$@"; then
+    if LOG_DIR="$IMAGES/logs/$label" "$@"; then
         echo "--- $label: ok ---"
     else
         echo "--- $label: FAILED ---" >&2
@@ -98,8 +101,8 @@ walk "backup-twice" "$RUN" "$IMAGES" backup-twice
 walk "inspect" "$RUN" "$IMAGES" inspect
 walk "scroll" "$RUN" "$IMAGES" scroll
 
-# restore has no post-condition of its own (run-qemu.sh has no way to name
-# one), but it should still walk the menu a healthy backup would populate.
+# Restoring identical sectors may leave the digest unchanged; the result
+# screen must nevertheless confirm that the write completed.
 walk "restore" "$RUN" "$IMAGES" restore
 
 # Paired: bootregister writes a boot-NNN.bkp that only bootrestore reads
@@ -114,11 +117,11 @@ walk "bootrestore" env KEEP_VARS=1 "$RUN" "$IMAGES" bootrestore
 # display-mode and display-revert a bigger mode to pick from the resolution
 # menu and either keep or let lapse.
 fresh
-walk "display" env RES=800x1280 "$RUN" "$IMAGES" display
+walk "display-smoke" env RES=800x1280 "$RUN" "$IMAGES" display
 fresh
-walk "display-mode" env RES=800x600 "$RUN" "$IMAGES" display-mode
+walk "display-mode-smoke" env RES=800x600 "$RUN" "$IMAGES" display-mode
 fresh
-walk "display-revert" env RES=800x600 "$RUN" "$IMAGES" display-revert
+walk "display-revert-smoke" env RES=800x600 "$RUN" "$IMAGES" display-revert
 
 echo
 echo "### ran $TOTAL walks, ${#FAILED[@]} failed ###"
@@ -126,4 +129,4 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
     printf 'FAILED: %s\n' "${FAILED[@]}" >&2
     exit 1
 fi
-echo "### all qemu walks verified ###"
+echo "### all qemu checks passed; the 3 graphical smoke walks still need visual inspection ###"

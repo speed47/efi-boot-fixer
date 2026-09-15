@@ -66,11 +66,41 @@ own framebuffer resolutions. The `qemu-logs` artifact retains the combined
 output and source-discovery logs for 14 days, including on failure. Both
 release jobs require the QEMU job to pass.
 
+Every non-graphical walk now checks the screen text as well as the disk
+digest. `run-qemu.sh` defaults to `RES=none` (the firmware text console) and
+captures serial output with `tee`; `tools/check-qemu-output.sh` removes ANSI
+colour/cursor escapes and greps for the scenario's expected report and result.
+For example, `check` must display both GPT health lines, the partition table,
+and its read-only conclusion; `repair` with `bad-mbr` must reach the automatic
+snapshot note, the confirmation gate, and `Written and flushed.` followed by
+a healthy disk verdict. A menu label alone does not pass an operation.
+Cancellation and refusal walks require their corresponding messages, and
+`check-one` also rejects any appearance of the disk picker. File-save walks
+require a saved filename and USB walks check the reported destinations;
+partial-save failures fail the walk too.
+
+Raw and readable logs are retained as `<script>.serial.log` and
+`<script>.screen.txt` under the image directory's `logs/` (override with
+`LOG_DIR`). The full suite keeps a subdirectory per walk. A failure names the
+missing or unexpected text and both logs. `EXPECT=skip` skips only the disk
+digest assertion, never the screen checks. To recheck a captured run:
+
+```sh
+bash tools/check-qemu-output.sh build/images/logs/check.serial.log \
+    build/images/logs/check.screen.txt check bad-mbr
+```
+
+The waits remain configurable for the host: for example,
+`BOOT_WAIT=6 STEP=1 TIMEOUT=60 make qemu-check` is useful on a fast x86
+machine. If keys arrive before startup or a screen finishes painting, the
+missing result now fails the walk instead of passing on an unchanged disk.
+
 `run-qemu.sh` drives the menus over the serial console, where OVMF's
 `TerminalDxe` turns `ESC[A`..`ESC[D` into D-pad scan codes, CR into A and a
 lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
 exercise the real input path rather than a keyboard-only one. `repair-boot`
-targets disk 1, which is how the write-to-your-own-boot-disk case gets tested.
+targets the healthy disk 1 and requires a healthy report without a write
+gate, proving that the boot disk is offered rather than excluded.
 
 **Boot timing (measured on Raspberry Pi).**
 
@@ -103,7 +133,7 @@ After the last scripted input and an eight-second settling delay, the harness
 sends QEMU's `Ctrl-A X` multiplexer command to exit the emulator cleanly. Most
 walks first return the application to OVMF's setup menu; they no longer wait
 there for the full timeout. This is driven by completion of the input sequence,
-not detection of the application's exit, so disk and snapshot checks still
+not detection of the application's exit, so screen, disk and snapshot checks still
 determine whether the operation succeeded. `TIMEOUT` (default 420 seconds) is
 now a watchdog: expiry is a test failure, including for read-only walks.
 `python3 tools/test-qemu-harness.py` checks this lifecycle with a fake emulator:
@@ -163,9 +193,8 @@ and also runs as part of `make qemu-check`. Its harness options are `BOOT_USB=1`
 indices keep both NVMe devices in OVMF's connection list when USB boots first.
 `CODE`, `VARS_SRC` and `QEMU_DATA` can point at a non-system OVMF/QEMU installation.
 
-The `report` and `report-usb` walks save a diagnostic report, and the file
-they leave behind is the whole assertion — it is the one output of this tool
-that can be read directly rather than inferred from a disk digest:
+The `report` and `report-usb` walks require the report preview and successful
+save message. The file they leave behind can also be inspected directly:
 
 ```sh
 make images
@@ -186,13 +215,15 @@ otherwise be needed, so what it proves is in the serial log rather than on a
 disk:
 
 ```sh
-RES=none ONE_DISK=1 ./tools/run-qemu.sh build/images check-one | tee one.log
-grep -c "Choose a disk" one.log        # 0: the picker never appeared
-grep -o "Check GPT (read only)" one.log # the report, reached in one press
+ONE_DISK=1 ./tools/run-qemu.sh build/images check-one
+# The harness checks that the report appeared and the picker did not.
 ```
 
 The graphical backend writes nothing to the serial console, so a run that
-exercises it has to be photographed rather than read:
+exercises it has to be photographed rather than read. Explicit graphical
+`RES` settings skip screen assertions with a visible notice; the three
+`display*` walks default to graphics and are labelled smoke tests in the full
+suite, not screen-verified successes. Their pictures still need inspection:
 
 ```sh
 make qemu-shots                          # 800x1280 framebuffer, i.e. rotated
