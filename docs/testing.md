@@ -57,6 +57,15 @@ Expect it to take a long time -- it is dozens of QEMU boots, each with its
 own `BOOT_WAIT` -- and to need OVMF, `sgdisk` and `mtools` installed, same
 as the individual walks above.
 
+GitHub Actions runs `make qemu-check` in a separate **QEMU tests** job on
+`ubuntu-latest` for pushes, pull requests and manual runs. It installs
+`qemu-system-x86`, `ovmf`, `gdisk`, `dosfstools` and `mtools`, uses the
+harness's default timing and watchdog, and allows 90 minutes for the suite.
+Ordinary walks use `RES=none` for serial output; display walks select their
+own framebuffer resolutions. The `qemu-logs` artifact retains the combined
+output and source-discovery logs for 14 days, including on failure. Both
+release jobs require the QEMU job to pass.
+
 `run-qemu.sh` drives the menus over the serial console, where OVMF's
 `TerminalDxe` turns `ESC[A`..`ESC[D` into D-pad scan codes, CR into A and a
 lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
