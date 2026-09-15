@@ -63,6 +63,45 @@ lone ESC into B — the same alphabet the Deck's buttons produce, so these runs
 exercise the real input path rather than a keyboard-only one. `repair-boot`
 targets disk 1, which is how the write-to-your-own-boot-disk case gets tested.
 
+**Boot timing (measured on Raspberry Pi).**
+
+`BOOT_WAIT` defaults to **10 seconds**. This is measured on an arm64 Raspberry
+Pi (four Cortex-A76 cores at 2.4 GHz), emulating x86-64 under TCG with QEMU
+10.0.11 and Debian OVMF 2025.02-8+deb13u1. Each trial started with pristine
+firmware variables; configurations covered NVMe and USB boots, with either
+the text console or an 800x1280 graphical framebuffer.
+
+| Wait before the first key | Result |
+|---|---|
+| 5 seconds | Both graphical configurations lost the initial Enter press |
+| 6 seconds | All 12 overview trials passed (three per configuration) |
+| 10 seconds, with three additional CPU-busy processes | All four configurations passed |
+
+Without the added load, the text menu was ready around 4.7–5.2 seconds and
+the graphical loader started around 4.9–5.6 seconds. Under load those readings
+reached about 7.3 seconds. Loader start alone is not proof of input readiness:
+the trials also required the scripted overview interaction to return to
+firmware, and text runs checked the overview's contents. Six seconds is the
+lowest consistently successful whole-second wait tested here, not a universal
+minimum; ten leaves room for scheduling and startup variation.
+
+The default gap between later keys remains `STEP=3` seconds. Slower hosts can
+override the startup wait, for example `BOOT_WAIT=20 make qemu-check`.
+All four source-discovery restore scenarios below also passed with these
+defaults, including byte-exact disk recovery and cross-volume numbering.
+
+After the last scripted input and an eight-second settling delay, the harness
+sends QEMU's `Ctrl-A X` multiplexer command to exit the emulator cleanly. Most
+walks first return the application to OVMF's setup menu; they no longer wait
+there for the full timeout. This is driven by completion of the input sequence,
+not detection of the application's exit, so disk and snapshot checks still
+determine whether the operation succeeded. `TIMEOUT` (default 420 seconds) is
+now a watchdog: expiry is a test failure, including for read-only walks.
+`python3 tools/test-qemu-harness.py` checks this lifecycle with a fake emulator:
+normal quit, watchdog expiry, emulator failure, and input-script failure even
+when the emulator exits successfully. These fast checks also precede the VM
+runs in `make qemu-check`.
+
 `USB=1` attaches `usb.img` as a removable USB stick, which is the only way to
 reach the destination menu: with nothing removable present the tool does not
 ask where a backup should go, because there is only one answer. The stick is

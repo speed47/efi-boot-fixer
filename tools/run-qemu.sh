@@ -18,12 +18,15 @@ set -euo pipefail
 
 DIR=${1:?usage: run-qemu.sh <image-dir> [script]}
 SCRIPT=${2:-none}
+# Watchdog only: a completed walk asks QEMU to quit through its multiplexer.
 TIMEOUT=${TIMEOUT:-420}
 # How long to wait before the first keypress. The menus drain queued input
 # on entry — a burst of auto-repeat must not walk through a confirmation —
 # so keys pressed before the application starts are discarded, and this has
-# to be long enough for OVMF to reach it.
-BOOT_WAIT=${BOOT_WAIT:-105}
+# to be long enough for OVMF to reach it. On an arm64 Raspberry Pi under
+# TCG, 6s passed repeated trials but 5s lost input; 10s also passed under CPU
+# load. See docs/testing.md for the measurements and tested configurations.
+BOOT_WAIT=${BOOT_WAIT:-10}
 # Gap between keypresses, long enough for a screen to repaint under TCG.
 STEP=${STEP:-3}
 
@@ -44,20 +47,16 @@ SHOT_EVERY=${SHOT_EVERY:-6}
 
 # What the run should have done to the test disk.
 #
-# Without this the harness has no failure signal at all. QEMU is killed by
-# `timeout` on every run, successful or not — it does not exit when the
-# keypress feeder closes its stdin — and the application returns to the
-# firmware rather than reporting anything back to us. So a run in which the
-# application never started, or in which the keypresses landed in OVMF's
-# boot manager instead of our menus, looks exactly like a run that worked.
-# The disk is the only witness.
+# A clean QEMU exit only proves the keypress feeder finished, not that the
+# application did what it asked. Keys landing in OVMF's boot manager would
+# still finish the walk, so the disk has to witness the intended effect.
 #
 # `auto` works it out from the script and the corruption mkimages recorded.
 # Set EXPECT=change|no-change|skip to state it directly.
 EXPECT=${EXPECT:-auto}
 
-CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
-VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
+CODE=${CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+VARS_SRC=${VARS_SRC:-/usr/share/OVMF/OVMF_VARS_4M.fd}
 VARS="$DIR/vars.fd"
 # Each run normally starts from the firmware's pristine NVRAM, so a walk
 # never inherits variables an earlier one wrote. KEEP_VARS=1 keeps the
@@ -367,6 +366,10 @@ drive() {
             echo "unknown script: $SCRIPT" >&2; exit 1 ;;
     esac
     sleep 8
+    # mon:stdio multiplexes the serial port and monitor on stdin. Ctrl-A X
+    # quits QEMU itself after the final screen has settled; plain EOF would
+    # leave it sitting in OVMF until the watchdog expires.
+    printf '\001x'
 }
 
 # One disk instead of two, which is the shape of the machine this tool is
@@ -404,6 +407,9 @@ if [ "${USB:-0}" = 1 ]; then
 fi
 
 EXTRA=()
+if [ -n "${QEMU_DATA:-}" ]; then
+    EXTRA+=(-L "$QEMU_DATA")
+fi
 case "$RES" in
     "")   ;;
     none) EXTRA+=(-vga none) ;;
@@ -421,8 +427,10 @@ fi
 EFFECT=$(expected_effect)
 BEFORE=$(disk_digest "$DIR/test.img")
 
+# Explicit mon:stdio keeps the quit escape available even when screenshots
+# add a QMP monitor, which suppresses -nographic's implicit stdio monitor.
 set +e
-drive | timeout "$TIMEOUT" qemu-system-x86_64 \
+drive | timeout --kill-after=5 "$TIMEOUT" qemu-system-x86_64 \
     -machine q35 \
     -m 512 \
     "${EXTRA[@]}" \
@@ -432,18 +440,24 @@ drive | timeout "$TIMEOUT" qemu-system-x86_64 \
     -device "nvme,drive=bootdisk,serial=BOOTDISK$BOOT_INDEX" \
     "${DISKS[@]}" \
     -net none \
+    -serial mon:stdio \
     -nographic
-rc=$?
+statuses=("${PIPESTATUS[@]}")
 set -e
+drive_rc=${statuses[0]}
+rc=${statuses[1]}
 echo
-# qemu never exits on its own once the keypresses are done, so `timeout`
-# kills it on every run and 124 is the normal code. Anything else means the
-# machine never ran at all — qemu missing (127), refused the command line,
-# or crashed — and without this check every "no-change" and "skip" walk
-# would pass green on a host with no qemu installed.
 echo "### qemu exited with $rc (script: $SCRIPT) ###"
-if [ "$rc" -ne 124 ] && [ "$rc" -ne 0 ]; then
-    echo "### FAILED: qemu did not run to the timeout (exit $rc) ###" >&2
+if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    echo "### FAILED: qemu exceeded the ${TIMEOUT}s watchdog ###" >&2
+    exit 1
+fi
+if [ "$rc" -ne 0 ]; then
+    echo "### FAILED: qemu exited abnormally (exit $rc) ###" >&2
+    exit 1
+fi
+if [ "$drive_rc" -ne 0 ]; then
+    echo "### FAILED: scripted input did not complete (exit $drive_rc) ###" >&2
     exit 1
 fi
 
