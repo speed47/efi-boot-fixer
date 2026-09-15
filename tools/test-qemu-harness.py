@@ -36,9 +36,12 @@ while True:
     if not byte:
         break
     received.extend(byte)
-    if received.endswith(b'\\x01x') and mode == 'quit':
+    if received.endswith(b'\\x01x') and mode in ('quit', 'silent'):
         assert '-nographic' in sys.argv
         assert sys.argv[sys.argv.index('-serial') + 1] == 'mon:stdio'
+        if mode == 'quit':
+            print('Check this machine [read only]')
+            print('Exit to the firmware')
         sys.exit(0)
 # EOF is not a QEMU shutdown command, and a stuck VM ignores the quit too.
 time.sleep(60)
@@ -67,6 +70,13 @@ time.sleep(60)
         result = self.run_harness("stuck")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("watchdog", result.stderr)
+        self.assertNotIn("test disk untouched", result.stdout)
+
+    def test_clean_exit_without_screen_output_is_a_failure(self):
+        result = self.run_harness("silent")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("qemu exited with 0", result.stdout)
+        self.assertIn("missing 'Check this machine'", result.stderr)
         self.assertNotIn("test disk untouched", result.stdout)
 
     def test_qemu_crash_is_a_failure(self):

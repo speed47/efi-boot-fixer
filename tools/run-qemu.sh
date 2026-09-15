@@ -39,7 +39,16 @@ STEP=${STEP:-3}
 # Empty leaves OVMF's default. RES=none removes the video adapter entirely,
 # which leaves the firmware publishing no graphics protocol at all and is
 # how the fall back to its text console gets tested.
-RES=${RES:-}
+# Text output is the default so the screen assertions have something to
+# read. Display walks need graphics and are still checked visually.
+case "$SCRIPT" in
+    display) RES=${RES-800x1280} ;;
+    display-mode|display-revert) RES=${RES-800x600} ;;
+    *) RES=${RES-none} ;;
+esac
+LOG_DIR=${LOG_DIR:-$DIR/logs}
+SERIAL_LOG="$LOG_DIR/$SCRIPT.serial.log"
+SCREEN_LOG="$LOG_DIR/$SCRIPT.screen.txt"
 # Directory for periodic screendumps. The graphical backend writes nothing
 # to the serial console, so this is the only way to see what it drew.
 SHOTS=${SHOTS:-}
@@ -50,6 +59,8 @@ SHOT_EVERY=${SHOT_EVERY:-6}
 # A clean QEMU exit only proves the keypress feeder finished, not that the
 # application did what it asked. Keys landing in OVMF's boot manager would
 # still finish the walk, so the disk has to witness the intended effect.
+# Screen assertions below provide the other witness, including for walks
+# that should leave this disk untouched.
 #
 # `auto` works it out from the script and the corruption mkimages recorded.
 # Set EXPECT=change|no-change|skip to state it directly.
@@ -95,7 +106,8 @@ expected_effect() {
         # Lowering FirstUsableLBA is what Prevent does to a *healthy*
         # table, and these images are built with FirstUsableLBA 2048 above
         # a 32-block entry array, so there is always a gap to close.
-        prevent) want=change ;;
+        prevent)
+            if [ "$CORRUPTION" = hybrid ]; then want=no-change; else want=change; fi ;;
         repair)
             # Only 'bad-mbr' reaches our write path; see the note in
             # mkimages.sh. Everything else is either repaired by the
@@ -104,10 +116,11 @@ expected_effect() {
                 bad-mbr) want=change ;;
                 *)       want=no-change ;;
             esac ;;
-        # repair-boot targets disk 1, which mkimages never corrupts, and
-        # restore needs a snapshot that some earlier run left on the ESP.
-        # Neither has a post-condition this script can state on its own.
-        *) want=skip ;;
+        # Restore can rewrite identical bytes. The NVRAM walks write to the
+        # variable store rather than this disk; their result screens matter.
+        repair-boot|restore|restore-usb|restore-source-error|bootnext|bootdefault|bootregister|bootbackup|bootrestore)
+            want=skip ;;
+        *) echo "unknown script: $SCRIPT" >&2; exit 1 ;;
     esac
 
     # EDK II's PartitionDxe rebuilds an invalid main GPT from the secondary
@@ -167,6 +180,7 @@ drive() {
         overview)                                   # the read-only summary
             keys "$A"                               # Check this machine
             keys "$DOWN" "$DOWN"                    # scroll it
+            keys "$RIGHT" "$RIGHT" "$RIGHT"          # reach the advice and read-only note
             keys "$A" "$B" ;;
         report)                                     # the diagnostic report
             # Second row of the main menu. The report is built, shown, then
@@ -190,27 +204,32 @@ drive() {
             keys "$B" ;;
         check)                                      # GPT item 1, disk 2, page
             gpt_menu
-            keys "$A" "$DOWN" "$A" "$A" "$B" "$B" ;;
+            keys "$A" "$DOWN" "$A"
+            keys "$RIGHT" "$RIGHT" "$RIGHT" "$A" "$B" "$B" ;;
         check-one)                                  # ONE_DISK=1: no picker
             # One press should land on the report itself. If the picker were
             # still offered, the second A would choose the disk and the run
             # would end one screen short of it -- so grep the serial log for
             # "Check GPT (read only)" to tell the two apart.
             gpt_menu
-            keys "$A" "$A" "$B" "$B" ;;
+            keys "$A" "$RIGHT" "$RIGHT" "$A" "$B" "$B" ;;
         repair)                                     # GPT item 4
             gpt_menu
             keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A"
-            confirm
-            keys "$A" "$B" "$B" ;;
-        repair-boot)                                # repair disk 1, the disk
+            if [ "$CORRUPTION" = bad-mbr ]; then
+                confirm
+                keys "$A"
+            fi
+            keys "$B" "$B" ;;
+        repair-boot)                                # review healthy disk 1, the disk
             gpt_menu                                # this image booted from
             keys "$DOWN" "$DOWN" "$DOWN" "$A" "$A" "$A"
-            confirm
-            keys "$A" "$B" "$B" ;;
+            keys "$B" "$B" ;;
         repair-cancel)                              # decline at the gate
             gpt_menu
-            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$B" "$A" "$B" "$B" ;;
+            keys "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A"
+            if [ "$CORRUPTION" = bad-mbr ]; then keys "$B" "$A"; fi
+            keys "$B" "$B" ;;
         backup)                                     # GPT item 2
             gpt_menu
             keys "$DOWN" "$A" "$DOWN" "$A" "$A" "$A" "$B" "$B" ;;
@@ -252,8 +271,7 @@ drive() {
         inspect)                                    # browse snapshots, View
             gpt_menu
             keys "$DOWN" "$DOWN" "$A"               # Restore GPTs
-            keys "$DOWN"                            # second snapshot
-            keys "$TAB" "$A"                        # details, then back
+            keys "$TAB" "$A"                        # first snapshot's details, then back
             keys "$DOWN" "$TAB" "$A"                # and the next one
             keys "$B" "$B" "$B" ;;
         scroll)                                     # page through a long report
@@ -273,16 +291,21 @@ drive() {
             keys "$B" "$B" ;;
         prevent)                                    # GPT item 5
             gpt_menu
-            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A" "$A"
-            confirm
-            keys "$A" "$B" "$B" ;;
+            keys "$DOWN" "$DOWN" "$DOWN" "$DOWN" "$A" "$DOWN" "$A" "$A"
+            if [ "$CORRUPTION" != hybrid ]; then
+                keys "$A"
+                confirm
+                keys "$A"
+            fi
+            keys "$B" "$B" ;;
         bootentries)                                # both read-only screens
             nvram_menu
             keys "$A"                               # View the boot entries
             keys "$DOWN" "$DOWN"                    # scroll it
+            keys "$RIGHT" "$RIGHT" "$RIGHT" "$RIGHT"
             keys "$A"                               # dismiss, back to submenu
             keys "$DOWN" "$A"                       # Scan the ESPs
-            keys "$DOWN" "$A"                       # scroll, dismiss
+            keys "$DOWN" "$RIGHT" "$RIGHT" "$RIGHT" "$A" # scroll, dismiss
             keys "$B" "$B" ;;
         bootnext)                                   # set BootNext, the one-shot
             nvram_menu
@@ -374,7 +397,7 @@ drive() {
 
 # One disk instead of two, which is the shape of the machine this tool is
 # for and the only way to exercise the picker being skipped. The disk left
-# out is test.img, so a run with this set has no post-condition to check.
+# out is test.img, so only the screen assertions apply to this walk.
 DISKS=()
 BOOT_INDEX=
 TEST_INDEX=
@@ -401,7 +424,7 @@ if [ "${USB:-0}" = 1 ]; then
     if [ "${BOOT_USB:-0}" = 1 ]; then
         USB_BOOT=,bootindex=1
     fi
-    DISKS+=(-device qemu-xhci,id=xhci
+    DISKS+=(-device "qemu-xhci,id=xhci"
             -drive "file=$DIR/usb.img,format=raw,if=none,id=usbstick,readonly=${USB_READONLY:-off}"
             -device "usb-storage,bus=xhci.0,drive=usbstick,removable=on$USB_BOOT")
 fi
@@ -426,6 +449,7 @@ fi
 
 EFFECT=$(expected_effect)
 BEFORE=$(disk_digest "$DIR/test.img")
+mkdir -p "$LOG_DIR"
 
 # Explicit mon:stdio keeps the quit escape available even when screenshots
 # add a QMP monitor, which suppresses -nographic's implicit stdio monitor.
@@ -441,7 +465,7 @@ drive | timeout --kill-after=5 "$TIMEOUT" qemu-system-x86_64 \
     "${DISKS[@]}" \
     -net none \
     -serial mon:stdio \
-    -nographic
+    -nographic 2>&1 | tee "$SERIAL_LOG"
 statuses=("${PIPESTATUS[@]}")
 set -e
 drive_rc=${statuses[0]}
@@ -459,6 +483,16 @@ fi
 if [ "$drive_rc" -ne 0 ]; then
     echo "### FAILED: scripted input did not complete (exit $drive_rc) ###" >&2
     exit 1
+fi
+if [ "${statuses[2]}" -ne 0 ]; then
+    echo "### FAILED: could not capture $SERIAL_LOG ###" >&2
+    exit 1
+fi
+
+if [ "$RES" = none ]; then
+    bash "$(dirname "$0")/check-qemu-output.sh" "$SERIAL_LOG" "$SCREEN_LOG" "$SCRIPT" "$CORRUPTION"
+else
+    echo "### screen assertions SKIPPED: graphical backend; inspect SHOTS screendumps ###"
 fi
 
 AFTER=$(disk_digest "$DIR/test.img")
