@@ -116,7 +116,7 @@ clippy: ## Lint both workspaces, warnings are errors
 	cd $(EFI_CRATE) && $(UEFI_CARGO) clippy --target $(TARGET) \
 	  --no-default-features --features tiny -- -D warnings
 
-check: fmt-check clippy test build ## Everything CI runs
+check: fmt-check clippy test build ## Formatting, lint, host tests and EFI build (QEMU: qemu-check)
 
 # ------------------------------------------------------------------- qemu
 

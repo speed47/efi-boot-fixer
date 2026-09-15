@@ -52,6 +52,54 @@ jobs:
       - name: Tests
         run: make test
 
+  qemu:
+    name: QEMU tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # Keep ordinary walks visible in the serial log. The display walks
+      # override this with their own framebuffer resolutions.
+      RES: none
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-uefi
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            crates/bootfixr
+
+      # This harness boots a whole UEFI machine, so it needs system QEMU
+      # and OVMF rather than the binfmt emulators used for Docker builds.
+      - name: Install QEMU and image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf gdisk dosfstools mtools
+
+      - name: QEMU tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          make qemu-check 2>&1 | tee build/qemu.log
+
+      - name: Upload QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-logs
+          path: |
+            build/qemu.log
+            build/images/sources/**/sources.log
+          if-no-files-found: warn
+          retention-days: 14
+
   build:
     name: Build EFI binary
     runs-on: ubuntu-latest
@@ -130,7 +178,7 @@ jobs:
 
   continuous:
     name: Continuous prerelease
-    needs: [test, build]
+    needs: [test, build, qemu]
     if: >-
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -196,7 +244,7 @@ jobs:
 
   release:
     name: Draft release
-    needs: [test, build]
+    needs: [test, build, qemu]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

@@ -33,7 +33,8 @@ anything; that ordering is an assertable data structure, not a comment.
 
 ```sh
 make                # list every target
-make check          # fmt-check + clippy + test + build; exactly what CI runs
+make check          # fmt-check + clippy + test + build
+make qemu-check     # all QEMU walks; also run in a separate CI job
 make test           # host tests (requires gdisk installed)
 make build          # both EFI binaries, release
 make qemu SCRIPT=repair     # boot under OVMF and drive the menus over serial
@@ -191,8 +192,9 @@ queued input first. See [docs/input.md](docs/input.md).
   just in Repair", "Cut the parts of gptcore nothing calls".
 - Comments explain why, not what, and are used sparingly. Match the density of
   the surrounding file.
-- The QEMU harness is not in CI, on purpose: serial-driven menus depend on
-  boot timing and would be flaky. Run it locally.
+- CI runs `make qemu-check` in a separate Ubuntu job and retains the serial
+  logs as the `qemu-logs` artifact, including on failure. Serial-driven menus
+  depend on boot timing; keep the harness's conservative delays.
 - When something is measured on real hardware rather than assumed, say so —
   the docs mark measurements (firmware `Valve rev 0x10033`, UEFI 2.70) as
   such, and that distinction has already been load-bearing once.
