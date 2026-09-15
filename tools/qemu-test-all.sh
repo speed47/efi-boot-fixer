@@ -84,6 +84,10 @@ fresh
 walk "backup-usb-only" env USB=1 "$RUN" "$IMAGES" backup-usb-only
 walk "restore-usb" env USB=1 "$RUN" "$IMAGES" restore-usb
 
+# Source discovery has assertions on the picker, cross-volume numbering and
+# byte-exact restoration, including backups on fixed and read-only volumes.
+walk "backup-sources" python3 "$HERE/qemu-test-sources.py" "$IMAGES/sources" "$EFI"
+
 # Paired: two snapshots on the ESP, then browsed by inspect and paged by
 # scroll from the same images -- see the comment above 'scroll' in
 # run-qemu.sh.

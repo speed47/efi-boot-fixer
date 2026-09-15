@@ -92,6 +92,29 @@ can have come from nowhere but the stick. After a `backup-usb` there would be
 a copy on the ESP too, and — since the launch volume is listed first — that is
 the row it would land on, testing the path that already had a walk.
 
+`qemu-test-sources.py` checks the source-discovery cases, each with fresh images:
+
+```sh
+make build
+python3 tools/qemu-test-sources.py build/source-tests \
+  crates/bootfixr/target/x86_64-unknown-uefi/release/bootfixr.efi
+```
+
+The four cases restore a backup from the internal ESP after launching from USB
+(`rescue`), from a read-only USB (`readonly`), from the launch volume without
+listing it twice (`launch`), and despite another volume having an unreadable
+backup directory (`source-error`). Each asserts the source shown in the picker,
+byte-exact GPT/MBR recovery, and automatic snapshot numbering past files on the
+discovered sources. The read-only case also verifies that the source image is
+unchanged. An empty source is included in the launch case.
+
+Use `--case rescue` (or another case name) for a single run. The script honours
+`BOOT_WAIT`, `STEP` and `TIMEOUT`, writes `sources.log` in each case directory,
+and also runs as part of `make qemu-check`. Its harness options are `BOOT_USB=1`
+(with `USB=1` and a loader on the stick) and `USB_READONLY=on`. Explicit boot
+indices keep both NVMe devices in OVMF's connection list when USB boots first.
+`CODE`, `VARS_SRC` and `QEMU_DATA` can point at a non-system OVMF/QEMU installation.
+
 The `report` and `report-usb` walks save a diagnostic report, and the file
 they leave behind is the whole assertion — it is the one output of this tool
 that can be read directly rather than inferred from a disk digest:

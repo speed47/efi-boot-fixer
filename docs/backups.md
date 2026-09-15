@@ -10,10 +10,10 @@ file, where the picker shows it.
 
 ## Where they go
 
-The ESP the program was launched from is the default, and used to be the only
-choice. It is the one volume guaranteed to be there in the situation this tool
-exists for — no keyboard, no stick, the machine will not boot — so a copy
-there is a copy the operator can definitely reach.
+The volume the program was launched from — normally the internal ESP — is
+the default destination. It is the one volume guaranteed to be there in the
+situation this tool exists for — no keyboard, no stick, the machine will not
+boot — so a copy there is a copy the operator can definitely reach.
 
 It is also, very often, a copy on the disk being backed up. That is the whole
 weakness of it, and it is why a USB stick or an SD card is offered as a second
@@ -31,6 +31,12 @@ destination whenever one is plugged in:
   The ESP copy is the one this program can always find
   again; the other one survives the disk.
 ```
+
+The rows name the launch volume as "the ESP", because that is what it is and
+what somebody standing in front of the machine calls it. Launched from a
+rescue stick it is not an ESP, and the rows say "the launch volume" instead —
+the one case where the two come apart is also the one where getting it wrong
+would name the wrong disk.
 
 With nothing attached the question is not asked at all — every answer would be
 the same one — and the screen that reports what was written says that plugging
@@ -58,13 +64,25 @@ then goes ahead on every remaining destination even after one has failed, and
 the result screen names both outcomes: a full stick must not hide the copy
 that did land on the ESP.
 
-Restore is the mirror of it and asks nothing: it lists what it finds in
-`\BOOTFIXR` on the ESP *and* on whatever removable media is attached at the
-time, with the volume each snapshot came from on its detail line. The two
-copies of one snapshot carry the same name, so that line is what tells them
-apart. A volume that will not open is reported as a rejection rather than
-emptying the screen — an unreadable stick must not stand between the operator
-and the snapshots sitting on the ESP.
+Restore searches `\BOOTFIXR` on **every filesystem exposed by firmware**,
+including the internal ESP when the application is launched from a rescue
+USB. Read-only media qualifies too: restoring a saved file only needs to read
+its source. No ESP type or removable-media flag is required, and the launch
+volume is listed only once. The same sources count toward snapshot numbering.
+
+Each snapshot's details name its source volume and device path, so copies
+with the same name, or volumes with the same label, can be distinguished.
+A volume with no label is numbered instead — "Volume 2", or "Removable
+volume 1", matching what the destination menu calls the same stick — and the
+device path underneath is what settles it either way.
+
+Missing labels or free-space information do not disqualify a source. A missing
+`\BOOTFIXR` directory contributes no backups; a directory that cannot be
+opened or listed is reported without hiding backups on other volumes. What is
+*not* reported is a volume whose media the firmware says has gone: an empty
+card slot can leave a filesystem handle standing until something touches it,
+and a red line about the slot nobody put a card in would be noise on the one
+screen that can least afford it.
 
 The same choice, and the same rules, apply to the `boot-NNN.bkp` snapshot of
 the NVRAM boot configuration; see [boot.md](boot.md).

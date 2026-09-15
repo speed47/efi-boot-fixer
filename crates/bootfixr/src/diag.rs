@@ -541,12 +541,17 @@ fn bootloaders(scan: &espscan::Scan) -> Vec<Line> {
 /// screen to find out — and because a report that names the snapshots
 /// alongside them is what makes a snapshot findable a year later.
 fn volumes() -> Vec<Line> {
-    let mut out = section("Volumes this program can save files to");
+    let mut out = section("Filesystems searched for saved backups");
     for volume in crate::source_volumes() {
         out.push(Line::blank());
         out.push(title(format!("  {}", volume.name)));
         out.push(dim(format!("    {}", volume.path)));
         out.push(field("removable", if volume.removable { "yes" } else { "no" }));
+        // Named before the free space, because it is what decides whether
+        // that number means anything: this section lists every filesystem
+        // searched for a snapshot, and some of them are places no snapshot
+        // can be saved.
+        out.push(field("writable", if volume.read_only { "no, read-only" } else { "yes" }));
         match volume.free {
             Some(free) => out.push(field("free space", human_size(free))),
             None => out.push(field("free space", "the filesystem would not say")),
